@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "olympus-sysadmin"
+version = "0.1.0"
+description = "Olympus Sysadmin agent — read-only kubectl + gated pod deletion"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "agentlib",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+olympus-sysadmin = "sysadmin.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
