@@ -12,11 +12,13 @@ choose; ``ManualRouter`` returns a fixed mapping for tests.
 """
 from __future__ import annotations
 
+import threading
 from typing import Optional, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .bus import BusMessage, InMemoryBus, new_message
+from .bus import Bus, BusMessage, new_message
+from .plan import Plan, PlanResult, step_to_task
 from .spec import AgentContext, AgentResult, AgentSpec, CostBreakdown, TaskMessage
 
 
@@ -96,10 +98,11 @@ class Orchestrator:
 
     def __init__(
         self,
-        bus: InMemoryBus,
+        bus: Bus,
         agents: Sequence[AgentSpec],
         ctx: AgentContext,
         router: Optional[Router] = None,
+        result_timeout_seconds: float = 600.0,
     ):
         self.bus = bus
         self.agents = {a.name: a for a in agents}
@@ -107,7 +110,10 @@ class Orchestrator:
         self.router = router or LLMRouter(
             {a.name: a.domain for a in agents}
         )
+        self._result_timeout = result_timeout_seconds
         self._results: dict[str, AgentResult] = {}
+        self._result_events: dict[str, threading.Event] = {}
+        self._results_lock = threading.Lock()
 
         for name, agent in self.agents.items():
             # Bind agent into the closure so each subscription dispatches to
@@ -140,15 +146,73 @@ class Orchestrator:
         result = msg.payload
         if not isinstance(result, AgentResult):
             result = _result_from_dict(result)
-        self._results[msg.task_id] = result
+        with self._results_lock:
+            self._results[msg.task_id] = result
+            event = self._result_events.get(msg.task_id)
+        if event is not None:
+            event.set()
 
     def run(self, task: TaskMessage) -> AgentResult:
         agent_name = self.router.route(task)
+        return self._dispatch(task, agent_name)
+
+    def run_plan(self, plan: Plan) -> PlanResult:
+        """Execute a multi-step plan sequentially, threading prior step
+        results into each subsequent step.
+
+        Routing is bypassed: each step is pinned to a named agent
+        (``PlanStep.agent``). Failure short-circuits unless the failing
+        step is marked ``allow_failure=True``.
+        """
+        prior: list[AgentResult] = []
+        total_seconds = 0.0
+        total_usd = 0.0
+        terminal_status = "success"
+
+        for i, step in enumerate(plan.steps):
+            if step.agent not in self.agents:
+                raise ValueError(
+                    f"plan {plan.plan_id} step {i} pins unknown agent "
+                    f"{step.agent!r}; registered: {list(self.agents)}"
+                )
+            task = step_to_task(plan, step, i, prior)
+            result = self._dispatch(task, step.agent)
+            prior.append(result)
+            total_seconds += result.cost.wall_seconds
+            total_usd += result.cost.total_usd
+            if result.status != "success" and not step.allow_failure:
+                terminal_status = result.status
+                break
+
+        summary = (
+            f"plan {plan.plan_id}: {terminal_status} "
+            f"({len(prior)}/{len(plan.steps)} steps executed)"
+        )
+        return PlanResult(
+            plan_id=plan.plan_id,
+            status=terminal_status,
+            summary=summary,
+            step_results=prior,
+            cost=CostBreakdown(total_usd=total_usd, wall_seconds=total_seconds),
+        )
+
+    def _dispatch(self, task: TaskMessage, agent_name: str) -> AgentResult:
         if agent_name not in self.agents:
             raise ValueError(
-                f"router returned unknown agent {agent_name!r}; "
+                f"unknown agent {agent_name!r}; "
                 f"registered: {list(self.agents)}"
             )
+
+        # Register the wait-event BEFORE publishing so an asynchronous
+        # bus (Redis) cannot deliver the result before we are ready to
+        # observe it.
+        event = threading.Event()
+        with self._results_lock:
+            self._result_events[task.task_id] = event
+            # If a result already exists (rare race on retries), surface it.
+            if task.task_id in self._results:
+                event.set()
+
         self.bus.publish(
             new_message(
                 task_id=task.task_id,
@@ -158,13 +222,20 @@ class Orchestrator:
                 payload=task,
             )
         )
-        # Synchronous bus: the result is already in _results by the time
-        # publish() returns. If we move to async, this becomes a wait().
-        if task.task_id not in self._results:
-            raise RuntimeError(
-                f"agent {agent_name!r} did not produce a result on the bus"
+
+        # Synchronous bus delivers inline (event already set); async
+        # bus blocks until the consumer thread fires _on_orchestrator_msg.
+        if not event.wait(timeout=self._result_timeout):
+            with self._results_lock:
+                self._result_events.pop(task.task_id, None)
+            raise TimeoutError(
+                f"agent {agent_name!r} did not produce a result for "
+                f"{task.task_id!r} within {self._result_timeout:.0f}s"
             )
-        return self._results.pop(task.task_id)
+
+        with self._results_lock:
+            self._result_events.pop(task.task_id, None)
+            return self._results.pop(task.task_id)
 
 
 def _result_from_dict(d: dict) -> AgentResult:

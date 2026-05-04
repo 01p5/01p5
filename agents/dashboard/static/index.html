@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Olympus dashboard</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --panel-2: #111827;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #60a5fa;
+      --good: #4ade80;
+      --bad: #f87171;
+      --warn: #fbbf24;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif;
+      display: grid; grid-template-rows: auto 1fr;
+    }
+    header {
+      padding: 12px 20px; background: var(--panel-2); border-bottom: 1px solid #334155;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.02em; }
+    header .pill { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    main {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px;
+      min-height: 0; overflow: hidden;
+    }
+    .col { display: grid; grid-template-rows: auto 1fr; gap: 12px; min-height: 0; }
+    .panel {
+      background: var(--panel); border: 1px solid #334155; border-radius: 8px;
+      display: grid; grid-template-rows: auto 1fr; min-height: 0;
+    }
+    .panel header {
+      background: transparent; border: none; padding: 8px 12px; font-size: 13px;
+      color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .panel .body { overflow: auto; padding: 8px 12px; }
+    form#task-form { display: flex; gap: 8px; padding: 12px; }
+    form#task-form input {
+      flex: 1; background: var(--panel-2); color: var(--text);
+      border: 1px solid #334155; border-radius: 6px; padding: 8px 10px;
+      font-family: inherit; font-size: 14px;
+    }
+    form#task-form button {
+      background: var(--accent); color: #0b1220; border: none; border-radius: 6px;
+      padding: 8px 14px; font-weight: 600; cursor: pointer;
+    }
+    form#task-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .event {
+      font-family: var(--mono); font-size: 12px; line-height: 1.45;
+      padding: 4px 0; border-bottom: 1px dashed #243047;
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .event .kind { display: inline-block; min-width: 64px; color: var(--accent); }
+    .event .kind.result { color: var(--good); }
+    .event .kind.error  { color: var(--bad); }
+    .event .kind.approval_request { color: var(--warn); }
+    .event .ts { color: var(--muted); margin-right: 8px; }
+    .event .arrow { color: var(--muted); }
+
+    .approval {
+      border: 1px solid #475569; background: var(--panel-2); border-radius: 8px;
+      padding: 10px 12px; margin-bottom: 10px;
+    }
+    .approval h3 {
+      margin: 0 0 4px 0; font-size: 13px; color: var(--warn); font-family: var(--mono);
+    }
+    .approval pre {
+      margin: 4px 0 8px; padding: 6px 8px; background: #0b1220; border-radius: 6px;
+      font-size: 11.5px; max-height: 180px; overflow: auto;
+    }
+    .approval .actions { display: flex; gap: 6px; }
+    .approval button {
+      border: none; border-radius: 6px; padding: 6px 10px; font-weight: 600;
+      cursor: pointer;
+    }
+    .approval .approve { background: var(--good); color: #0b1220; }
+    .approval .reject  { background: var(--bad);  color: #0b1220; }
+    .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+    .audit-row {
+      font-family: var(--mono); font-size: 11.5px;
+      padding: 2px 0; border-bottom: 1px dashed #243047; white-space: pre-wrap;
+    }
+    .audit-row .approved-true   { color: var(--good); }
+    .audit-row .approved-false  { color: var(--bad); }
+    .audit-row .approved-null   { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Olympus — multi-agent DevOps</h1>
+    <div class="pill" id="health">connecting…</div>
+  </header>
+  <main>
+    <section class="col">
+      <div class="panel">
+        <header>Submit a task</header>
+        <form id="task-form" autocomplete="off">
+          <input id="task-input" placeholder="Describe a task (e.g. 'list pods in default')" />
+          <button type="submit" id="task-submit">Submit</button>
+        </form>
+      </div>
+      <div class="panel">
+        <header>Live agent activity (bus events)</header>
+        <div class="body" id="events"></div>
+      </div>
+    </section>
+    <section class="col">
+      <div class="panel">
+        <header>Approval queue</header>
+        <div class="body" id="approvals"></div>
+      </div>
+      <div class="panel">
+        <header>Audit log</header>
+        <div class="body" id="audit"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+
+    // ---------- Health pill ----------
+    async function refreshHealth() {
+      try {
+        const r = await fetch("/healthz");
+        if (r.ok) $("#health").textContent = "connected";
+        else $("#health").textContent = "degraded";
+      } catch { $("#health").textContent = "offline"; }
+    }
+    refreshHealth();
+    setInterval(refreshHealth, 5000);
+
+    // ---------- Live events (SSE on /events) ----------
+    const eventsBox = $("#events");
+    function appendEvent(ev) {
+      const ts = new Date(ev.timestamp * 1000).toLocaleTimeString();
+      const kindClass = ["result","error","approval_request"].includes(ev.kind) ? ev.kind : "";
+      const payload =
+        ev.payload === null || ev.payload === undefined ? ""
+        : typeof ev.payload === "string" ? ev.payload
+        : JSON.stringify(ev.payload);
+      const row = document.createElement("div");
+      row.className = "event";
+      row.innerHTML =
+        `<span class="ts">${ts}</span>` +
+        `<span class="kind ${kindClass}">${ev.kind}</span> ` +
+        `${escapeHtml(ev.sender)} <span class="arrow">→</span> ${escapeHtml(ev.recipient)} ` +
+        `<span class="arrow">|</span> ${escapeHtml(payload).slice(0, 1000)}`;
+      eventsBox.prepend(row);
+      while (eventsBox.children.length > 200) eventsBox.removeChild(eventsBox.lastChild);
+    }
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;",
+      }[c]));
+    }
+    function startEventStream() {
+      const src = new EventSource("/events");
+      src.onmessage = (e) => {
+        try { appendEvent(JSON.parse(e.data)); } catch {}
+      };
+      src.onerror = () => {
+        setTimeout(startEventStream, 2000); // reconnect
+        src.close();
+      };
+    }
+    startEventStream();
+
+    // ---------- Submit a task ----------
+    $("#task-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = $("#task-input");
+      const text = input.value.trim();
+      if (!text) return;
+      $("#task-submit").disabled = true;
+      try {
+        const res = await fetch("/tasks", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({natural_language: text}),
+        });
+        if (!res.ok) throw new Error("submit failed");
+        input.value = "";
+      } catch (err) {
+        alert("could not submit task: " + err.message);
+      } finally {
+        $("#task-submit").disabled = false;
+      }
+    });
+
+    // ---------- Approvals (poll /approvals) ----------
+    const approvalsBox = $("#approvals");
+    let knownApprovals = new Set();
+    async function refreshApprovals() {
+      try {
+        const r = await fetch("/approvals");
+        if (!r.ok) return;
+        const items = await r.json();
+        renderApprovals(items);
+      } catch {}
+    }
+    function renderApprovals(items) {
+      if (!items.length) {
+        approvalsBox.innerHTML = `<div class="empty">no pending approvals</div>`;
+        knownApprovals.clear();
+        return;
+      }
+      approvalsBox.innerHTML = "";
+      knownApprovals = new Set(items.map(a => a.approval_id));
+      for (const a of items) {
+        const card = document.createElement("div");
+        card.className = "approval";
+        const argsStr = JSON.stringify(a.args, null, 2);
+        const diffStr = a.diff ? `<pre>${escapeHtml(a.diff).slice(0, 4000)}</pre>` : "";
+        card.innerHTML =
+          `<h3>${escapeHtml(a.agent)} → ${escapeHtml(a.tool)}</h3>` +
+          `<div>${escapeHtml(a.rationale)}</div>` +
+          `<pre>args = ${escapeHtml(argsStr)}</pre>` +
+          diffStr +
+          `<div class="actions">` +
+            `<button class="approve" data-id="${a.approval_id}">Approve</button>` +
+            `<button class="reject"  data-id="${a.approval_id}">Reject</button>` +
+          `</div>`;
+        approvalsBox.appendChild(card);
+      }
+    }
+    approvalsBox.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("button[data-id]");
+      if (!btn) return;
+      const approved = btn.classList.contains("approve");
+      const reason = window.prompt(approved ? "Reason for approval:" : "Reason for rejection:") || "no reason given";
+      const r = await fetch(`/approvals/${btn.dataset.id}`, {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({approved, reason}),
+      });
+      if (!r.ok) alert("could not resolve approval");
+      refreshApprovals();
+    });
+    refreshApprovals();
+    setInterval(refreshApprovals, 1500);
+
+    // ---------- Audit log viewer ----------
+    const auditBox = $("#audit");
+    let lastAuditBytes = 0;
+    async function refreshAudit() {
+      try {
+        const r = await fetch("/audit");
+        if (!r.ok) return;
+        const text = await r.text();
+        if (text.length === lastAuditBytes) return;
+        lastAuditBytes = text.length;
+        renderAudit(text);
+      } catch {}
+    }
+    function renderAudit(text) {
+      const lines = text.trim().split("\n").filter(Boolean).slice(-100).reverse();
+      auditBox.innerHTML = "";
+      for (const line of lines) {
+        let rec;
+        try { rec = JSON.parse(line); } catch { continue; }
+        const ts = new Date(rec.ts * 1000).toLocaleTimeString();
+        const cls =
+          rec.approved === true  ? "approved-true" :
+          rec.approved === false ? "approved-false" : "approved-null";
+        const argsStr = typeof rec.args === "string" ? rec.args : JSON.stringify(rec.args);
+        const row = document.createElement("div");
+        row.className = "audit-row";
+        row.innerHTML =
+          `<span class="${cls}">[${rec.approved === null ? "—" : rec.approved}]</span> ` +
+          `${ts} ${escapeHtml(rec.agent)} ${escapeHtml(rec.tool)} ` +
+          `${escapeHtml(argsStr).slice(0, 200)}`;
+        auditBox.appendChild(row);
+      }
+    }
+    refreshAudit();
+    setInterval(refreshAudit, 3000);
+  </script>
+</body>
+</html>

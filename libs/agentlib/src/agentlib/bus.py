@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, Protocol
 
 BusKind = Literal[
     "task",
@@ -61,6 +61,17 @@ def new_message(
 
 
 Subscriber = Callable[[BusMessage], None]
+
+
+class Bus(Protocol):
+    """Minimal contract every bus backend (in-memory, Redis, NATS, …)
+    must satisfy. The orchestrator and dashboard backend program
+    against this — not against any specific implementation."""
+
+    def subscribe(self, recipient: str, callback: Subscriber) -> None: ...
+    def publish(self, msg: BusMessage) -> None: ...
+    @property
+    def log(self) -> list[BusMessage]: ...
 
 
 class InMemoryBus:

@@ -1,0 +1,9 @@
+apiVersion: v2
+name: olympus
+description: Olympus multi-agent DevOps system (W5-6 minimal K8s deploy path)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: Tianle Yu
+home: https://0lympu5.com

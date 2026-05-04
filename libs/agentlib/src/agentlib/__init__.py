@@ -20,8 +20,11 @@ except ImportError as _llm_import_error:
     _LLM_STACK_AVAILABLE = False
     _LLM_IMPORT_ERROR = _llm_import_error
 
+from .approval_queue import PendingApproval, QueueApprovalHook
+from .approval_webhook import WebhookApprovalHook
 from .budget import BudgetExceededError, BudgetGuard, BudgetState
-from .bus import BusMessage, InMemoryBus, new_message
+from .bus import Bus, BusMessage, InMemoryBus, new_message
+from .bus_redis import RedisStreamsBus
 from .models import (
     claude,
     claude4,
@@ -42,7 +45,7 @@ from .models import (
     vllm_qwen3,
 )
 from .orchestrator import LLMRouter, ManualRouter, Orchestrator, Router
-from .approval_webhook import WebhookApprovalHook
+from .plan import Plan, PlanResult, PlanStep, render_prior_results, step_to_task
 from .runtime import (
     AlwaysApprove,
     AlwaysReject,
@@ -84,17 +87,26 @@ __all__ = [
     "gate_tools",
     "ConsoleApprovalHook",
     "WebhookApprovalHook",
+    "QueueApprovalHook",
+    "PendingApproval",
     "AlwaysApprove",
     "AlwaysReject",
     "JsonlAuditLogger",
     "InMemoryAuditLogger",
+    "Bus",
     "BusMessage",
     "InMemoryBus",
+    "RedisStreamsBus",
     "new_message",
     "Orchestrator",
     "Router",
     "ManualRouter",
     "LLMRouter",
+    "Plan",
+    "PlanStep",
+    "PlanResult",
+    "render_prior_results",
+    "step_to_task",
     "claude",
     "claudeopus4",
     "claudeopus41",

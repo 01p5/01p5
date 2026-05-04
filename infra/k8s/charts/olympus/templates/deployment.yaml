@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "olympus.fullname" . }}
+  labels: {{- include "olympus.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.dashboard.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels: {{- include "olympus.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "olympus.serviceAccountName" . }}
+      containers:
+        - name: dashboard
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["olympus-dashboard"]
+          args:
+            - --host=0.0.0.0
+            - --port={{ .Values.dashboard.port }}
+            - --router={{ .Values.dashboard.router }}
+            - --audit-log={{ .Values.dashboard.auditLogPath }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.dashboard.port }}
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "olympus.secretName" . }}
+                  key:  {{ .Values.secrets.anthropicApiKeyKey }}
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "olympus.secretName" . }}
+                  key:  {{ .Values.secrets.openaiApiKeyKey }}
+                  optional: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources: {{- toYaml .Values.dashboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: audit
+              mountPath: /var/lib/olympus
+      volumes:
+        - name: audit
+          {{- if .Values.audit.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "olympus.fullname" . }}-audit
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- if .Values.audit.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "olympus.fullname" . }}-audit
+  labels: {{- include "olympus.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.audit.persistence.size }}
+  {{- with .Values.audit.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}

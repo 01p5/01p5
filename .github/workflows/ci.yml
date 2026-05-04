@@ -37,7 +37,7 @@ jobs:
         # and only need langchain.tools + pydantic.
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest pydantic 'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0'
+          pip install ruff pytest pydantic 'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0' fakeredis
 
       - name: Lint (ruff)
         run: ruff check src tests
@@ -63,4 +63,8 @@ jobs:
 
       - name: Test orchestrator CLI wiring (pytest)
         working-directory: agents/olympus_cli
+        run: pytest -v
+
+      - name: Test dashboard backend (pytest)
+        working-directory: agents/dashboard
         run: pytest -v

@@ -99,13 +99,13 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 
 ### Weeks 5–6: Cross-Agent Workflows & Web UI
 
-- [ ] End-to-end multi-agent workflows (e.g., "deploy a new service" → Terraform → Ansible → Programmer → Sysadmin)
-- [ ] Harden context bus (Redis streams or NATS — decide W4 based on async-op needs)
-- [ ] Web dashboard: task submission, live chat, agent status
-- [ ] Approval queue in web UI
-- [ ] Execution log viewer and agent communication log (transparency)
-- [ ] Audit trail for all agent actions
-- [ ] Full K8s deploy (extends the W3–4 minimal AWS path)
+- [x] End-to-end multi-agent workflows (e.g., "deploy a new service" → Programmer → Terraform → Sysadmin) — `Plan` / `PlanStep` / `Orchestrator.run_plan` thread results through ordered steps; failure short-circuits unless `allow_failure=True`
+- [x] Harden context bus — `RedisStreamsBus` implements the same `Bus` Protocol as `InMemoryBus`; orchestrator now bus-agnostic with per-task wait events. Decision in [docs/BUS_DECISION.md](docs/BUS_DECISION.md)
+- [x] Web dashboard: task submission, live chat, agent status — stdlib HTTP server + SSE bridge in `agents/dashboard`
+- [x] Approval queue in web UI — `QueueApprovalHook` + UI cards with approve/reject
+- [x] Execution log viewer and agent communication log (transparency) — `/events` SSE shows every bus message; UI renders with sender/recipient/kind
+- [x] Audit trail for all agent actions — JSONL audit, `/audit` endpoint, UI viewer; runtime already records every tool call with approval decision
+- [x] Full K8s deploy (extends the W3–4 minimal AWS path) — Helm chart in `infra/k8s/charts/olympus`: Deployment + Service + RBAC (read-only by default; opt-in destructive); chart renders cleanly; live `helm install` held until user picks a target cluster
 
 **Deliverable:** A user can submit a complex task via web UI, watch agents collaborate, approve actions, and see results on real infra.
 
@@ -170,7 +170,7 @@ Each question is tagged with the week it must be resolved by — slipping these 
 
 - [x] **(decided W2)** Agent-to-agent delegation: orchestrator-only in v1. Revisit after W6.
 - [x] **(decided W2)** Long-running ops (Terraform apply): sync-with-progress-events. No async job model in v1.
-- [ ] **(decide by W4)** Message queue for context bus (Redis streams / NATS / stay in-memory)?
+- [x] **(decided W5)** Message queue for context bus: **Redis Streams** for v2; in-memory bus stays for tests/single-process dev. See [docs/BUS_DECISION.md](docs/BUS_DECISION.md).
 - [ ] **(decide by W4)** Web UI framework (Next.js / SvelteKit / plain React)?
 - [x] **(decided W4)** Terminal UI: textual. Mounted in `agents/olympus_cli/src/olympus_cli/tui.py`.
 - [ ] **(decide by W7)** Agent memory storage — vector DB choice (pgvector / Chroma / Qdrant)?

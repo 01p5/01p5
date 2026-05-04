@@ -1,0 +1,59 @@
+# Default values for the Olympus chart.
+#
+# This is a *minimum-viable* deploy: one Deployment for the dashboard
+# (which embeds the orchestrator + bus + the four agent runtimes), one
+# Service exposing it, an optional Ingress. Per-agent deployments + a
+# Redis bus are stretch — they slot into this chart in W7+.
+
+image:
+  repository: olympus/dashboard
+  tag: dev
+  pullPolicy: IfNotPresent
+
+dashboard:
+  replicas: 1
+  port: 8765
+  router: llm           # "llm" or "manual"
+  auditLogPath: /var/lib/olympus/audit.jsonl
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 1,    memory: 1Gi }
+
+# Pull provider keys from a Secret named ``{{ release }}-secrets`` in
+# the same namespace. Create the Secret out-of-band; the chart never
+# templates raw keys.
+secrets:
+  secretName: ""        # "" → defaults to "{{ release }}-secrets"
+  anthropicApiKeyKey: anthropic_api_key
+  openaiApiKeyKey:    openai_api_key
+
+# Persistent audit log volume. emptyDir by default for the smoke deploy;
+# a real cluster should swap in a PVC.
+audit:
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClass: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8765
+
+ingress:
+  enabled: false
+  className: ""
+  host: olympus.example.com
+  tls: false
+
+serviceAccount:
+  # The serviceAccount the agents run as. Sysadmin agent calls kubectl
+  # via in-cluster credentials; bind only the verbs it actually needs.
+  create: true
+  name: ""              # "" → defaults to "{{ release }}-agent"
+
+# RBAC granted to the agent's serviceAccount. Read-only by default; the
+# user explicitly opts into mutation by enabling .destructive=true.
+rbac:
+  create: true
+  destructive: false    # true → grants delete on pods (gated by ApprovalHook anyway)
