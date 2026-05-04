@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 from agentlib import (
     AgentContext,

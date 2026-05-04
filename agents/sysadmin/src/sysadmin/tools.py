@@ -15,7 +15,7 @@ import shlex
 import subprocess
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 
 _KUBECTL_TIMEOUT_SECONDS = 30

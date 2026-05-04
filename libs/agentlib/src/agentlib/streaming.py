@@ -5,8 +5,8 @@ from typing import Any, Callable, Generator, Sequence
 
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
-from langchain.tools import BaseTool
 from langchain_core.messages import AIMessageChunk
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph

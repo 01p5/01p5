@@ -18,7 +18,7 @@ import shlex
 import subprocess
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 # Plans against AWS or large modules can take minutes; bias generous.
 _TF_TIMEOUT_SECONDS = 600

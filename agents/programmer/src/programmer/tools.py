@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 
 _DOCKERFILE_TEMPLATES: dict[str, str] = {

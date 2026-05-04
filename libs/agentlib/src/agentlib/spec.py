@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Optional, Protocol, Sequence
 
-from langchain.tools import BaseTool
+from langchain_core.tools import BaseTool
 
 
 @dataclass

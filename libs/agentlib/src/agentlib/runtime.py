@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from langchain.tools import BaseTool, StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool
 
 from .spec import (
     AgentContext,

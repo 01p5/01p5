@@ -16,7 +16,7 @@ import shlex
 import subprocess
 from typing import Optional
 
-from langchain.tools import tool
+from langchain_core.tools import tool
 
 # Playbook runs against fleets can be slow.
 _ANSIBLE_TIMEOUT_SECONDS = 900
