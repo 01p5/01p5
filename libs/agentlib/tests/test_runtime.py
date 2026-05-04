@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-import pytest
 from langchain.tools import tool
 
 from agentlib import (
@@ -20,7 +19,6 @@ from agentlib import (
     AlwaysReject,
     InMemoryAuditLogger,
     TaskMessage,
-    ToolGateError,
     gate_tools,
 )
 

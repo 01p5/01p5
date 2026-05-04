@@ -77,7 +77,7 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 - [x] **Agent interface contract** — `AgentSpec` document: tool schema, approval hook signature, context-bus message format, error semantics *(promoted: every later phase depends on it)* → [docs/AGENT_SPEC.md](docs/AGENT_SPEC.md) (draft v0.1)
 - [ ] Proof of concept: single agent (Sysadmin — read-only `kubectl` / log queries) executing a task end-to-end
 - [ ] Docker Compose dev environment (agent + in-memory bus stub)
-- [ ] Decide two open questions that shape the bus: agent-to-agent vs orchestrator-only, sync vs async for long-running ops
+- [x] Decide two open questions that shape the bus: orchestrator-only delegation in v1; long-running ops stream `progress` messages (see [AGENT_SPEC.md "Locked decisions"](docs/AGENT_SPEC.md))
 
 **Deliverable:** One agent can receive a natural language task, translate to tool calls, and execute with human approval. Agent interface contract is written and reviewed.
 
@@ -168,8 +168,8 @@ Targets to evaluate against in W7–8 telemetry analysis. Numbers are starting h
 
 Each question is tagged with the week it must be resolved by — slipping these cascades.
 
-- [ ] **(decide by W2)** Agent-to-agent delegation: direct calls vs always through orchestrator? *Shapes bus protocol.*
-- [ ] **(decide by W2)** Long-running ops (Terraform apply): sync-with-progress-events vs async job model? *Shapes bus protocol.*
+- [x] **(decided W2)** Agent-to-agent delegation: orchestrator-only in v1. Revisit after W6.
+- [x] **(decided W2)** Long-running ops (Terraform apply): sync-with-progress-events. No async job model in v1.
 - [ ] **(decide by W4)** Message queue for context bus (Redis streams / NATS / stay in-memory)?
 - [ ] **(decide by W4)** Web UI framework (Next.js / SvelteKit / plain React)?
 - [ ] **(decide by W7)** Agent memory storage — vector DB choice (pgvector / Chroma / Qdrant)?

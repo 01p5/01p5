@@ -14,7 +14,7 @@ import threading
 import time
 import unittest
 
-from agentlib.budget import BudgetGuard, BudgetExceededError, BudgetState
+from agentlib.budget import BudgetExceededError, BudgetGuard, BudgetState
 
 
 class _MutableCost:

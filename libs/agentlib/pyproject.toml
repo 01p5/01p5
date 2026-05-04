@@ -9,7 +9,7 @@ description = "A library for creating structured AI agents using LangChain and L
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
-    {name = "Artemis Project"}
+    {name = "Olympus Project"}
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -182,3 +182,37 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+extend-exclude = ["src/requirements.txt", "**/__pycache__"]
+
+[tool.ruff.lint]
+# Conservative initial set — bug-finding rules only. We deliberately skip
+# pyupgrade (UP) and other style-modernization rules for now; the codebase
+# still targets Python 3.9 and ``from __future__ import annotations``
+# already buys us PEP-604 syntax without forcing a migration.
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes (unused imports, undefined names)
+    "I",    # import ordering
+    "B",    # bugbear (likely-bug patterns)
+]
+ignore = [
+    "E501",  # line length — formatter's job, not the linter's
+    "B008",  # function-call-in-default — common pydantic Field() pattern
+    "B006",  # mutable-default — flagged by Field(default_factory=...) patterns
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B017", "B018"]  # tests can use bare-assert / un-attached expressions
+# main.py / streaming.py wildcard-import every model identifier from .models —
+# explicit re-listing here doesn't catch real bugs because the names are
+# constants, not callables. Revisit if .models grows side effects.
+"src/agentlib/main.py" = ["F403", "F405"]
+"src/agentlib/streaming.py" = ["F403", "F405"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"

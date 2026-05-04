@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -21,8 +20,6 @@ from .spec import (
     AgentContext,
     AgentSpec,
     ApprovalDecision,
-    ApprovalHook,
-    AuditLogger,
 )
 
 

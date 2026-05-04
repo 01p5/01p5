@@ -2,7 +2,7 @@
 
 > Every later week of the plan depends on this contract. If we get it wrong, every agent and the orchestrator pay the cost of refactoring.
 
-**Status:** Draft v0.1 (W1–2)
+**Status:** v0.2 (W1–2, frozen for W3)
 **Owner:** Tianle
 **Reviewers needed:** self-review against PoC, then frozen for W3
 
@@ -125,12 +125,14 @@ The bus is **append-only and replayable** — the audit log is just a filtered v
 
 ---
 
-## Open decisions blocking freeze
+## Locked decisions (v1)
 
-- **Agent-to-agent delegation**: do agents publish `kind="task"` directly to other agents, or only the orchestrator can? *Default proposal: orchestrator-only in v1, revisit after W6.*
-- **Long-running tools** (Terraform apply, k8s rollout): does `handle()` stream `progress` messages, or returns a "pending" result with a follow-up? *Default proposal: stream — pending-result adds state machine complexity we don't need yet.*
+These were the open questions blocking freeze; both are now decided. Revisit when W6 cross-agent workflows force the issue.
 
-These need to be locked before W3.
+- **Agent-to-agent delegation: orchestrator-only.** Agents do not publish `kind="task"` to other agents. The orchestrator is the only sender of tasks. *Why:* keeps the bus a star topology in v1, makes the audit log linear, and avoids cycles before we have a planner that can reason about them. *Revisit after W6* once we have real cross-agent workflows that benefit from direct dispatch.
+- **Long-running tools: stream `progress` messages.** `handle()` is synchronous from the orchestrator's perspective but emits `kind="progress"` bus messages while it works. No "pending result + follow-up" state machine in v1. *Why:* a state machine is the more flexible design but doubles the bus surface area; streaming covers Terraform apply / k8s rollout for the foreseeable future.
+
+The Sysadmin PoC and the W3-4 multi-agent rollout both build on these.
 
 ---
 

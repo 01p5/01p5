@@ -12,7 +12,6 @@ choose; ``ManualRouter`` returns a fixed mapping for tests.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Optional, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field

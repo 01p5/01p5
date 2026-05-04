@@ -1,49 +1,65 @@
 """
 AgentLib - A library for creating structured AI agents using LangChain and LangGraph.
+
+The LLM-backed pieces (StructuralAgent, StreamingAgent) require langchain>=1.0
+plus olympus_telemetry. We import them lazily so the pure-python pieces
+(spec, runtime, bus, orchestrator, budget) remain usable in environments
+without the full LLM stack — useful for unit tests and CI.
 """
 
-from .main import StructuralAgent, sum_costs, get_cost_for_type, new_context
-from .streaming import StreamingAgent
-from .budget import BudgetGuard, BudgetExceededError, BudgetState
+try:
+    from .main import StructuralAgent, get_cost_for_type, new_context, sum_costs
+    from .streaming import StreamingAgent
+    _LLM_STACK_AVAILABLE = True
+except ImportError as _llm_import_error:
+    StructuralAgent = None  # type: ignore[assignment]
+    StreamingAgent = None  # type: ignore[assignment]
+    sum_costs = None  # type: ignore[assignment]
+    get_cost_for_type = None  # type: ignore[assignment]
+    new_context = None  # type: ignore[assignment]
+    _LLM_STACK_AVAILABLE = False
+    _LLM_IMPORT_ERROR = _llm_import_error
+
+from .budget import BudgetExceededError, BudgetGuard, BudgetState
+from .bus import BusMessage, InMemoryBus, new_message
+from .models import (
+    claude,
+    claude4,
+    claude37,
+    claude45,
+    claudeopus4,
+    claudeopus41,
+    gpt4_1,
+    gpt4_1_mini,
+    gpt4_1_nano,
+    gpt5,
+    gpt5_mini,
+    gpt5_nano,
+    gpt51,
+    gpt52,
+    model_costs,
+    ollama,
+    vllm_qwen3,
+)
+from .orchestrator import LLMRouter, ManualRouter, Orchestrator, Router
+from .runtime import (
+    AlwaysApprove,
+    AlwaysReject,
+    ConsoleApprovalHook,
+    InMemoryAuditLogger,
+    JsonlAuditLogger,
+    ToolGateError,
+    gate_tools,
+)
 from .spec import (
-    AgentSpec,
     AgentContext,
     AgentResult,
+    AgentSpec,
     ApprovalDecision,
     ApprovalHook,
     AuditLogger,
     CostBreakdown,
     TaskMessage,
-)
-from .runtime import (
-    ToolGateError,
-    gate_tools,
-    ConsoleApprovalHook,
-    AlwaysApprove,
-    AlwaysReject,
-    JsonlAuditLogger,
-    InMemoryAuditLogger,
-)
-from .bus import BusMessage, InMemoryBus, new_message
-from .orchestrator import Orchestrator, Router, ManualRouter, LLMRouter
-from .models import (
-    claude,
-    claudeopus4,
-    claudeopus41,
-    claude45,
-    claude37,
-    claude4,
-    gpt51,
-    gpt52,
-    gpt5,
-    gpt5_mini,
-    gpt4_1,
-    gpt4_1_mini,
-    gpt4_1_nano,
-    gpt5_nano,
-    ollama,
-    vllm_qwen3,
-    model_costs,
 )
 
 __all__ = [

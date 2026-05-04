@@ -1,0 +1,35 @@
+# Olympus W1-2 dev environment.
+#
+# Single service today: the sysadmin agent + the in-memory bus stub
+# (which lives inside the agent process — no separate bus container in
+# v1; orchestrator-only delegation keeps the surface small). When other
+# agents land in W3-4 they get sibling services here.
+#
+# Usage:
+#   docker compose build                                          # lean (test-only)
+#   docker compose run --rm sysadmin pytest libs/agentlib/tests   # core tests
+#   docker compose run --rm sysadmin pytest agents/sysadmin/tests # agent smoke
+#
+# Live LLM run (requires the heavy stack — see Dockerfile):
+#   docker compose build --build-arg INSTALL_LLM_STACK=1
+#   docker compose run --rm \
+#     -v ~/.kube/config:/root/.kube/config:ro \
+#     -e ANTHROPIC_API_KEY \
+#     sysadmin olympus-sysadmin "describe pod my-app"
+
+services:
+  sysadmin:
+    build:
+      context: .
+      args:
+        INSTALL_LLM_STACK: "${INSTALL_LLM_STACK:-0}"
+    image: olympus/sysadmin:dev
+    working_dir: /opt/olympus
+    environment:
+      # Pass through provider keys when present. Empty values are fine
+      # for the offline test path; required for any live LLM call.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      # Persist the audit log on the host so it survives container restarts.
+      - ./.olympus-data:/root/.olympus

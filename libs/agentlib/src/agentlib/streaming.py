@@ -1,15 +1,15 @@
 """StreamingAgent — like StructuralAgent but streams raw text tokens (no response_format)."""
 
-from typing import Sequence, Callable, Any, Optional, Generator
 import logging
+from typing import Any, Callable, Generator, Sequence
 
-from langchain.tools import BaseTool
 from langchain.agents import create_agent
-from langgraph.checkpoint.memory import InMemorySaver
 from langchain.chat_models import init_chat_model
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain.tools import BaseTool
 from langchain_core.messages import AIMessageChunk
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph.state import CompiledStateGraph
 
 from .models import *
 
@@ -66,7 +66,7 @@ class StreamingAgent:
         thread = {"messages": [{"role": "user", "content": user_message}]}
         config = self._get_checkpoint_config()
         accumulated = ""
-        for chunk, metadata in self.agent.stream(
+        for chunk, _metadata in self.agent.stream(
             thread, config, stream_mode="messages"
         ):
             if isinstance(chunk, AIMessageChunk) and chunk.content:
