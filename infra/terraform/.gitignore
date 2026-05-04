@@ -1,0 +1,7 @@
+.terraform
+.terraform.lock.hcl
+terraform.tfstate.backup
+env.sh
+.terraform.tfstate.lock.info
+ansible/files/vpn
+terraform.tfstate
