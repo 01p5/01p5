@@ -1,0 +1,212 @@
+- name: will wait till reachable
+  hosts: router
+  gather_facts: no
+  tasks:
+    - name: Wait for system to become reachable
+      wait_for_connection:
+
+    - name: Gather facts for the first time
+      setup:
+
+- name: Deploy WireGuard router
+  hosts: router
+  become: true
+  vars:
+    wg_interface: wg0
+    wg_port: 51820
+
+    wg_server_ip: 10.81.81.1
+    wg_client_ip_base: 10.81.81
+    wg_netmask: 24
+    # Number of client configs to generate (pass -e wg_client_count=3 to get 3 clients)
+    wg_client_count: 1
+
+    forwarded_subnet: 10.81.0.0/16
+
+  tasks:
+    - name: Wait for apt/dpkg lock to be released
+      shell: |
+        while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+              fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+              fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+              fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+          sleep 5
+        done
+      changed_when: false
+
+    - name: Install WireGuard
+      package:
+        name: wireguard
+        state: present
+        update_cache: true
+
+    # ---------- SERVER KEY ----------
+    - name: Generate server private key
+      command: wg genkey
+      args:
+        creates: /etc/wireguard/server.key
+      register: _server_privgen
+
+    - name: Save server private key
+      copy:
+        dest: /etc/wireguard/server.key
+        content: "{{ _server_privgen.stdout }}"
+        mode: "0600"
+      when: _server_privgen.changed
+
+    - name: Generate server public key
+      command: wg pubkey
+      args:
+        stdin: "{{ _server_privgen.stdout }}"
+      register: _server_pubgen
+      when: _server_privgen.changed
+
+    - name: Save server public key
+      copy:
+        dest: /etc/wireguard/server.pub
+        content: "{{ _server_pubgen.stdout }}"
+        mode: "0644"
+      when: _server_privgen.changed
+
+    # ---------- CLIENT KEYS (one pair per client) ----------
+    - name: Generate client private keys
+      command: wg genkey
+      args:
+        creates: "/etc/wireguard/client_{{ item }}.key"
+      loop: "{{ range(1, wg_client_count | int + 1) | list }}"
+      register: _client_privgen_list
+      loop_control:
+        label: "client {{ item }}"
+
+    - name: Save client private keys
+      copy:
+        dest: "/etc/wireguard/client_{{ item }}.key"
+        content: "{{ _client_privgen_list.results[item | int - 1].stdout }}"
+        mode: "0600"
+      loop: "{{ range(1, wg_client_count | int + 1) | list }}"
+      when: _client_privgen_list.results[item | int - 1].changed
+
+    - name: Get client public keys from disk
+      shell: "cat /etc/wireguard/client_{{ item }}.key | wg pubkey"
+      loop: "{{ range(1, wg_client_count | int + 1) | list }}"
+      register: client_pub_list
+      changed_when: false
+      loop_control:
+        label: "client {{ item }}"
+
+    # ---------- ALWAYS READ KEYS FROM DISK ----------
+    - name: Read server private key
+      slurp:
+        src: /etc/wireguard/server.key
+      register: server_priv_file
+
+    - name: Read server public key
+      slurp:
+        src: /etc/wireguard/server.pub
+      register: server_pub_file
+
+    - name: Read client private keys
+      slurp:
+        src: "/etc/wireguard/client_{{ item }}.key"
+      loop: "{{ range(1, wg_client_count | int + 1) | list }}"
+      register: client_priv_files
+      loop_control:
+        label: "client {{ item }}"
+
+    - name: Decode WireGuard keys and build client lists
+      set_fact:
+        server_private_key: "{{ server_priv_file.content | b64decode | trim }}"
+        server_public_key: "{{ server_pub_file.content | b64decode | trim }}"
+        client_private_keys: "{{ client_priv_files.results | map(attribute='content') | map('b64decode') | map('trim') | list }}"
+        client_public_keys: "{{ client_pub_list.results | map(attribute='stdout') | map('trim') | list }}"
+        client_ips: "{{ range(2, 2 + wg_client_count | int) | map('string') | map('regex_replace', '^', wg_client_ip_base ~ '.') | list }}"
+
+    # ---------- CONFIG ----------
+    - name: Configure WireGuard server
+      copy:
+        dest: /etc/wireguard/{{ wg_interface }}.conf
+        mode: "0600"
+        content: |
+          [Interface]
+          Address = {{ wg_server_ip }}/{{ wg_netmask }}
+          ListenPort = {{ wg_port }}
+          PrivateKey = {{ server_private_key }}
+          {% for i in range(wg_client_count | int) %}
+          [Peer]
+          PublicKey = {{ client_public_keys[i] }}
+          AllowedIPs = {{ client_ips[i] }}/32
+          {% endfor %}
+
+    # ---------- SERVICE ----------
+    - name: Check WireGuard service state
+      systemd:
+        name: wg-quick@{{ wg_interface }}
+      register: wg_service_status
+
+    - name: Enable WireGuard service
+      systemd:
+        name: wg-quick@{{ wg_interface }}
+        enabled: true
+
+    - name: Restart WireGuard if already running
+      systemd:
+        name: wg-quick@{{ wg_interface }}
+        state: restarted
+      when: wg_service_status.status.ActiveState == "active"
+
+    - name: Start WireGuard if not running
+      systemd:
+        name: wg-quick@{{ wg_interface }}
+        state: started
+      when: wg_service_status.status.ActiveState != "active"
+
+    # ---------- EXPORT FOR LOCAL PLAY ----------
+    - name: Expose keys and client count for localhost
+      set_fact:
+        exported_server_public_key: "{{ server_public_key }}"
+        exported_client_private_keys: "{{ client_private_keys }}"
+        exported_client_ips: "{{ client_ips }}"
+        exported_wg_client_count: "{{ wg_client_count }}"
+
+- name: Generate local WireGuard client configs
+  hosts: localhost
+  connection: local
+  vars:
+    router_available: "{{ 'router' in hostvars and hostvars['router'].exported_client_private_keys is defined }}"
+    server_public_key: "{{ hostvars['router'].exported_server_public_key | default('') }}"
+    client_private_keys: "{{ hostvars['router'].exported_client_private_keys | default([]) }}"
+    client_ips: "{{ hostvars['router'].exported_client_ips | default([]) }}"
+    wg_client_count: "{{ hostvars['router'].exported_wg_client_count | default(0) | int }}"
+    server_endpoint: "{{ hostvars['router'].ansible_host | default('') }}"
+    wg_port: 51820
+    wg_netmask: 24
+    forwarded_subnet: 10.81.0.0/16
+    wg_server_ip: 10.81.81.1
+
+  tasks:
+    - name: Write local WireGuard client configs
+      copy:
+        dest: "{{ customer_folder }}/deployment/wg-client-{{ item }}.conf"
+        mode: "0600"
+        content: |
+          [Interface]
+          PrivateKey = {{ client_private_keys[item - 1] }}
+          Address = {{ client_ips[item - 1] }}/{{ wg_netmask }}
+
+          [Peer]
+          PublicKey = {{ server_public_key }}
+          Endpoint = {{ server_endpoint }}:{{ wg_port }}
+          AllowedIPs = {{ forwarded_subnet }}, {{ wg_server_ip }}/{{ wg_netmask }}
+          PersistentKeepalive = 25
+      loop: "{{ range(1, wg_client_count | int + 1) | list }}"
+      loop_control:
+        label: "client {{ item }}"
+      when: router_available | bool
+
+    - name: Copy first client config to wg-client.conf for single-client backward compatibility
+      copy:
+        src: "{{ customer_folder }}/deployment/wg-client-1.conf"
+        dest: "{{ customer_folder }}/deployment/wg-client.conf"
+        remote_src: true
+        force: true
+      when: router_available | bool and wg_client_count | int >= 1

@@ -1,0 +1,9 @@
+- name: Start services
+  hosts: master
+  become: true
+  tasks:
+    - name: Start build system
+      systemd:
+        name: build_system
+        state: started
+        enabled: true

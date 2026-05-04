@@ -1,0 +1,32 @@
+---
+- hosts: localhost
+  gather_facts: false
+  vars:
+    master_host: master # inventory name of your master
+    kubeconfig_local: "{{ lookup('env','HOME') }}/.kube/config"
+
+  tasks:
+    - name: Ensure local kube dir exists
+      file:
+        path: "{{ kubeconfig_local | dirname }}"
+        state: directory
+        mode: "0700"
+
+    - name: Fetch admin.conf from master
+      slurp:
+        src: /etc/kubernetes/admin.conf
+      delegate_to: "{{ master_host }}"
+      become: true
+      register: kubeconfig_raw
+
+    - name: Write kubeconfig locally
+      copy:
+        dest: "{{ kubeconfig_local }}"
+        content: "{{ kubeconfig_raw.content | b64decode }}"
+        mode: "0600"
+
+    - name: Replace localhost with master IP
+      replace:
+        path: "{{ kubeconfig_local }}"
+        regexp: 'server: https://127\.0\.0\.1:6443'
+        replace: "server: https://{{ hostvars[master_host]['ansible_host'] | default(master_host) }}:6443"
