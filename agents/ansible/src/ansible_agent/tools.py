@@ -95,16 +95,20 @@ def run_module(
     inventory: str,
     pattern: str,
     module: str,
-    args: Optional[str] = None,
+    module_args: Optional[str] = None,
 ) -> str:
     """Run an ad-hoc module (`ansible -m`). DESTRUCTIVE — gated by approval.
 
     Even read-ish modules (setup, ping) go through approval because
     we cannot statically tell whether ``module=command`` will rm -rf.
+
+    Parameter name is ``module_args`` (not ``args``) because
+    langchain_core's StructuredTool collides with the bare name
+    ``args`` — pydantic interprets it as variadic ``*args``.
     """
     cmd = ["ansible", pattern, "-i", inventory, "-m", module]
-    if args:
-        cmd += ["-a", args]
+    if module_args:
+        cmd += ["-a", module_args]
     return _run(cmd)
 
 
