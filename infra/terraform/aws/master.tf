@@ -3,7 +3,7 @@ resource "aws_subnet" "k8s_master_subnet" {
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = var.master_cidr
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-master-subnet"
+    Name = "olympus-${var.customer_name}-k8s-master-subnet"
   }
 }
 
@@ -64,7 +64,7 @@ resource "aws_route_table" "master-subnet-rt" {
     network_interface_id = aws_network_interface.router_lan.id
   }
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-master-subnet-rt"
+    Name = "olympus-${var.customer_name}-k8s-master-subnet-rt"
   }
 }
 

@@ -144,40 +144,16 @@
     - name: Install Docker
       ansible.builtin.import_tasks: docker.yml
 
-    # - name: Make sure ssh directory exists
-    #   file:
-    #     path: /root/.ssh
-    #     state: directory
-    #     mode: "0700"
-
-    # - name: Get ssh credentials
-    #   copy:
-    #     src: ../yobs.pem
-    #     dest: /root/.ssh/id_ed25519
-    #     mode: "0600"
-
-    # - name: Create host mount path for pipeline manager logs
-    #   file:
-    #     path: /opt/k8s-logs
-    #     state: directory
-    #     mode: "0755"
-
-    # - name: Create host mount path for pipeline manager data
-    #   file:
-    #     path: /opt/k8s-data
-    #     state: directory
-    #     mode: "0755"
-
-    # - name: Scan ssh key of github.com and add to known_hosts
-    #   known_hosts:
-    #     name: github.com
-    #     key: "{{ lookup('pipe', 'ssh-keyscan github.com') }}"
-
-    # - name: Clone component repository
-    #   git:
-    #     repo: git@github.com:innostruction/yobs.git
-    #     dest: /opt/k8s-data/components
-    #     clone: yes
+    - name: Install Helm (used by the optional Olympus dashboard deploy step below)
+      ansible.builtin.shell: |
+        set -e
+        if command -v helm >/dev/null 2>&1; then exit 0; fi
+        curl -fsSL https://baltocdn.com/helm/signing.asc | gpg --dearmor -o /usr/share/keyrings/helm.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" \
+          > /etc/apt/sources.list.d/helm-stable-debian.list
+        apt-get update
+        apt-get install -y helm
+      changed_when: false
 
 - name: Configure Docker insecure registries
   hosts: master
@@ -211,17 +187,40 @@
         state: restarted
         enabled: true
 
-# - name: Deploy build system
+# Olympus deploy step — Helm-installs the dashboard chart from
+# infra/k8s/charts/olympus once the control plane is up. Disabled by
+# default so the user can review the cluster before workloads land.
+#
+# Required group_vars for this play (set in inventory or -e):
+#   olympus_chart_path           # absolute path to infra/k8s/charts/olympus on the master
+#   deployment_registry_host     # registry the dashboard image was pushed to
+#   olympus_image_tag            # default: "dev"
+#   anthropic_api_key            # optional; required if router=llm
+#   openai_api_key               # optional
+#
+# - name: Deploy Olympus dashboard via Helm
 #   hosts: master
 #   become: true
 #   tasks:
-#     - name: Upload build system
-#       copy:
-#         src: ../build_system/
-#         dest: /opt/build_system/
-#         mode: "0755"
-
-#     - name: Deploy build system
-#       shell: |
-#         cd /opt/build_system
-#         ./install.sh
+#     - name: Create provider-key Secret (idempotent)
+#       command: >-
+#         kubectl create secret generic olympus-secrets
+#         --from-literal=anthropic_api_key={{ anthropic_api_key | default('') }}
+#         --from-literal=openai_api_key={{ openai_api_key | default('') }}
+#         --dry-run=client -o yaml
+#       register: olympus_secret_yaml
+#       changed_when: false
+#     - name: Apply provider-key Secret
+#       command: kubectl apply -f -
+#       args:
+#         stdin: "{{ olympus_secret_yaml.stdout }}"
+#       environment:
+#         KUBECONFIG: /etc/kubernetes/admin.conf
+#     - name: helm install olympus
+#       command: >-
+#         helm upgrade --install olympus
+#         {{ olympus_chart_path }}
+#         --set image.repository={{ deployment_registry_host }}/olympus/dashboard
+#         --set image.tag={{ olympus_image_tag | default('dev') }}
+#       environment:
+#         KUBECONFIG: /etc/kubernetes/admin.conf

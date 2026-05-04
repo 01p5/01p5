@@ -42,7 +42,7 @@ resource "aws_key_pair" "k8s" {
 resource "aws_vpc" "main_vpc" {
   cidr_block = var.vpc_cidr
   tags = {
-    Name = "artemis-${var.customer_name}-k8s_main_vpc"
+    Name = "olympus-${var.customer_name}-k8s_main_vpc"
   }
   enable_dns_support   = true
   enable_dns_hostnames = false
@@ -54,7 +54,7 @@ resource "aws_subnet" "k8s_main_subnet" {
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = var.subnet_cidr
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-subnet1"
+    Name = "olympus-${var.customer_name}-k8s-subnet1"
   }
 }
 

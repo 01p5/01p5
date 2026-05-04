@@ -83,26 +83,26 @@ variable "master_vmid" {
   default = ""
 }
 
-variable "pve_password"{
+variable "pve_password" {
   default = ""
 }
 
-variable "pve_host"{
+variable "pve_host" {
   default = ""
 }
 
 variable "pve_http_host" {
 }
 
-variable "pve_username"{
+variable "pve_username" {
   default = ""
 }
 
-variable "pve_login_node"{
+variable "pve_login_node" {
   default = ""
 }
 
-variable "pve_service_ip"{
+variable "pve_service_ip" {
   default = ""
 }
 

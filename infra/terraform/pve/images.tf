@@ -1,5 +1,5 @@
 locals {
-  nodes = toset(concat([var.master_node],[for wk in var.workers : wk.node]))
+  nodes     = toset(concat([var.master_node], [for wk in var.workers : wk.node]))
   nodes_map = { for n in local.nodes : n => n }
   # image_id = { for n in local.nodes : n => proxmox_virtual_environment_download_file.ubuntu_22[n].id }
   image_id = { for n in local.nodes : n => "local:iso/ubuntu-22.04-k8s.img" } // Pin
@@ -11,7 +11,7 @@ resource "proxmox_virtual_environment_file" "cloud_init_master" {
   node_name    = var.master_node
 
   source_raw {
-    data = <<-EOF
+    data      = <<-EOF
       #cloud-config
       hostname: k8s-master
       fqdn: k8s-master.local
@@ -33,7 +33,7 @@ resource "proxmox_virtual_environment_file" "cloud_init_worker" {
   node_name    = each.value.node
 
   source_raw {
-    data = <<-EOF
+    data      = <<-EOF
       #cloud-config
       hostname: k8s-worker-${each.key}
       fqdn: k8s-worker-${each.key}.local

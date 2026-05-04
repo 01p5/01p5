@@ -1,73 +1,107 @@
 # Olympus Infra
 
-W3-4 plan item: *minimal AWS deploy path (one agent against real infra)
-— pull forward to surface IAM/state/secrets pain early.*
+Three layers, applied in order:
 
-This directory holds the smallest set of Terraform stacks the Olympus
-Terraform agent needs in order to perform a real apply against AWS.
+| Layer | Path | What it provisions | Run order |
+|-------|------|--------------------|-----------|
+| 1. State bootstrap | [`aws-bootstrap/`](aws-bootstrap/) | S3 state bucket + DynamoDB lock + scoped IAM role for the Terraform agent. | Once per AWS account, by a privileged human. |
+| 2. Cluster | [`terraform/`](terraform/) | A real K8s control-plane VM + worker fleet, on AWS or Proxmox, with Cloudflare DNS. Ported from a working Artemis deployment and rebranded for Olympus. | Once per environment. |
+| 3. Workloads | [`ansible/`](ansible/) → [`k8s/charts/olympus/`](k8s/charts/olympus/) | Bring up kubeadm + CNI + Docker on the master, then optionally `helm install` the Olympus dashboard. | After the cluster is reachable. |
 
-| Stack | Purpose | Apply with |
-|-------|---------|------------|
-| `aws-bootstrap/` | Per-account, one-time. Creates the state bucket, lock table, and the IAM role the agent assumes. | A privileged human, once per AWS account. |
-| `sandbox-bucket/` | The smoke target. The agent applies + destroys this stack to prove the loop. | `olympus-terraform "apply infra/sandbox-bucket"` (after bootstrap). |
+`env.sh.template` carries every variable each layer needs. Copy to
+`env.sh`, fill in, `source env.sh` before running anything.
 
-## How the deploy path works
+## Per-layer detail
 
-1. **Identity.** A privileged human runs `aws-bootstrap` once. It
-   creates `olympus_terraform`, an IAM role with a *scoped* policy:
-   state-bucket access + `s3:*` on `olympus-sandbox-*`. Nothing else.
-2. **State.** Both stacks use the S3 backend created by the bootstrap.
-   State is versioned and SSE-AES256 encrypted; locking is via DynamoDB
-   (`olympus-tf-locks`). The sandbox stack also opts into S3-native
-   `use_lockfile = true` so we exercise the newer locking path.
-3. **Secrets.** The agent never sees AWS credentials directly. It runs
-   under an instance profile / OIDC role / `aws sso` session that
-   resolves to `olympus_terraform`. `AgentContext.secrets` (vault-backed
-   in v2) is the path for *application* secrets the agent must inject
-   into resources.
-4. **Approval.** Every `tf_apply` and `tf_destroy` goes through the
-   runtime's `ApprovalHook` with the most recent `tf_plan` output as
-   the diff. Console hook for solo runs; webhook hook for ops-on-call.
-5. **Audit.** `JsonlAuditLogger` records every tool call (including
-   `terraform plan`) with task ID, agent, args, result, and approval
-   decision. The bus log preserves message ordering.
+### 1. `aws-bootstrap/` — one-time state setup
 
-## Bootstrapping a new account
+Same purpose as in W3-4: create the `olympus-tfstate-<account-id>`
+bucket, the lock table, and the `olympus_terraform` role the agent
+assumes. Apply with a privileged identity, then point everything else
+at the resulting bucket via `-backend-config`.
+
+### 2. `terraform/` — cluster provisioning
+
+Two backends; pick one with `TF_VAR_provider_target` (in `env.sh`) or
+`-var provider_target=…`:
+
+| `provider_target` | Module | Provisions |
+|-------------------|--------|------------|
+| `"aws"` (default) | `terraform/aws/` | VPC + public subnet + private cluster subnet, master EC2, worker EC2 fleet (`for_each` over `var.workers`), a small router VM that NATs LAN→WAN and terminates Wireguard, Cloudflare A records for the master. |
+| `"pve"`           | `terraform/pve/` | Proxmox VMs for master + workers on a Linux bridge, cloud-init via the `bpg/proxmox` provider, Cloudflare A records pointed at `var.pve_service_ip`. |
+
+`main.tf` instantiates exactly one module via `count`, so the inactive
+backend is never evaluated — switching backends costs only a re-init.
+Both modules accept the same superset of variables; per-provider
+fields are simply ignored by the other backend.
+
+Resource names are tagged `olympus-${var.customer_name}-…` (AWS) or
+`k8s-${var.customer_name}-…` (PVE), so multiple deployments coexist
+in the same account.
+
+### 3. `ansible/` — host configuration
+
+`master.yml` and `workers.yml` install kubeadm/containerd, init the
+control plane with Calico + local-path provisioner, join workers, and
+install Helm on the master. The actual Olympus deploy lives in a
+final commented-out play in `master.yml` — uncomment after cluster
+verification:
+
+```yaml
+helm upgrade --install olympus {{ olympus_chart_path }} \
+  --set image.repository={{ deployment_registry_host }}/olympus/dashboard \
+  --set image.tag={{ olympus_image_tag | default('dev') }}
+```
+
+The `helm install` step references `infra/k8s/charts/olympus`, the
+chart we built in W5-6.
+
+## Standing up a new account
 
 ```bash
-# Run once with a privileged identity (e.g. your own SSO admin role).
+cp infra/env.sh.template infra/env.sh
+# fill in: cloudflare token, customer name, registry, provider keys
+source infra/env.sh
+
+# 1. State bootstrap (one-time, privileged identity).
 cd infra/aws-bootstrap
 terraform init
 terraform apply -var "state_bucket_name=olympus-tfstate-<account-id>"
-```
 
-After bootstrap completes, configure the sandbox stack's backend:
-
-```bash
-cd ../sandbox-bucket
+# 2. Cluster provision.
+cd ../terraform
 terraform init \
   -backend-config="bucket=olympus-tfstate-<account-id>" \
   -backend-config="dynamodb_table=olympus-tf-locks"
+# Pick a backend (or set TF_VAR_provider_target in env.sh):
+#   AWS: terraform apply
+#   PVE: terraform apply -var provider_target=pve
+terraform apply
+
+# 3. Host config.
+cd ../ansible
+ansible-playbook -i ../terraform/deployment/inventory.ini master.yml
+ansible-playbook -i ../terraform/deployment/inventory.ini workers.yml
+# (optionally) uncomment + re-run the Olympus deploy block in master.yml
 ```
 
-Then hand control to the agent:
+## What we expect to hit (and want to surface early)
 
-```bash
-olympus-terraform \
-  "Apply infra/sandbox-bucket with name_suffix=$(uuidgen | head -c 6)"
-```
+- **State backend bootstrap is chicken-and-egg** — the state bucket
+  cannot itself live in remote state on first apply; `aws-bootstrap`
+  is local-state by design.
+- **IAM scope drift.** Every new resource an agent stack adds may
+  require a policy update; resist `s3:*`/`*` and surface expansions
+  in PRs so reviewers catch privilege creep.
+- **AWS rate limits during destroy** when the lifecycle policy on
+  managed buckets races `terraform destroy`. Either disable the
+  lifecycle in tear-down or expect retries.
+- **Cloudflare zone ownership.** The DNS module assumes a single
+  zone; multi-zone deployments need a per-customer override.
 
-## Pain we expect to hit (and want to surface early)
+## Layout history
 
-- **State backend bootstrap is chicken-and-egg.** The state bucket
-  cannot itself live in remote state on first apply — that's why
-  `aws-bootstrap` is local-state by design.
-- **IAM scope drift.** Every new resource an agent stack adds requires
-  a policy update. The temptation is `s3:*` / `*`. Resist; surface
-  expansions in PRs so reviewers see the privilege creep.
-- **Plan diffs are noisy.** Terraform's plan output is verbose; the
-  agent's job is to *summarize* it for the approval prompt, not pipe
-  the whole thing through. See `TerraformResponse.plan_summary`.
-- **AWS rate limits during destroy.** Sandbox lifecycle expires
-  objects after 7 days, which often races with `terraform destroy`.
-  Either disable the lifecycle in tear-down or expect retries.
+The W3-4 placeholder `infra/sandbox-bucket/` was removed once the real
+`infra/terraform/` module landed — no point in two `tf apply` targets
+for the same purpose. `aws-bootstrap` stays because it is *prerequisite*
+to the real module, not redundant with it.

@@ -1,8 +1,8 @@
 resource "proxmox_virtual_environment_vm" "k8s_workers" {
-  for_each = var.workers
+  for_each  = var.workers
   name      = "k8s-${var.customer_name}-worker-${each.key}"
   node_name = each.value.node
-  vm_id = each.value.vmid
+  vm_id     = each.value.vmid
 
   lifecycle {
     ignore_changes = [
@@ -32,7 +32,7 @@ resource "proxmox_virtual_environment_vm" "k8s_workers" {
   cpu {
     cores   = each.value.cpu
     sockets = 1
-    type = "host"
+    type    = "host"
   }
   memory {
     dedicated = each.value.memory

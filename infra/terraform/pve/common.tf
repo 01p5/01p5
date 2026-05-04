@@ -17,7 +17,7 @@ provider "proxmox" {
   insecure = true
   ssh {
     agent    = true
-    username = "${split("@", var.pve_username)[0]}"
+    username = split("@", var.pve_username)[0]
     node {
       name    = var.pve_login_node
       address = var.pve_host

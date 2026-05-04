@@ -1,13 +1,13 @@
 resource "aws_internet_gateway" "internet_gateway" {
   vpc_id = aws_vpc.main_vpc.id
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-internet-gateway"
+    Name = "olympus-${var.customer_name}-k8s-internet-gateway"
   }
 }
 
 resource "aws_eip" "router_wan_eip" {
   tags = {
-    Name = "artemis-${var.customer_name}-router-wan-eip"
+    Name = "olympus-${var.customer_name}-router-wan-eip"
   }
 }
 
@@ -21,7 +21,7 @@ resource "aws_subnet" "router_vpn_subnet" {
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = "10.81.81.0/24"
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-router-vpn-subnet"
+    Name = "olympus-${var.customer_name}-k8s-router-vpn-subnet"
   }
 }
 
@@ -30,7 +30,7 @@ resource "aws_subnet" "router_wan_subnet" {
   vpc_id            = aws_vpc.main_vpc.id
   cidr_block        = var.router_wan_cidr
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-router-wan-subnet"
+    Name = "olympus-${var.customer_name}-k8s-router-wan-subnet"
   }
 }
 
@@ -41,7 +41,7 @@ resource "aws_route_table" "router-wan-subnet-rt" {
     gateway_id = aws_internet_gateway.internet_gateway.id
   }
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-router-wan-subnet-rt"
+    Name = "olympus-${var.customer_name}-k8s-router-wan-subnet-rt"
   }
 }
 
@@ -62,7 +62,7 @@ resource "aws_route_table" "router-lan-subnet-rt" {
     network_interface_id = aws_network_interface.router_lan.id
   }
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-router-lan-subnet-rt"
+    Name = "olympus-${var.customer_name}-k8s-router-lan-subnet-rt"
   }
 }
 
@@ -114,7 +114,7 @@ resource "aws_security_group" "router_wan_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-router-sg"
+    Name = "olympus-${var.customer_name}-k8s-router-sg"
   }
 }
 
@@ -154,7 +154,8 @@ resource "aws_network_interface" "router_lan" {
 resource "aws_instance" "router_instance" {
   availability_zone = data.aws_availability_zones.available.names[0]
   ami               = "ami-04f34746e5e1ec0fe" # pinned ubuntu version 22.04
-  # ami                         = "ami-0da657e96a9bfab37" # esperanza router AMI (built with Packer)
+  # Custom-baked router AMI slot — left blank for Olympus; build with Packer if/when we need a hardened router image.
+  # ami                         = ""
   instance_type = "t3.small"
   key_name      = aws_key_pair.k8s.key_name
 
@@ -173,7 +174,7 @@ resource "aws_instance" "router_instance" {
   }
 
   tags = {
-    Name = "artemis-${var.customer_name}-k8s-router"
+    Name = "olympus-${var.customer_name}-k8s-router"
   }
   user_data = <<-EOF
 #cloud-config

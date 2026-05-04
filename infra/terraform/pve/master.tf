@@ -1,7 +1,7 @@
 resource "proxmox_virtual_environment_vm" "k8s_master_host" {
   name      = "k8s-${var.customer_name}-master"
   node_name = var.master_node
-  vm_id = var.master_vmid
+  vm_id     = var.master_vmid
 
   lifecycle {
     ignore_changes = [
@@ -21,7 +21,7 @@ resource "proxmox_virtual_environment_vm" "k8s_master_host" {
 
   disk {
     datastore_id = var.master_disk_vol
-    file_id      =  local.image_id[var.master_node]
+    file_id      = local.image_id[var.master_node]
     interface    = "virtio0"
     iothread     = true
     discard      = "on"
@@ -31,7 +31,7 @@ resource "proxmox_virtual_environment_vm" "k8s_master_host" {
   cpu {
     cores   = var.master_cpu
     sockets = 1
-    type = "host"
+    type    = "host"
   }
   memory {
     dedicated = var.master_memory
