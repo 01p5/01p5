@@ -144,15 +144,15 @@
     - name: Install Docker
       ansible.builtin.import_tasks: docker.yml
 
-    - name: Install Helm (used by the optional Olympus dashboard deploy step below)
+    - name: Install Helm (direct binary; avoids apt-repo DNS dependency)
       ansible.builtin.shell: |
         set -e
         if command -v helm >/dev/null 2>&1; then exit 0; fi
-        curl -fsSL https://baltocdn.com/helm/signing.asc | gpg --dearmor -o /usr/share/keyrings/helm.gpg
-        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" \
-          > /etc/apt/sources.list.d/helm-stable-debian.list
-        apt-get update
-        apt-get install -y helm
+        HELM_VERSION="v3.16.3"
+        curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+          | tar -xz -C /tmp
+        install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+        rm -rf /tmp/linux-amd64
       changed_when: false
 
 - name: Configure Docker insecure registries

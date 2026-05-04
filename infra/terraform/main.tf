@@ -82,25 +82,93 @@ variable "pve_service_ip" {
   default = ""
 }
 
-# Provider blocks for both backends are configured unconditionally.
-# Terraform doesn't actually open connections until a resource needs
-# them; with ``count = 0`` on the unused module nothing is fetched.
+# --- PVE-only knobs (overridable per environment via TF_VAR_*) ----
+# Defaults match the original Olympus 10.81.1.0/24 layout. Override
+# in env.sh for boxes whose vmbr0 lives on a different network or
+# whose datastore/bridge names differ.
+variable "pve_node_name" {
+  type        = string
+  description = "Name of the PVE node hosting all VMs."
+  default     = "pve"
+}
+
+variable "pve_disk_vol" {
+  type        = string
+  description = "PVE datastore for VM disks (e.g. local-lvm, nvme1)."
+  default     = "local-lvm"
+}
+
+variable "pve_bridge" {
+  type        = string
+  description = "Linux bridge to attach VMs to (e.g. vmbr0)."
+  default     = "vmbr0"
+}
+
+variable "pve_subnet_cidr" {
+  type        = string
+  description = "CIDR of the network reachable on pve_bridge."
+  default     = "10.81.1.0/24"
+}
+
+variable "pve_gateway" {
+  type        = string
+  description = "Default gateway on pve_bridge."
+  default     = "10.81.1.1"
+}
+
+variable "pve_master_ip" {
+  type        = string
+  description = "IP for the k8s master VM on pve_bridge."
+  default     = "10.81.1.10"
+}
+
+variable "pve_worker_ips" {
+  type        = list(string)
+  description = "IPs for the k8s worker VMs on pve_bridge (one per worker)."
+  default     = ["10.81.1.11", "10.81.1.12", "10.81.1.13"]
+}
+
+# Provider blocks live at the root so the cluster_aws / cluster_pve
+# modules can be instantiated with ``count``. Terraform does not
+# actually open connections until a resource needs them; with
+# ``count = 0`` on the unused module nothing is fetched.
 provider "aws" {
   region = var.aws_region
 }
 
-# Shared cluster shape — both modules accept the full superset.
-# Per-provider fields are simply ignored by the other backend.
+provider "proxmox" {
+  endpoint = var.pve_http_host != "" ? "https://${var.pve_http_host}:8006/" : ""
+  username = var.pve_username
+  password = var.pve_password
+  insecure = true
+  ssh {
+    agent    = true
+    username = var.pve_username != "" ? split("@", var.pve_username)[0] : ""
+    node {
+      name    = var.pve_login_node
+      address = var.pve_host
+    }
+  }
+}
+
+provider "cloudflare" {
+  # The cloudflare provider validates api_token's charset even when no
+  # cloudflare_record is created — pass a placeholder when the user
+  # hasn't set TF_VAR_cloudflare_token. Real records are gated on the
+  # original var.cloudflare_token in pve/dns.tf and aws/dns.tf.
+  api_token = var.cloudflare_token != "" ? var.cloudflare_token : "0000000000000000000000000000000000000000"
+}
+
+# AWS-side worker map. IPs/gateway here only exist inside the AWS VPC.
 locals {
-  workers = {
+  workers_aws = {
     worker1 = {
-      # AWS
       ami           = "ami-04f34746e5e1ec0fe"
       instance_type = "t3.medium"
-      # Proxmox
+      # Proxmox stub fields (the AWS module accepts them but ignores).
       node     = "pve"
-      disk_vol = "nvme1"
-      nic      = "k8s"
+      disk_vol = "local-lvm"
+      nic      = "vmbr0"
       cpu      = 8
       memory   = 8192
       vmid     = 151
@@ -113,8 +181,8 @@ locals {
       ami           = "ami-04f34746e5e1ec0fe"
       instance_type = "t3.medium"
       node          = "pve"
-      disk_vol      = "nvme1"
-      nic           = "k8s"
+      disk_vol      = "local-lvm"
+      nic           = "vmbr0"
       cpu           = 8
       memory        = 8192
       vmid          = 152
@@ -126,14 +194,35 @@ locals {
       ami           = "ami-04f34746e5e1ec0fe"
       instance_type = "t3.medium"
       node          = "pve"
-      disk_vol      = "nvme1"
-      nic           = "k8s"
+      disk_vol      = "local-lvm"
+      nic           = "vmbr0"
       cpu           = 8
       memory        = 8192
       vmid          = 153
       disk          = 20
       ip            = "10.81.1.13"
       gateway       = "10.81.1.1"
+    }
+  }
+  # PVE worker map — derived from the env-overridable PVE knobs so
+  # box-specific values stay in env.sh, not committed code.
+  workers_pve = {
+    for i, ip in var.pve_worker_ips :
+    "worker${i + 1}" => {
+      # AWS stub fields (the PVE module accepts them but ignores).
+      ami           = ""
+      instance_type = ""
+      # Proxmox
+      node     = var.pve_node_name
+      disk_vol = var.pve_disk_vol
+      nic      = var.pve_bridge
+      cpu      = 8
+      memory   = 8192
+      vmid     = 151 + i
+      # Shared
+      disk    = 20
+      ip      = ip
+      gateway = var.pve_gateway
     }
   }
 }
@@ -178,7 +267,7 @@ module "cluster_aws" {
   master_ip   = "10.81.2.10"
   master_cidr = "10.81.2.0/24"
 
-  workers = local.workers
+  workers = local.workers_aws
 }
 
 module "cluster_pve" {
@@ -191,11 +280,11 @@ module "cluster_pve" {
   customer_name            = var.customer_name
   customer_deployment_path = var.customer_deployment_path
 
-  // Proxmox config
-  master_node     = "pve"
-  master_disk_vol = "nvme1"
-  master_nic      = "k8s"
-  master_gateway  = "10.81.1.1"
+  // Proxmox config (env-overridable — see TF_VAR_pve_* in env.sh).
+  master_node     = var.pve_node_name
+  master_disk_vol = var.pve_disk_vol
+  master_nic      = var.pve_bridge
+  master_gateway  = var.pve_gateway
   master_cpu      = 16
   master_memory   = 8192
   master_vmid     = 150
@@ -208,8 +297,8 @@ module "cluster_pve" {
 
   // Shared
   master_disk = 40
-  master_ip   = "10.81.1.10"
-  subnet_cidr = "10.81.1.0/24"
+  master_ip   = var.pve_master_ip
+  subnet_cidr = var.pve_subnet_cidr
 
-  workers = local.workers
+  workers = local.workers_pve
 }

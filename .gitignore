@@ -5,3 +5,13 @@ __pycache__/
 .olympus-data/
 .venv/
 *.egg-info/
+
+# Local infra credentials — never commit
+infra/env.sh
+infra/deployment/
+infra/terraform/deployment/
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.pem

@@ -1,8 +1,10 @@
 locals {
   nodes     = toset(concat([var.master_node], [for wk in var.workers : wk.node]))
   nodes_map = { for n in local.nodes : n => n }
-  # image_id = { for n in local.nodes : n => proxmox_virtual_environment_download_file.ubuntu_22[n].id }
-  image_id = { for n in local.nodes : n => "local:iso/ubuntu-22.04-k8s.img" } // Pin
+  # Tie the cloud-image to the download resource so Terraform manages
+  # the file on each node. Idempotent — Proxmox skips the download
+  # once the file is present, so this does not re-fetch on every plan.
+  image_id = { for n in local.nodes : n => proxmox_virtual_environment_download_file.ubuntu_22[n].id }
 }
 
 resource "proxmox_virtual_environment_file" "cloud_init_master" {
@@ -48,24 +50,12 @@ resource "proxmox_virtual_environment_file" "cloud_init_worker" {
   }
 }
 
-// HERE WE PIN ALL THE IMG TO PREVENT REPEATED DOWNLOADS
-
-# resource "proxmox_virtual_environment_download_file" "ubuntu_22" {
-#   for_each = local.nodes_map
-#   content_type = "iso"
-#   datastore_id = "local"
-#   node_name    = each.key
-#   file_name = "ubuntu-22.04-k8s.img"
-
-#   url = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
-# }
-
-# resource "proxmox_virtual_environment_download_file" "ubuntu_24" {
-#   content_type = "iso"
-#   datastore_id = "local"
-#   node_name    = var.node
-#   file_name = "ubuntu-24.04-k8s.img"
-
-#   url = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-# }
+resource "proxmox_virtual_environment_download_file" "ubuntu_22" {
+  for_each     = local.nodes_map
+  content_type = "iso"
+  datastore_id = "local"
+  node_name    = each.key
+  file_name    = "ubuntu-22.04-k8s.img"
+  url          = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+}
 

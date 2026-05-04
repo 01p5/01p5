@@ -10,20 +10,8 @@ terraform {
   }
 }
 
-provider "proxmox" {
-  endpoint = "https://${var.pve_http_host}:8006/"
-  username = var.pve_username
-  password = var.pve_password
-  insecure = true
-  ssh {
-    agent    = true
-    username = split("@", var.pve_username)[0]
-    node {
-      name    = var.pve_login_node
-      address = var.pve_host
-    }
-  }
-}
+# Provider configurations live in the root main.tf so the parent module
+# can use ``count`` on the AWS / PVE module instantiations.
 
 resource "tls_private_key" "k8s_key" {
   algorithm = "ED25519"

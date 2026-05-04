@@ -10,8 +10,17 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
-from olympus_telemetry import telemeter
 from pydantic import BaseModel, ConfigDict
+
+# olympus_telemetry is not on PyPI yet — degrade gracefully so the
+# dashboard runs without it. When the package lands, this no-op shim
+# is replaced silently.
+try:
+    from olympus_telemetry import telemeter  # type: ignore[import-not-found]
+except ImportError:
+    class _NoopTelemeter:
+        def event(self, *_args: Any, **_kwargs: Any) -> None: ...
+    telemeter = _NoopTelemeter()
 
 from .budget import BudgetGuard
 from .models import *
@@ -142,15 +151,16 @@ class StructuralAgent:
             if self.enable_web_search
             else []
         )
-        kwargs = {}
+        # Some kwargs are OpenAI-Responses-API specific. Anthropic's
+        # SDK rejects them with TypeError at Messages.create() time, so
+        # gate them on non-claude models — same pattern as output_version.
+        kwargs: dict[str, Any] = {}
         if "claude" not in self.model:
             kwargs["output_version"] = "responses/v1"
-        llm = init_chat_model(
-            self.model,
-            **kwargs,
-            use_previous_response_id=self.use_previous_response_id,
-            extra_body=self.request_extra_body,
-        )
+            kwargs["use_previous_response_id"] = self.use_previous_response_id
+        if self.request_extra_body:
+            kwargs["extra_body"] = self.request_extra_body
+        llm = init_chat_model(self.model, **kwargs)
         self.agent = create_agent(
             model=llm,
             tools=self.tools + web_search_tool,

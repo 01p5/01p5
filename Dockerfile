@@ -48,14 +48,20 @@ RUN if [ "$INSTALL_LLM_STACK" = "1" ]; then \
 
 # Source — copy after deps so layer cache survives most edits.
 COPY libs/agentlib libs/agentlib
-COPY agents/sysadmin agents/sysadmin
+COPY agents agents
 COPY docs docs
 COPY PROJECT_PLAN.md PROJECT_PLAN.md
 
-# Editable installs: sysadmin entrypoint on PATH, conftest.py picks up
-# the in-tree agentlib for tests run without an install.
+# Editable installs of every Olympus package the dashboard depends on
+# (the dashboard's build_default_server constructs all four agents).
 RUN pip install --no-cache-dir --no-deps -e ./libs/agentlib \
- && pip install --no-cache-dir --no-deps -e ./agents/sysadmin
+ && pip install --no-cache-dir --no-deps -e ./agents/sysadmin \
+ && pip install --no-cache-dir --no-deps -e ./agents/programmer \
+ && pip install --no-cache-dir --no-deps -e ./agents/terraform \
+ && pip install --no-cache-dir --no-deps -e ./agents/ansible \
+ && pip install --no-cache-dir --no-deps -e ./agents/olympus_cli \
+ && pip install --no-cache-dir --no-deps -e ./agents/dashboard
 
 ENV PYTHONUNBUFFERED=1
-CMD ["bash"]
+EXPOSE 8765
+CMD ["olympus-dashboard", "--host=0.0.0.0", "--port=8765", "--router=manual"]
