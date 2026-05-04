@@ -48,3 +48,19 @@ jobs:
       - name: Test sysadmin agent (pytest)
         working-directory: agents/sysadmin
         run: pytest -v
+
+      - name: Test programmer agent (pytest)
+        working-directory: agents/programmer
+        run: pytest -v
+
+      - name: Test terraform agent (pytest)
+        working-directory: agents/terraform
+        run: pytest -v
+
+      - name: Test ansible agent (pytest)
+        working-directory: agents/ansible
+        run: pytest -v
+
+      - name: Test orchestrator CLI wiring (pytest)
+        working-directory: agents/olympus_cli
+        run: pytest -v

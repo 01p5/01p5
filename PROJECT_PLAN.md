@@ -83,17 +83,17 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 
 ### Weeks 3–4: Core Platform & All Agents
 
-- [ ] Orchestrator: task decomposition and agent dispatch logic
-- [ ] Shared context bus — **in-memory v1** (hardening pushed to W5–6)
-- [ ] Human-in-the-loop approval flow (CLI + webhook)
-- [ ] **Minimal AWS deploy path** (one agent against real infra) — pull forward to surface IAM/state/secrets pain early
-- [ ] Terraform Agent — plan/apply/destroy with state awareness
-- [ ] Ansible Agent — playbook execution, inventory management
-- [ ] Programmer Agent — Dockerfile, Helm chart, script generation
-- [ ] Sysadmin Agent — kubectl, log querying, pod health checks
+- [x] Orchestrator: task decomposition and agent dispatch logic — `agentlib.Orchestrator` + `LLMRouter`/`ManualRouter`; production wiring in `agents/olympus_cli`
+- [x] Shared context bus — **in-memory v1** (hardening pushed to W5–6)
+- [x] Human-in-the-loop approval flow (CLI + webhook) — `ConsoleApprovalHook` + `WebhookApprovalHook` (stdlib HTTP)
+- [ ] **Minimal AWS deploy path** (one agent against real infra) — code path ready (`infra/aws-bootstrap` + `infra/sandbox-bucket` + Terraform agent), live AWS apply held until a sandbox account is in place (user's local creds point at company AWS)
+- [x] Terraform Agent — plan/apply/destroy with state awareness
+- [x] Ansible Agent — playbook execution, inventory management
+- [x] Programmer Agent — Dockerfile, Helm chart, script generation
+- [x] Sysadmin Agent — kubectl, log querying, pod health checks
 - [ ] ~~Networking Agent~~ → **moved to stretch (W9–10)** to de-risk this sprint
-- [ ] Terminal CLI interface (pick UI lib early — `textual` or `rich`)
-- [ ] Unit tests for each agent, security tests for guardrails
+- [x] Terminal CLI interface (chose **textual**) — minimal app in `agents/olympus_cli/src/olympus_cli/tui.py`; W5-6 polishes
+- [x] Unit tests for each agent, security tests for guardrails — 60 tests across 6 packages, all green; live LLM/AWS paths gated behind opt-in env vars
 
 **Deliverable:** Four agents functional individually via CLI, one running against real AWS. Orchestrator can route tasks to the correct agent.
 
@@ -172,5 +172,6 @@ Each question is tagged with the week it must be resolved by — slipping these 
 - [x] **(decided W2)** Long-running ops (Terraform apply): sync-with-progress-events. No async job model in v1.
 - [ ] **(decide by W4)** Message queue for context bus (Redis streams / NATS / stay in-memory)?
 - [ ] **(decide by W4)** Web UI framework (Next.js / SvelteKit / plain React)?
+- [x] **(decided W4)** Terminal UI: textual. Mounted in `agents/olympus_cli/src/olympus_cli/tui.py`.
 - [ ] **(decide by W7)** Agent memory storage — vector DB choice (pgvector / Chroma / Qdrant)?
 - [ ] **(stretch, W9–10)** Auth/RBAC model for multi-user scenarios.

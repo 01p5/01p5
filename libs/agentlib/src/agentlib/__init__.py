@@ -42,6 +42,7 @@ from .models import (
     vllm_qwen3,
 )
 from .orchestrator import LLMRouter, ManualRouter, Orchestrator, Router
+from .approval_webhook import WebhookApprovalHook
 from .runtime import (
     AlwaysApprove,
     AlwaysReject,
@@ -82,6 +83,7 @@ __all__ = [
     "ToolGateError",
     "gate_tools",
     "ConsoleApprovalHook",
+    "WebhookApprovalHook",
     "AlwaysApprove",
     "AlwaysReject",
     "JsonlAuditLogger",

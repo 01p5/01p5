@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "olympus-cli"
+version = "0.1.0"
+description = "Olympus orchestrator CLI — load all agents, route NL tasks, gate via human approval"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "agentlib",
+    "olympus-sysadmin",
+    "olympus-programmer",
+    "olympus-terraform",
+    "olympus-ansible",
+]
+
+[project.optional-dependencies]
+tui = ["textual>=0.50"]
+
+[project.scripts]
+olympus = "olympus_cli.main:main"
+olympus-tui = "olympus_cli.tui:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
