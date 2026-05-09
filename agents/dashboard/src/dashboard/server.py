@@ -50,7 +50,6 @@ from agentlib import (
     InMemoryBus,
     JsonlAuditLogger,
     Orchestrator,
-    PendingApproval,
     QueueApprovalHook,
     Router,
     TaskMessage,

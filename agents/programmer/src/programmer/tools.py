@@ -76,7 +76,7 @@ def generate_compose_service(
     lines = [
         f"  {name}:",
         f"    image: {image}",
-        f"    ports:",
+        "    ports:",
         f"      - \"{port}:{port}\"",
     ]
     if env:

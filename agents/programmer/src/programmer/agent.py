@@ -18,8 +18,8 @@ from agentlib import (
     CostBreakdown,
     StructuralAgent,
     TaskMessage,
-    claude45,
     gate_tools,
+    gpt5_mini,
 )
 
 from .tools import ALL_TOOLS, DESTRUCTIVE_TOOLS
@@ -65,7 +65,7 @@ class ProgrammerAgent(AgentSpec):
     domain = "Code packaging and deployment artifacts: Dockerfiles, docker-compose, Helm charts, scripts"
     tools: Sequence[Any] = ALL_TOOLS
     destructive_verbs = {t.name for t in DESTRUCTIVE_TOOLS}
-    model = claude45
+    model = gpt5_mini
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
         gated = gate_tools(self, ctx, task.task_id)

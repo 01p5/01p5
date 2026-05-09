@@ -20,8 +20,8 @@ from agentlib import (
     CostBreakdown,
     StructuralAgent,
     TaskMessage,
-    claude45,
     gate_tools,
+    gpt5_mini,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -75,7 +75,7 @@ class AnsibleAgent(AgentSpec):
     domain = "Host configuration management via Ansible: playbook execution and inventory inspection"
     tools: Sequence[Any] = ALL_TOOLS
     destructive_verbs = {t.name for t in DESTRUCTIVE_TOOLS}
-    model = claude45
+    model = gpt5_mini
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
         gated = gate_tools(self, ctx, task.task_id)

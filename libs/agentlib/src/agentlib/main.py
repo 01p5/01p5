@@ -151,24 +151,33 @@ class StructuralAgent:
             if self.enable_web_search
             else []
         )
-        # Some kwargs are OpenAI-Responses-API specific. Anthropic's
-        # SDK rejects them with TypeError at Messages.create() time, so
-        # gate them on non-claude models — same pattern as output_version.
+        # use_previous_response_id is OpenAI-Responses-API specific —
+        # Anthropic's SDK rejects it with TypeError.
         kwargs: dict[str, Any] = {}
         if "claude" not in self.model:
-            kwargs["output_version"] = "responses/v1"
             kwargs["use_previous_response_id"] = self.use_previous_response_id
         if self.request_extra_body:
             kwargs["extra_body"] = self.request_extra_body
         llm = init_chat_model(self.model, **kwargs)
+
+        # response_format strategy:
+        #   - Raw response_class: create_agent uses ToolStrategy (no
+        #     strict=True passed to bind_tools). OpenAI GPT-5+ then
+        #     rejects every tool call because the auto-generated schema
+        #     omits additionalProperties=false.
+        #   - ProviderStrategy: create_agent calls bind_tools(strict=True)
+        #     and lets the provider's native structured-output path do
+        #     the schema enforcement. Works on both OpenAI and Anthropic.
+        # We always wrap in ProviderStrategy.
+        from langchain.agents.structured_output import ProviderStrategy
+
         self.agent = create_agent(
             model=llm,
             tools=self.tools + web_search_tool,
             debug=self.debug,
             system_prompt=self.system_prompt,
             checkpointer=self.checkpointer,
-            response_format=self.response_class,
-            # response_format=ProviderStrategy(self.response_class),
+            response_format=ProviderStrategy(self.response_class),
         ).with_config({"recursion_limit": self.recursion_limit})
 
     def _get_checkpoint_config(self) -> dict:

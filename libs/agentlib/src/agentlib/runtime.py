@@ -114,12 +114,54 @@ def _wrap_one(
             )
         return result
 
+    # Pass a dict args_schema (rather than a Pydantic class) so
+    # langchain's BaseTool.tool_call_schema returns it verbatim. If we
+    # passed a Pydantic class, BaseTool would rebuild a "subset model"
+    # that strips ``additionalProperties: false`` from the JSON schema —
+    # and OpenAI's strict-mode tool calls then reject the schema.
     return StructuredTool.from_function(
         func=gated,
         name=inner.name,
         description=inner.description,
-        args_schema=inner.args_schema,
+        args_schema=_strict_schema_dict(inner),
     )
+
+
+def _strict_schema_dict(inner: BaseTool) -> Any:
+    """Materialize the wrapped tool's args schema as a JSON-schema dict
+    with ``additionalProperties: false`` set at every object level.
+
+    Returning a dict (instead of a Pydantic class) is what makes
+    BaseTool.tool_call_schema fall into its dict-passthrough branch
+    and preserve our additionalProperties flag end-to-end.
+    """
+    if inner.args_schema is None:
+        return None
+    if isinstance(inner.args_schema, dict):
+        return _set_additional_properties_false(dict(inner.args_schema))
+    schema = inner.args_schema.model_json_schema()
+    return _set_additional_properties_false(schema)
+
+
+def _set_additional_properties_false(schema: dict) -> dict:
+    """Recursively set ``additionalProperties: false`` on every
+    JSON-schema object node. OpenAI's strict mode requires this at
+    every object level."""
+    if not isinstance(schema, dict):
+        return schema
+    if schema.get("type") == "object" or "properties" in schema:
+        schema["additionalProperties"] = False
+    for k in ("properties", "$defs", "definitions"):
+        sub = schema.get(k)
+        if isinstance(sub, dict):
+            for v in sub.values():
+                _set_additional_properties_false(v)
+    if isinstance(schema.get("items"), dict):
+        _set_additional_properties_false(schema["items"])
+    if isinstance(schema.get("anyOf"), list):
+        for sub in schema["anyOf"]:
+            _set_additional_properties_false(sub)
+    return schema
 
 
 def _truncate(value: Any, limit: int = 4000) -> Any:

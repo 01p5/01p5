@@ -25,8 +25,8 @@ from agentlib import (
     CostBreakdown,
     StructuralAgent,
     TaskMessage,
-    claude45,
     gate_tools,
+    gpt5_mini,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -84,7 +84,7 @@ class TerraformAgent(AgentSpec):
     domain = "Cloud infrastructure-as-code via Terraform: plan/apply/destroy with state awareness"
     tools: Sequence[Any] = ALL_TOOLS
     destructive_verbs = {t.name for t in DESTRUCTIVE_TOOLS}
-    model = claude45
+    model = gpt5_mini
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
         gated = gate_tools(self, ctx, task.task_id)
