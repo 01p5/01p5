@@ -253,11 +253,23 @@ class StructuralAgent:
             for ai_message in messages:
                 if not isinstance(ai_message, AIMessage):
                     continue
+                content = ai_message.content
+                # AIMessage.content can be a plain string (chat-completions
+                # API on most providers) or a list of content blocks
+                # (Responses API, web-search results, etc). Skip the
+                # string case — there are no tool-call blocks to count.
+                if not isinstance(content, list):
+                    continue
                 try:
-                    for content_dict in ai_message.content:
-                        if (
-                            content_dict.get("type", "") == "web_search_call"
-                            or content_dict.get("type", "") == "web_search_tool_result"
+                    for content_dict in content:
+                        # Each block is normally a dict but may be a
+                        # plain string for text segments. Only dict
+                        # blocks carry a "type" we care about.
+                        if not isinstance(content_dict, dict):
+                            continue
+                        if content_dict.get("type", "") in (
+                            "web_search_call",
+                            "web_search_tool_result",
                         ):
                             categorical_costs["web_search"] += model_costs[self.model][
                                 "web_search"
