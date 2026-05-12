@@ -61,6 +61,49 @@ Every check below ran end-to-end against the real cluster. ✅ = passed.
 | 6 | Audit log integrity | ✅ Every destructive verb has `approved=True/False` (never `None`). JSONL parses cleanly. Timestamps not strictly monotonic under concurrency — see Known Issues. |
 | 7 | Crash recovery | ✅ Force-killed the pod mid-task; new pod up + `/healthz` ok in **~4s**. In-flight tasks are lost (in-memory bus + emptyDir). |
 | 8 | External access | ✅ Caddy on the dev VM proxies `http://10.0.10.30/` → cluster NodePort. |
+| 9 | Browser E2E suite (5 tests via headless Chromium) | ✅ All 5 pass in ~46s — see below. |
+
+## E2E browser tests
+
+The dashboard UI is also covered by an opt-in Playwright suite that
+drives a real headless Chromium against the live deployment. The
+tests click through the actual buttons a human would touch, not the
+HTTP API.
+
+```bash
+# On the dev VM (or any host with playwright + chromium installed):
+pip install --user playwright
+playwright install --with-deps chromium
+
+cd agents/dashboard
+OLYMPUS_LIVE_E2E=1 KUBECONFIG=$HOME/.kube/config \
+    pytest tests/test_dashboard_e2e.py -v
+```
+
+| Test | What it exercises |
+|------|-------------------|
+| `test_index_loads_and_health_connects` | Page renders, title is set, health pill flips to "connected" after the first `/healthz` round-trip. |
+| `test_submit_task_via_form_lands_in_events_feed` | Type a task with a unique marker, press Enter, watch the `[task]`-kind row appear in the live SSE feed. |
+| `test_destructive_task_surfaces_approval_card_and_approve_deletes_pod` | Spawn a throwaway nginx pod, ask the agent to delete it via the form, wait for the approval card to render, click **Approve** in the browser, verify the pod is actually gone via kubectl. |
+| `test_destructive_task_reject_preserves_pod` | Same flow but click **Reject** — verify the pod is still alive 10s later. |
+| `test_audit_log_panel_renders_recent_calls` | After running tools, the audit panel's polling fills with `.audit-row` entries. |
+
+The destructive tests need `kubectl` configured against the cluster
+(`KUBECONFIG=~/.kube/config` works on the dev VM). They create
+short-lived `e2e-target-<rand>` pods labelled `e2e-target=true` and
+clean up after themselves, so a leaked pod from a failed run can be
+swept with:
+
+```bash
+kubectl delete pod -l e2e-target=true --grace-period=0 --force
+```
+
+The browser's `window.prompt()` (which the dashboard uses for the
+approve/reject reason) is auto-accepted by a Playwright `page.on("dialog", ...)`
+handler so the tests don't hang on the modal.
+
+Skipped by default unless `OLYMPUS_LIVE_E2E=1` is set, so CI does
+not try to spin up Chromium.
 
 ## Bug found by the live system, fixed in the live system
 
