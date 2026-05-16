@@ -39,7 +39,7 @@ export function BusSidebar(): JSX.Element {
   return (
     <aside className="bg-dark-secondary border-r border-border-subtle flex flex-col min-h-0">
       <header className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
-        <Activity size={14} className="text-accent-blue" />
+        <Activity size={15} className="text-accent-blue" strokeWidth={2.25} />
         <h2 className="font-display text-[11px] font-semibold uppercase tracking-[1.5px] text-text-secondary">
           Live activity
         </h2>

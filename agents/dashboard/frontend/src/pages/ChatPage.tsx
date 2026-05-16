@@ -145,7 +145,7 @@ export function ChatPage(): JSX.Element {
       {/* Header */}
       <div className="px-6 py-3 border-b border-border-subtle flex items-center justify-between bg-dark-secondary/40">
         <div className="flex items-baseline gap-3">
-          <Sparkles size={14} className="text-accent-green self-center" />
+          <Sparkles size={16} className="text-accent-green self-center" strokeWidth={2.25} />
           <h1 className="font-display text-base font-semibold text-text-primary">
             Conversation
           </h1>
@@ -162,7 +162,7 @@ export function ChatPage(): JSX.Element {
           className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-green border border-border-subtle hover:border-accent-green/40 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           title="Clear the chat history so the next turn starts fresh"
         >
-          <Plus size={11} />
+          <Plus size={13} strokeWidth={2.25} />
           New
         </button>
       </div>
@@ -199,7 +199,7 @@ export function ChatPage(): JSX.Element {
             disabled={sending}
             className="px-5 py-3 bg-accent-green text-dark-primary font-semibold rounded-md hover:bg-accent-green-dim transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
           >
-            <Send size={14} />
+            <Send size={18} strokeWidth={2.25} />
             Send
           </button>
         </div>
@@ -311,7 +311,7 @@ function AssistantBody({ turn }: { turn: Turn }): JSX.Element {
       )}
     >
       {turn.summary
-        ? <div className="prose"><ReactMarkdown>{turn.summary}</ReactMarkdown></div>
+        ? <CollapsibleProse text={turn.summary} />
         : <div className="text-text-muted italic text-sm">(no summary)</div>}
       {turn.artifacts && Object.keys(turn.artifacts).length > 0 && (
         <ArtifactsDetails artifacts={turn.artifacts} />
@@ -334,6 +334,45 @@ function RunningIndicator({ turn }: { turn: Turn }): JSX.Element {
         <span className="w-1.5 h-1.5 bg-accent-green rounded-full animate-pulse" style={{ animationDelay: "0.4s" }} />
       </span>
       <span>{label}</span>
+    </div>
+  );
+}
+
+/**
+ * Renders an assistant response with a "show more / show less" toggle
+ * when it's too long. Keeps short answers inline (no clutter); collapses
+ * long ones so a single huge dump of kubectl output doesn't blow the
+ * chat box up. Threshold is character count, not lines — handles both
+ * "long paragraph" and "code-block wall" responses uniformly.
+ */
+const COLLAPSE_AT_CHARS = 600;
+function CollapsibleProse({ text }: { text: string }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const tooLong = text.length > COLLAPSE_AT_CHARS;
+  const visible = expanded || !tooLong ? text : text.slice(0, COLLAPSE_AT_CHARS) + "…";
+
+  return (
+    <div className="space-y-2">
+      <div
+        className={clsx(
+          "prose max-w-none",
+          // When collapsed, also cap visual height as a second line of defence
+          // in case a single line is super wide.
+          !expanded && tooLong && "max-h-64 overflow-hidden",
+        )}
+      >
+        <ReactMarkdown>{visible}</ReactMarkdown>
+      </div>
+      {tooLong && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-green transition-colors"
+        >
+          {expanded
+            ? "show less ↑"
+            : `show more ↓ (${text.length - COLLAPSE_AT_CHARS} more chars)`}
+        </button>
+      )}
     </div>
   );
 }

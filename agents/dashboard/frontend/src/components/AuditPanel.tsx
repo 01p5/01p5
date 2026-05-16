@@ -26,7 +26,7 @@ export function AuditPanel(): JSX.Element {
   return (
     <div className="flex flex-col min-h-0">
       <header className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
-        <ScrollText size={14} className="text-text-secondary" />
+        <ScrollText size={15} className="text-text-secondary" strokeWidth={2.25} />
         <h2 className="font-display text-[11px] font-semibold uppercase tracking-[1.5px] text-text-secondary">
           Audit log
         </h2>

@@ -43,7 +43,7 @@ export function Layout(): JSX.Element {
                   )
                 }
               >
-                <Icon size={14} />
+                <Icon size={16} strokeWidth={2.25} />
                 {label}
               </NavLink>
             ))}

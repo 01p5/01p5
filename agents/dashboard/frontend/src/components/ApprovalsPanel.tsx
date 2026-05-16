@@ -29,7 +29,7 @@ export function ApprovalsPanel(): JSX.Element {
   return (
     <div className="flex flex-col min-h-0 border-b border-border-subtle">
       <header className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
-        <ShieldAlert size={14} className="text-accent-yellow" />
+        <ShieldAlert size={15} className="text-accent-yellow" strokeWidth={2.25} />
         <h2 className="font-display text-[11px] font-semibold uppercase tracking-[1.5px] text-text-secondary">
           Approval queue
         </h2>
@@ -54,7 +54,10 @@ export function ApprovalsPanel(): JSX.Element {
                 {new Date(a.requested_at * 1000).toLocaleTimeString()}
               </span>
             </div>
-            <div className="text-xs text-text-primary leading-snug">
+            <div
+              className="text-xs text-text-primary leading-snug max-h-24 overflow-auto"
+              title={a.rationale}
+            >
               {a.rationale}
             </div>
             <CodeBlock text={JSON.stringify(a.args, null, 2)} maxHeight="120px" />
