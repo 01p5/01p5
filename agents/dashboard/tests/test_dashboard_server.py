@@ -847,3 +847,224 @@ def test_memory_feedback_empty_body_400():
             "correction" in body.get("error", "").lower()
     finally:
         srv.shutdown()
+
+
+# ---------------------------------------------------------------------
+# /rollback endpoints
+# ---------------------------------------------------------------------
+
+from agentlib import (  # noqa: E402 — section import block
+    AlwaysApprove as _AA,
+    InMemoryRollbackStore,
+    RollbackPlan,
+    plan_to_entry,
+)
+
+
+@_lc_tool
+def _rb_writer(path: str, content: str) -> str:
+    """Pretend write_file."""
+    from pathlib import Path as _P
+    p = _P(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    return f"wrote {len(content)} bytes to {path}"
+
+
+def _snapshot_rb_writer(args):
+    from pathlib import Path as _P
+    p = _P(args["path"])
+    prior = p.read_text() if p.is_file() else None
+    return RollbackPlan(
+        inverse_tool="_rb_writer",
+        inverse_args={"path": args["path"], "content": prior or ""},
+        description=f"restore {args['path']}",
+        snapshot={"prior_exists": prior is not None},
+    )
+
+
+class _RollbackAgent(AgentSpec):
+    name = "rb"
+    domain = "rb"
+    tools: Sequence[Any] = [_rb_writer]
+    destructive_verbs = {"_rb_writer"}
+    rollback_snapshots = {"_rb_writer": _snapshot_rb_writer}
+
+    def handle(self, task, ctx):
+        raise NotImplementedError
+
+
+def _rollback_server(rollback_store=None):
+    """Server with a rollback-capable agent + InMemoryRollbackStore."""
+    store = rollback_store or InMemoryRollbackStore()
+    bus = InMemoryBus()
+    ctx = AgentContext(
+        approval=_AA(),
+        audit=InMemoryAuditLogger(),
+        rollback=store,
+    )
+    orch = Orchestrator(
+        bus=bus, agents=[_RollbackAgent()], ctx=ctx,
+        router=ManualRouter(default="rb"),
+        result_timeout_seconds=2.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    return srv, store
+
+
+def test_rollback_endpoint_lists_recent_entries(tmp_path):
+    store = InMemoryRollbackStore()
+    srv, _ = _rollback_server(store)
+    try:
+        # Manually populate a couple of rollbacks.
+        for i in range(3):
+            store.write(plan_to_entry(
+                RollbackPlan(
+                    inverse_tool="_rb_writer",
+                    inverse_args={"path": f"/tmp/rb-{i}", "content": ""},
+                    description=f"restore rb-{i}",
+                ),
+                task_id=f"T{i}", agent="rb",
+                forward_tool="_rb_writer",
+                forward_args={"path": f"/tmp/rb-{i}", "content": "x"},
+            ))
+        status, body = _get(srv, "/rollback")
+        assert status == 200
+        ids = [e["task_id"] for e in body["entries"]]
+        assert ids == ["T2", "T1", "T0"]
+    finally:
+        srv.shutdown()
+
+
+def test_rollback_endpoint_filter_by_task_id():
+    store = InMemoryRollbackStore()
+    srv, _ = _rollback_server(store)
+    try:
+        for i in range(3):
+            store.write(plan_to_entry(
+                RollbackPlan(
+                    inverse_tool="_rb_writer", inverse_args={"path": "/tmp/x", "content": ""},
+                    description="x",
+                ),
+                task_id="T1" if i < 2 else "T2",
+                agent="rb", forward_tool="_rb_writer",
+                forward_args={"path": "/tmp/x", "content": "x"},
+            ))
+        status, body = _get(srv, "/rollback?task_id=T1")
+        assert status == 200
+        assert len(body["entries"]) == 2
+        assert {e["task_id"] for e in body["entries"]} == {"T1"}
+    finally:
+        srv.shutdown()
+
+
+def test_rollback_execute_invokes_inverse_and_marks_executed(tmp_path):
+    """End-to-end: writing a file via the inverse tool through the
+    execute endpoint actually mutates the FS + marks the entry."""
+    store = InMemoryRollbackStore()
+    srv, _ = _rollback_server(store)
+    try:
+        target = tmp_path / "config.tf"
+        target.write_text("region = \"us-east-1\"\n")
+
+        rb = plan_to_entry(
+            RollbackPlan(
+                inverse_tool="_rb_writer",
+                inverse_args={
+                    "path": str(target),
+                    "content": "region = \"us-east-1\"\n",
+                },
+                description="restore region",
+                snapshot={"prior_exists": True},
+            ),
+            task_id="T-rb", agent="rb",
+            forward_tool="_rb_writer",
+            forward_args={
+                "path": str(target),
+                "content": "region = \"eu-west-1\"\n",
+            },
+        )
+        store.write(rb)
+        # Simulate the forward call having been applied:
+        target.write_text("region = \"eu-west-1\"\n")
+
+        status, body = _post(srv, f"/rollback/{rb.rollback_id}/execute", {})
+        assert status == 200, body
+        assert body["agent"] == "rb"
+        assert body["tool"] == "_rb_writer"
+        # FS reflects the rollback.
+        assert target.read_text() == "region = \"us-east-1\"\n"
+        # Store reflects the execution.
+        refreshed = store.get(rb.rollback_id)
+        assert refreshed.executed is True
+        assert refreshed.executed_ts is not None
+    finally:
+        srv.shutdown()
+
+
+def test_rollback_execute_double_fires_returns_409():
+    store = InMemoryRollbackStore()
+    srv, _ = _rollback_server(store)
+    try:
+        rb = plan_to_entry(
+            RollbackPlan(
+                inverse_tool="_rb_writer",
+                inverse_args={"path": "/tmp/x", "content": ""},
+                description="x",
+            ),
+            task_id="T", agent="rb",
+            forward_tool="_rb_writer",
+            forward_args={"path": "/tmp/x", "content": "y"},
+        )
+        store.write(rb)
+        store.mark_executed(rb.rollback_id, result="done")
+
+        status, body = _post(srv, f"/rollback/{rb.rollback_id}/execute", {})
+        assert status == 409
+        assert "already" in body["error"].lower()
+    finally:
+        srv.shutdown()
+
+
+def test_rollback_execute_unknown_id_returns_404():
+    srv, _ = _rollback_server()
+    try:
+        status, body = _post(srv, "/rollback/ghost/execute", {})
+        assert status == 404
+        assert "ghost" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_rollback_endpoint_empty_when_no_store():
+    """Build a server whose context has rollback=None — endpoint must
+    still 200 with an empty list, not 500."""
+    bus = InMemoryBus()
+    ctx = AgentContext(
+        approval=_AA(),
+        audit=InMemoryAuditLogger(),
+        rollback=None,
+    )
+    orch = Orchestrator(
+        bus=bus, agents=[_RollbackAgent()], ctx=ctx,
+        router=ManualRouter(default="rb"),
+        result_timeout_seconds=2.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    try:
+        status, body = _get(srv, "/rollback")
+        assert status == 200
+        assert body["entries"] == []
+        # Execute returns 409 (not 500) when the store is missing.
+        status, body = _post(srv, "/rollback/anything/execute", {})
+        assert status == 409
+    finally:
+        srv.shutdown()

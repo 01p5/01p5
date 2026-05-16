@@ -10,6 +10,7 @@ escalate.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -21,6 +22,8 @@ from .spec import (
     AgentSpec,
     ApprovalDecision,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ToolGateError(RuntimeError):
@@ -73,6 +76,12 @@ def _wrap_one(
     audit = ctx.audit
     approval = ctx.approval
 
+    snapshot_fn = (
+        spec.rollback_snapshots.get(inner.name)
+        if is_destructive and getattr(spec, "rollback_snapshots", None)
+        else None
+    )
+
     def gated(**kwargs: Any) -> Any:
         if is_destructive:
             decision = approval.request(
@@ -94,6 +103,20 @@ def _wrap_one(
                 return f"REJECTED by human: {decision.reason}"
             if decision.modified_args is not None:
                 kwargs = decision.modified_args
+
+            # Snapshot pre-state *before* the destructive call fires.
+            # A failed snapshot must not block the forward call —
+            # rollback is opt-in convenience, not a safety guarantee.
+            rollback_plan = None
+            if snapshot_fn is not None:
+                try:
+                    rollback_plan = snapshot_fn(dict(kwargs))
+                except Exception as exc:
+                    logger.warning(
+                        "rollback snapshot failed for %s.%s: %s",
+                        spec.name, inner.name, exc,
+                    )
+
         result = inner.invoke(kwargs)
         if not is_destructive:
             audit.log_tool_call(
@@ -113,6 +136,30 @@ def _wrap_one(
                 result=_truncate(result),
                 approved=True,
             )
+            # Persist the captured plan only if the forward call
+            # succeeded (no exception). Tools that signal failure by
+            # returning an error string still trigger persistence —
+            # the rollback entry's snapshot makes that distinguishable
+            # from a true success, and a human can decide.
+            store = getattr(ctx, "rollback", None)
+            if rollback_plan is not None and store is not None:
+                try:
+                    from .rollback import plan_to_entry
+
+                    store.write(
+                        plan_to_entry(
+                            rollback_plan,
+                            task_id=task_id,
+                            agent=spec.name,
+                            forward_tool=inner.name,
+                            forward_args=dict(kwargs),
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "rollback persist failed for %s.%s: %s",
+                        spec.name, inner.name, exc,
+                    )
         return result
 
     # Pass a dict args_schema (rather than a Pydantic class) so

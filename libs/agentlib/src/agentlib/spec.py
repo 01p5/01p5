@@ -77,11 +77,17 @@ class AuditLogger(Protocol):
 
 @dataclass
 class AgentContext:
-    """Runtime-injected. Agents should not construct this directly."""
+    """Runtime-injected. Agents should not construct this directly.
+
+    ``rollback`` is an optional ``RollbackStore`` (Protocol defined in
+    ``agentlib.rollback``). Passed in as ``Any`` here to avoid a
+    circular import — the rollback module imports nothing from spec
+    so the only place to wire the dependency is through the Context."""
     approval: ApprovalHook
     audit: AuditLogger
     secrets: Optional[Any] = None  # vault client; not implemented in v0
     cancel_token: Optional[Any] = None
+    rollback: Optional[Any] = None  # RollbackStore | None
 
 
 class AgentSpec(ABC):
@@ -90,11 +96,19 @@ class AgentSpec(ABC):
     Concrete agents declare ``name``, ``domain``, ``tools``, and
     ``destructive_verbs`` as class attributes, then implement ``handle``.
     The runtime wraps tools to enforce gating before ``handle`` runs.
+
+    ``rollback_snapshots`` maps a destructive tool name to a callable
+    that, given the tool args, returns a ``RollbackPlan`` describing
+    how to undo the operation. Snapshot fns run *after* approval and
+    *before* the forward tool executes — so they see the pre-state.
+    Agents that don't declare a snapshot for a verb simply opt out of
+    rollback for that verb (no error, just no undo).
     """
     name: str
     domain: str
     tools: Sequence[BaseTool | Callable]
     destructive_verbs: set[str] = set()
+    rollback_snapshots: dict[str, Callable[[dict], Any]] = {}
     model: str = ""
 
     @abstractmethod

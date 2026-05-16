@@ -23,12 +23,13 @@ def _ctx(approval=None):
 
 def test_programmer_declares_destructive_verbs_correctly():
     spec = ProgrammerAgent()
-    assert spec.destructive_verbs == {"write_file", "edit_file"}
+    assert spec.destructive_verbs == {"write_file", "edit_file", "delete_file"}
     declared = {t.name for t in spec.tools}
     assert "generate_dockerfile" in declared
     assert "write_file" in declared
     assert "read_file" in declared
     assert "edit_file" in declared
+    assert "delete_file" in declared
 
 
 def test_read_file_returns_numbered_lines(tmp_path):
@@ -347,3 +348,142 @@ def test_write_file_diff_snoop_existing_file_shows_real_diff(tmp_path):
     assert "+print('new')" in diff
     # File untouched (rejected).
     assert target.read_text() == "print('old')\n"
+
+
+# ---------------------------------------------------------------------
+# delete_file + rollback snapshots
+# ---------------------------------------------------------------------
+
+from agentlib import InMemoryRollbackStore as _InMemRollback  # noqa: E402
+
+
+def test_programmer_declares_delete_file_destructive():
+    spec = ProgrammerAgent()
+    assert "delete_file" in spec.destructive_verbs
+    assert "delete_file" in {t.name for t in spec.tools}
+
+
+def test_delete_file_removes_existing_file(tmp_path):
+    p = tmp_path / "doomed.txt"
+    p.write_text("bye")
+    spec = ProgrammerAgent()
+    ctx, audit = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="rb-1")
+    by_name = {t.name: t for t in gated}
+
+    out = by_name["delete_file"].invoke({"path": str(p)})
+    assert "deleted" in out
+    assert not p.exists()
+
+
+def test_delete_file_blocked_when_human_rejects(tmp_path):
+    p = tmp_path / "still-here.txt"
+    p.write_text("hi")
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx(approval=AlwaysReject())
+    gated = gate_tools(spec, ctx, task_id="rb-2")
+    by_name = {t.name: t for t in gated}
+
+    out = by_name["delete_file"].invoke({"path": str(p)})
+    assert "REJECTED" in out
+    assert p.exists()  # untouched
+
+
+def test_delete_file_errors_on_missing_path(tmp_path):
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx()
+    gated = gate_tools(spec, ctx, task_id="rb-3")
+    by_name = {t.name: t for t in gated}
+
+    out = by_name["delete_file"].invoke({"path": str(tmp_path / "nope.txt")})
+    assert "does not exist" in out
+
+
+def test_write_file_rollback_inverts_to_prior_content(tmp_path):
+    """write_file over an existing file → rollback restores it."""
+    p = tmp_path / "config.tf"
+    p.write_text("region = \"us-west-1\"\n")
+    store = _InMemRollback()
+    spec = ProgrammerAgent()
+    ctx = AgentContext(
+        approval=AlwaysApprove(),
+        audit=InMemoryAuditLogger(),
+        rollback=store,
+    )
+    gated = gate_tools(spec, ctx, task_id="rb-4")
+    by_name = {t.name: t for t in gated}
+
+    by_name["write_file"].invoke({
+        "path": str(p), "content": "region = \"us-east-2\"\n",
+    })
+    [entry] = store.list_for_task("rb-4")
+    assert entry.inverse_tool == "write_file"
+    assert entry.inverse_args == {
+        "path": str(p), "content": "region = \"us-west-1\"\n",
+    }
+    assert entry.snapshot["prior_exists"] is True
+
+
+def test_write_file_rollback_on_new_file_is_delete_file(tmp_path):
+    """write_file on a path that didn't exist → rollback is delete_file."""
+    p = tmp_path / "brand-new.txt"
+    assert not p.exists()
+    store = _InMemRollback()
+    spec = ProgrammerAgent()
+    ctx = AgentContext(
+        approval=AlwaysApprove(),
+        audit=InMemoryAuditLogger(),
+        rollback=store,
+    )
+    gated = gate_tools(spec, ctx, task_id="rb-5")
+    by_name = {t.name: t for t in gated}
+
+    by_name["write_file"].invoke({"path": str(p), "content": "hello"})
+    [entry] = store.list_for_task("rb-5")
+    assert entry.inverse_tool == "delete_file"
+    assert entry.inverse_args == {"path": str(p)}
+    assert entry.snapshot["prior_exists"] is False
+
+
+def test_edit_file_rollback_inverts_to_pre_edit_content(tmp_path):
+    p = tmp_path / "main.tf"
+    p.write_text("foo = 1\nbar = 2\n")
+    store = _InMemRollback()
+    spec = ProgrammerAgent()
+    ctx = AgentContext(
+        approval=AlwaysApprove(),
+        audit=InMemoryAuditLogger(),
+        rollback=store,
+    )
+    gated = gate_tools(spec, ctx, task_id="rb-6")
+    by_name = {t.name: t for t in gated}
+
+    by_name["edit_file"].invoke({
+        "path": str(p), "old_string": "foo = 1", "new_string": "foo = 99",
+    })
+    [entry] = store.list_for_task("rb-6")
+    assert entry.inverse_tool == "write_file"
+    assert entry.inverse_args == {
+        "path": str(p), "content": "foo = 1\nbar = 2\n",
+    }
+
+
+def test_delete_file_rollback_inverts_to_write_file_with_prior_bytes(tmp_path):
+    p = tmp_path / "important.txt"
+    p.write_text("important data\n")
+    store = _InMemRollback()
+    spec = ProgrammerAgent()
+    ctx = AgentContext(
+        approval=AlwaysApprove(),
+        audit=InMemoryAuditLogger(),
+        rollback=store,
+    )
+    gated = gate_tools(spec, ctx, task_id="rb-7")
+    by_name = {t.name: t for t in gated}
+
+    by_name["delete_file"].invoke({"path": str(p)})
+    [entry] = store.list_for_task("rb-7")
+    assert entry.inverse_tool == "write_file"
+    assert entry.inverse_args == {
+        "path": str(p), "content": "important data\n",
+    }

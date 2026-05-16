@@ -75,9 +75,11 @@ from agentlib import (
     InMemoryBus,
     JsonlAuditLogger,
     JsonlMemoryStore,
+    JsonlRollbackStore,
     MemoryStore,
     Orchestrator,
     QueueApprovalHook,
+    RollbackStore,
     Router,
     TaskMessage,
     gate_tools,
@@ -261,6 +263,8 @@ class DashboardServer:
                     return outer._handle_list_tools(self)
                 if path == "/memory":
                     return outer._handle_list_memory(self)
+                if path == "/rollback":
+                    return outer._handle_list_rollbacks(self)
                 if path == "/stacks/terraform":
                     return outer._handle_list_terraform_stacks(self)
                 if path == "/stacks/ansible":
@@ -288,6 +292,9 @@ class DashboardServer:
                 if self.path.startswith("/memory/") and self.path.endswith("/feedback"):
                     inner = self.path[len("/memory/"):-len("/feedback")]
                     return outer._handle_memory_feedback(self, inner)
+                if self.path.startswith("/rollback/") and self.path.endswith("/execute"):
+                    inner = self.path[len("/rollback/"):-len("/execute")]
+                    return outer._handle_execute_rollback(self, inner)
                 if self.path.startswith("/tools/"):
                     rest = self.path[len("/tools/"):]
                     if "/" in rest:
@@ -522,6 +529,157 @@ class DashboardServer:
             "tool": tool_name,
             "result": result if isinstance(result, (str, int, float, bool, type(None), list, dict)) else str(result),
         })
+
+    def _handle_list_rollbacks(self, req: BaseHTTPRequestHandler) -> None:
+        """List rollback entries.
+
+        Query string:
+          - ``?task_id=<id>`` → entries for that task
+          - (none)            → recent entries (newest first), bounded
+                                by ``k`` (default 25, max 100)."""
+        from urllib.parse import parse_qs, urlparse
+
+        store = getattr(self.orchestrator.ctx, "rollback", None)
+        if store is None:
+            return self._send_json(req, 200, {"entries": []})
+
+        params = parse_qs(urlparse(req.path).query)
+        task_id = (params.get("task_id") or [None])[0]
+        try:
+            k = max(1, min(int((params.get("k") or ["25"])[0]), 100))
+        except ValueError:
+            k = 25
+
+        try:
+            if task_id:
+                entries = store.list_for_task(task_id)
+            else:
+                entries = store.list_recent(k=k)
+        except Exception as exc:
+            logger.warning("rollback list failed: %s", exc)
+            entries = []
+
+        payload = [self._rollback_to_dict(e) for e in entries[:k]]
+        self._send_json(req, 200, {"entries": payload})
+
+    def _handle_execute_rollback(
+        self, req: BaseHTTPRequestHandler, rollback_id: str
+    ) -> None:
+        """Execute a captured rollback by invoking its inverse tool.
+
+        The inverse fires through the same ``gate_tools`` machinery as
+        any human-driven tool invocation — so the user re-approves
+        before the undo lands. On success, marks the entry executed
+        in the store so a second click is a no-op (UI can grey out
+        the button)."""
+        store = getattr(self.orchestrator.ctx, "rollback", None)
+        if store is None:
+            return self._send_json(
+                req, 409, {"error": "rollback store not configured"}
+            )
+        try:
+            entry = store.get(rollback_id)
+        except Exception as exc:
+            logger.warning("rollback get failed: %s", exc)
+            entry = None
+        if entry is None:
+            return self._send_json(
+                req, 404,
+                {"error": f"no rollback entry {rollback_id!r}"},
+            )
+        if entry.executed:
+            return self._send_json(
+                req, 409,
+                {
+                    "error": "rollback already executed",
+                    "executed_ts": entry.executed_ts,
+                    "executed_result": entry.executed_result,
+                },
+            )
+        agent = self.orchestrator.agents.get(entry.agent)
+        if agent is None:
+            return self._send_json(
+                req, 404,
+                {"error": f"agent {entry.agent!r} not registered"},
+            )
+        # Synthesize a task id that ties the inverse back to the
+        # original forward task in the audit + bus logs.
+        task_id = f"rollback:{rollback_id}"
+        try:
+            gated = gate_tools(agent, self.orchestrator.ctx, task_id)
+        except Exception as exc:
+            logger.exception("gate_tools failed for rollback %s", rollback_id)
+            return self._send_json(
+                req, 500, {"error": f"{type(exc).__name__}: {exc}"}
+            )
+        target = next((t for t in gated if t.name == entry.inverse_tool), None)
+        if target is None:
+            return self._send_json(
+                req, 404,
+                {"error": f"inverse tool {entry.inverse_tool!r} not on agent {entry.agent!r}"},
+            )
+        # Surface the rollback on the bus so the live feed shows it.
+        try:
+            from agentlib import new_message
+            self.bus.publish(new_message(
+                task_id=task_id, sender="human", recipient=entry.agent,
+                kind="task",
+                payload={
+                    "natural_language": f"[rollback] {entry.description}",
+                    "inputs": entry.inverse_args,
+                },
+            ))
+        except Exception:
+            pass
+        try:
+            result = target.invoke(entry.inverse_args)
+        except Exception as exc:
+            logger.exception("rollback invoke failed: %s", rollback_id)
+            return self._send_json(req, 500, {
+                "task_id": task_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+        result_str = str(result)[:500]
+        try:
+            store.mark_executed(rollback_id, result=result_str)
+        except Exception as exc:
+            logger.warning("rollback mark_executed failed: %s", exc)
+        try:
+            from agentlib import new_message
+            self.bus.publish(new_message(
+                task_id=task_id, sender=entry.agent, recipient="human",
+                kind="result",
+                payload={"status": "success", "summary": result_str},
+            ))
+        except Exception:
+            pass
+        return self._send_json(req, 200, {
+            "rollback_id": rollback_id,
+            "task_id": task_id,
+            "agent": entry.agent,
+            "tool": entry.inverse_tool,
+            "result": result if isinstance(
+                result, (str, int, float, bool, type(None), list, dict)
+            ) else str(result),
+        })
+
+    @staticmethod
+    def _rollback_to_dict(entry: Any) -> dict:
+        return {
+            "rollback_id": entry.rollback_id,
+            "task_id": entry.task_id,
+            "agent": entry.agent,
+            "forward_tool": entry.forward_tool,
+            "forward_args": entry.forward_args,
+            "inverse_tool": entry.inverse_tool,
+            "inverse_args": entry.inverse_args,
+            "description": entry.description,
+            "snapshot": entry.snapshot,
+            "ts": entry.ts,
+            "executed": entry.executed,
+            "executed_ts": entry.executed_ts,
+            "executed_result": entry.executed_result,
+        }
 
     def _handle_memory_feedback(
         self, req: BaseHTTPRequestHandler, task_id: str
@@ -796,6 +954,8 @@ def build_default_server(
     audit_log_path: str = DEFAULT_AUDIT_LOG,
     memory: Optional[MemoryStore] = None,
     memory_log_path: Optional[str] = None,
+    rollback: Optional[RollbackStore] = None,
+    rollback_log_path: Optional[str] = None,
 ) -> DashboardServer:
     """Construct a DashboardServer with the four production agents and
     an in-memory bus. Convenience for the CLI entry point.
@@ -812,9 +972,15 @@ def build_default_server(
 
     bus = InMemoryBus()
     approval_hook = QueueApprovalHook()
+    if rollback is None and os.environ.get("OLYMPUS_ROLLBACK", "").lower() != "disabled":
+        rollback_log_path = rollback_log_path or str(
+            Path(audit_log_path).with_name("rollback.jsonl")
+        )
+        rollback = JsonlRollbackStore(rollback_log_path)
     ctx = AgentContext(
         approval=approval_hook,
         audit=JsonlAuditLogger(audit_log_path),
+        rollback=rollback,
     )
     if memory is None:
         mode = os.environ.get("OLYMPUS_MEMORY", "").lower()

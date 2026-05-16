@@ -188,9 +188,103 @@ def edit_file(
     return f"edited {p} ({count} replacement{'s' if count != 1 else ''})"
 
 
+@tool
+def delete_file(path: str) -> str:
+    """Delete ``path``.
+
+    DESTRUCTIVE — gated by approval. Used both as a user-facing tool
+    and as the rollback inverse for ``write_file`` calls that created
+    a brand-new file (the rollback restores the "did not exist before"
+    state by removing the file)."""
+    p = Path(path).expanduser()
+    if not p.exists():
+        return f"ERROR: {p} does not exist"
+    if p.is_dir():
+        return f"ERROR: {p} is a directory; delete_file only removes files"
+    p.unlink()
+    return f"deleted {p}"
+
+
+# ---------------------------------------------------------------------
+# Rollback snapshots
+# ---------------------------------------------------------------------
+#
+# Each snapshot fn runs AFTER approval, BEFORE the forward tool fires,
+# so it captures the file's pre-state. The runtime persists the
+# returned ``RollbackPlan`` keyed on the task_id.
+
+def _snapshot_write_file(args: dict):
+    """Inverse of write_file:
+      - file existed before  → write_file with the prior bytes
+      - file did not exist   → delete_file (returns the FS to the
+        "not present" state)"""
+    from agentlib import RollbackPlan
+
+    p = Path(args["path"]).expanduser()
+    prior_exists = p.is_file()
+    prior_content = p.read_text() if prior_exists else None
+
+    if prior_exists:
+        return RollbackPlan(
+            inverse_tool="write_file",
+            inverse_args={"path": str(p), "content": prior_content or ""},
+            description=f"restore prior contents of {p}",
+            snapshot={
+                "prior_exists": True,
+                "prior_bytes": len(prior_content or ""),
+            },
+        )
+    return RollbackPlan(
+        inverse_tool="delete_file",
+        inverse_args={"path": str(p)},
+        description=f"delete {p} (did not exist before write_file)",
+        snapshot={"prior_exists": False},
+    )
+
+
+def _snapshot_edit_file(args: dict):
+    """Inverse of edit_file: write_file with the pre-edit content."""
+    from agentlib import RollbackPlan
+
+    p = Path(args["path"]).expanduser()
+    prior_content = p.read_text() if p.is_file() else ""
+    return RollbackPlan(
+        inverse_tool="write_file",
+        inverse_args={"path": str(p), "content": prior_content},
+        description=f"restore {p} to pre-edit content",
+        snapshot={"prior_bytes": len(prior_content)},
+    )
+
+
+def _snapshot_delete_file(args: dict):
+    """Inverse of delete_file: write_file with the bytes we're about
+    to lose. If the file is already gone (or unreadable), capture an
+    empty snapshot — the delete_file forward call will report the
+    error and no useful rollback exists."""
+    from agentlib import RollbackPlan
+
+    p = Path(args["path"]).expanduser()
+    try:
+        prior_content = p.read_text() if p.is_file() else ""
+    except Exception:
+        prior_content = ""
+    return RollbackPlan(
+        inverse_tool="write_file",
+        inverse_args={"path": str(p), "content": prior_content},
+        description=f"recreate {p} from snapshot",
+        snapshot={"prior_bytes": len(prior_content)},
+    )
+
+
 READ_ONLY_TOOLS = [
     generate_dockerfile, generate_compose_service, generate_helm_values,
     read_file,
 ]
-DESTRUCTIVE_TOOLS = [write_file, edit_file]
+DESTRUCTIVE_TOOLS = [write_file, edit_file, delete_file]
 ALL_TOOLS = READ_ONLY_TOOLS + DESTRUCTIVE_TOOLS
+
+ROLLBACK_SNAPSHOTS = {
+    "write_file": _snapshot_write_file,
+    "edit_file": _snapshot_edit_file,
+    "delete_file": _snapshot_delete_file,
+}

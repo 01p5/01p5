@@ -55,6 +55,16 @@ from .models import (
 )
 from .orchestrator import LLMRouter, ManualRouter, Orchestrator, Router
 from .plan import Plan, PlanResult, PlanStep, render_prior_results, step_to_task
+from .rollback import (
+    InMemoryRollbackStore,
+    JsonlRollbackStore,
+    NullRollbackStore,
+    RollbackEntry,
+    RollbackPlan,
+    RollbackStore,
+    new_rollback_id,
+    plan_to_entry,
+)
 from .runtime import (
     AlwaysApprove,
     AlwaysReject,
@@ -118,6 +128,14 @@ __all__ = [
     "JsonlMemoryStore",
     "EmbeddingMemoryStore",
     "render_memory_block",
+    "RollbackPlan",
+    "RollbackEntry",
+    "RollbackStore",
+    "NullRollbackStore",
+    "InMemoryRollbackStore",
+    "JsonlRollbackStore",
+    "new_rollback_id",
+    "plan_to_entry",
     "Plan",
     "PlanStep",
     "PlanResult",

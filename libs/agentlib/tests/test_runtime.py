@@ -18,6 +18,8 @@ from agentlib import (
     AlwaysApprove,
     AlwaysReject,
     InMemoryAuditLogger,
+    InMemoryRollbackStore,
+    RollbackPlan,
     TaskMessage,
     gate_tools,
 )
@@ -293,3 +295,165 @@ def test_preview_diff_edit_file_replace_all_shows_every_change(tmp_path):
     ]
     assert len(add_lines_one) == 1
     assert len(minus_lines_one) == 1
+
+
+# ---------------------------------------------------------------------
+# Rollback capture via gate_tools
+# ---------------------------------------------------------------------
+
+
+@tool
+def _writer(path: str, content: str) -> str:
+    """Pretend write_file. Just returns a confirmation."""
+    return f"wrote {path}"
+
+
+def _snapshot_writer(args: dict) -> RollbackPlan:
+    return RollbackPlan(
+        inverse_tool="_writer",
+        inverse_args={"path": args["path"], "content": "<prior>"},
+        description=f"restore {args['path']}",
+        snapshot={"prior_content": "<prior>"},
+    )
+
+
+class _SnapAgent(AgentSpec):
+    name = "snap"
+    domain = "test"
+    tools = [_writer]
+    destructive_verbs = {"_writer"}
+    rollback_snapshots = {"_writer": _snapshot_writer}
+
+    def handle(self, task, ctx):
+        raise NotImplementedError
+
+
+def _ctx_with_rollback(approval=None, rollback=None):
+    return AgentContext(
+        approval=approval or AlwaysApprove(),
+        audit=InMemoryAuditLogger(),
+        rollback=rollback,
+    )
+
+
+def test_rollback_persisted_on_approved_destructive_success():
+    store = InMemoryRollbackStore()
+    ctx = _ctx_with_rollback(rollback=store)
+    gated = gate_tools(_SnapAgent(), ctx, task_id="task-A")
+    [writer] = gated
+
+    out = writer.invoke({"path": "/tmp/x", "content": "new"})
+    assert "wrote /tmp/x" in out
+
+    entries = store.list_for_task("task-A")
+    assert len(entries) == 1
+    e = entries[0]
+    assert e.agent == "snap"
+    assert e.forward_tool == "_writer"
+    assert e.forward_args == {"path": "/tmp/x", "content": "new"}
+    assert e.inverse_tool == "_writer"
+    assert e.inverse_args == {"path": "/tmp/x", "content": "<prior>"}
+    assert "restore /tmp/x" in e.description
+    assert e.executed is False
+
+
+def test_rollback_not_persisted_when_human_rejects():
+    store = InMemoryRollbackStore()
+    ctx = _ctx_with_rollback(approval=AlwaysReject(), rollback=store)
+    gated = gate_tools(_SnapAgent(), ctx, task_id="task-B")
+    [writer] = gated
+
+    out = writer.invoke({"path": "/tmp/x", "content": "new"})
+    assert "REJECTED" in out
+    assert store.list_for_task("task-B") == []
+
+
+def test_rollback_skipped_when_no_snapshot_registered():
+    """An agent that declares the verb destructive but doesn't supply
+    a snapshot fn must run the forward op cleanly — just without
+    capturing rollback."""
+
+    class _NoSnap(AgentSpec):
+        name = "nosnap"
+        domain = "test"
+        tools = [_writer]
+        destructive_verbs = {"_writer"}
+        # rollback_snapshots intentionally left as the {} default
+
+        def handle(self, task, ctx):
+            raise NotImplementedError
+
+    store = InMemoryRollbackStore()
+    ctx = _ctx_with_rollback(rollback=store)
+    gated = gate_tools(_NoSnap(), ctx, task_id="task-C")
+    out = gated[0].invoke({"path": "/tmp/x", "content": "y"})
+    assert "wrote /tmp/x" in out
+    assert store.list_for_task("task-C") == []
+
+
+def test_rollback_skipped_when_ctx_has_no_store():
+    """No store on the context → snapshot fn still runs (harmless)
+    but no persistence happens. The forward op must still succeed."""
+    ctx = _ctx_with_rollback(rollback=None)
+    gated = gate_tools(_SnapAgent(), ctx, task_id="task-D")
+    out = gated[0].invoke({"path": "/tmp/x", "content": "y"})
+    assert "wrote /tmp/x" in out
+
+
+def test_rollback_snapshot_failure_does_not_block_forward_call():
+    """A buggy snapshot fn must never break the forward path."""
+
+    def _bad_snapshot(args):
+        raise RuntimeError("boom")
+
+    class _BadSnap(_SnapAgent):
+        rollback_snapshots = {"_writer": _bad_snapshot}
+
+    store = InMemoryRollbackStore()
+    ctx = _ctx_with_rollback(rollback=store)
+    gated = gate_tools(_BadSnap(), ctx, task_id="task-E")
+
+    out = gated[0].invoke({"path": "/tmp/x", "content": "y"})
+    assert "wrote /tmp/x" in out
+    # Snapshot failed → nothing persisted.
+    assert store.list_for_task("task-E") == []
+
+
+def test_rollback_store_write_failure_does_not_break_forward_call():
+    class _BadStore:
+        def write(self, entry):
+            raise RuntimeError("disk full")
+
+        def get(self, rid): return None
+        def list_for_task(self, tid): return []
+        def list_recent(self, k=25): return []
+        def mark_executed(self, rid, result=None): return False
+
+    ctx = _ctx_with_rollback(rollback=_BadStore())
+    gated = gate_tools(_SnapAgent(), ctx, task_id="task-F")
+    out = gated[0].invoke({"path": "/tmp/x", "content": "y"})
+    # Forward call still succeeds; the warning is logged.
+    assert "wrote /tmp/x" in out
+
+
+def test_rollback_uses_modified_args_when_approver_modifies():
+    """If the approval hook returns modified_args, those are what the
+    snapshot + forward call see."""
+    from agentlib import ApprovalDecision
+
+    class _Modifier:
+        def request(self, **kw):
+            return ApprovalDecision(
+                approved=True, reason="ok",
+                modified_args={"path": "/tmp/safer", "content": "sanitized"},
+            )
+
+    store = InMemoryRollbackStore()
+    ctx = _ctx_with_rollback(approval=_Modifier(), rollback=store)
+    gated = gate_tools(_SnapAgent(), ctx, task_id="task-G")
+    out = gated[0].invoke({"path": "/tmp/original", "content": "raw"})
+    assert "wrote /tmp/safer" in out
+
+    [entry] = store.list_for_task("task-G")
+    assert entry.forward_args == {"path": "/tmp/safer", "content": "sanitized"}
+    assert entry.snapshot["prior_content"] == "<prior>"  # snapshot ran AFTER modify
