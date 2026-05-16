@@ -138,6 +138,107 @@ def test_static_index_served(server):
     assert "Olympus" in body
 
 
+# ---- new: tool catalog + direct invocation ----
+
+
+from langchain_core.tools import tool as _lc_tool  # noqa: E402
+
+
+@_lc_tool
+def _t_read_thing(name: str = "world") -> str:
+    """Read a thing by name."""
+    return f"read:{name}"
+
+
+@_lc_tool
+def _t_write_thing(name: str, value: str) -> str:
+    """Write a thing. Destructive."""
+    return f"wrote:{name}={value}"
+
+
+class _ToolAgent(AgentSpec):
+    """Agent with two real tools — one read-only, one "destructive" —
+    for exercising the human-driven tool endpoints."""
+    name = "tooly"
+    domain = "tooly"
+    tools: Sequence[Any] = [_t_read_thing, _t_write_thing]
+    destructive_verbs: set[str] = {"_t_write_thing"}
+
+    def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:  # unused
+        raise NotImplementedError
+
+
+@pytest.fixture
+def tools_server():
+    from agentlib import AlwaysApprove
+    bus = InMemoryBus()
+    approval = AlwaysApprove()  # auto-approve so the direct destructive call returns
+    ctx = AgentContext(approval=approval, audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[_ToolAgent()], ctx=ctx,
+        router=ManualRouter(default="tooly"),
+        result_timeout_seconds=5.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    yield srv
+    srv.shutdown()
+
+
+def test_tools_catalog_lists_every_tool_with_destructive_flag(tools_server):
+    status, body = _get(tools_server, "/tools")
+    assert status == 200
+    names = {t["name"]: t for t in body}
+    assert set(names) == {"_t_read_thing", "_t_write_thing"}
+    assert names["_t_write_thing"]["destructive"] is True
+    assert names["_t_read_thing"]["destructive"] is False
+    assert names["_t_read_thing"]["agent"] == "tooly"
+    assert "properties" in names["_t_read_thing"]["args_schema"]
+    assert "name" in names["_t_read_thing"]["args_schema"]["properties"]
+
+
+def test_invoke_read_only_tool_directly(tools_server):
+    status, body = _post(tools_server, "/tools/tooly/_t_read_thing", {"name": "alice"})
+    assert status == 200
+    assert body["result"] == "read:alice"
+    assert body["agent"] == "tooly" and body["tool"] == "_t_read_thing"
+    assert body["task_id"].startswith("manual:")
+
+
+def test_invoke_destructive_tool_auto_approved(tools_server):
+    """With AlwaysApprove, the destructive tool goes through cleanly
+    and returns the underlying result string."""
+    status, body = _post(
+        tools_server, "/tools/tooly/_t_write_thing", {"name": "k", "value": "v"}
+    )
+    assert status == 200
+    assert body["result"] == "wrote:k=v"
+
+
+def test_invoke_unknown_tool_404(tools_server):
+    status, body = _post(tools_server, "/tools/tooly/no_such", {})
+    assert status == 404
+    assert "unknown tool" in body["error"]
+
+
+def test_invoke_unknown_agent_404(tools_server):
+    status, body = _post(tools_server, "/tools/ghost/anything", {})
+    assert status == 404
+    assert "unknown agent" in body["error"]
+
+
+def test_stacks_endpoints_return_lists(tools_server):
+    # Returns empty lists when infra dirs are not at the expected
+    # locations (no repo mounted in test env) — at minimum, must be JSON arrays.
+    s1, b1 = _get(tools_server, "/stacks/terraform")
+    s2, b2 = _get(tools_server, "/stacks/ansible")
+    assert s1 == 200 and isinstance(b1, list)
+    assert s2 == 200 and isinstance(b2, list)
+
+
 def test_post_task_returns_task_id_and_runs_to_completion(server):
     status, body = _post(server, "/tasks", {"natural_language": "do a thing"})
     assert status == 202

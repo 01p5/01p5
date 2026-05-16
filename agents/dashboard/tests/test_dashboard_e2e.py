@@ -26,7 +26,6 @@ import subprocess
 import time
 import uuid
 from collections.abc import Generator
-from typing import Any
 
 import pytest
 
@@ -39,7 +38,7 @@ if os.environ.get("OLYMPUS_LIVE_E2E") != "1":
         allow_module_level=True,
     )
 
-from playwright.sync_api import Browser, Page, expect, sync_playwright
+from playwright.sync_api import Browser, Page, expect, sync_playwright  # noqa: E402
 
 DASHBOARD_URL = os.environ.get("OLYMPUS_DASHBOARD_URL", "http://10.0.10.30/")
 NAMESPACE = os.environ.get("OLYMPUS_E2E_NAMESPACE", "default")

@@ -6,144 +6,356 @@
   <title>Olympus dashboard</title>
   <style>
     :root {
-      --bg: #0f172a;
-      --panel: #1e293b;
-      --panel-2: #111827;
+      --bg: #0b1220;
+      --panel: #131c30;
+      --panel-2: #0e1626;
+      --border: #243047;
       --text: #e2e8f0;
-      --muted: #94a3b8;
+      --muted: #8aa0bf;
       --accent: #60a5fa;
+      --accent-strong: #3b82f6;
       --good: #4ade80;
       --bad: #f87171;
       --warn: #fbbf24;
+      --user-bubble: #1f3a5f;
+      --asst-bubble: #1a2336;
       --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
-      background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
       display: grid; grid-template-rows: auto 1fr;
+      min-height: 100vh;
     }
+
+    /* ---- top bar ---- */
     header {
-      padding: 12px 20px; background: var(--panel-2); border-bottom: 1px solid #334155;
-      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 18px; background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      display: flex; gap: 16px; align-items: center;
     }
-    header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.02em; }
-    header .pill { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    header h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.02em; }
+    header nav { display: flex; gap: 4px; margin-left: 12px; }
+    header nav button {
+      background: transparent; color: var(--muted);
+      border: 1px solid transparent; border-radius: 6px;
+      padding: 5px 12px; font-size: 13px; cursor: pointer;
+    }
+    header nav button:hover { color: var(--text); }
+    header nav button.active {
+      color: var(--text); background: var(--panel);
+      border-color: var(--border);
+    }
+    header .spacer { flex: 1; }
+    header .pill {
+      font-family: var(--mono); font-size: 12px; color: var(--muted);
+      padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
+    }
+    header .pill.connected { color: var(--good); border-color: rgba(74,222,128,0.4); }
+    header .pill.degraded  { color: var(--warn); border-color: rgba(251,191,36,0.4); }
+
+    /* ---- main grid ---- */
     main {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px;
-      min-height: 0; overflow: hidden;
+      display: grid; min-height: 0; overflow: hidden;
+      grid-template-columns: 280px 1fr 360px;
+      grid-template-rows: 1fr;
     }
-    .col { display: grid; grid-template-rows: auto 1fr; gap: 12px; min-height: 0; }
-    .panel {
-      background: var(--panel); border: 1px solid #334155; border-radius: 8px;
+    aside.left, aside.right { background: var(--panel); border-right: 1px solid var(--border); display: grid; min-height: 0; }
+    aside.right { border-right: none; border-left: 1px solid var(--border); grid-template-rows: 1fr 1fr; }
+    aside section.pane {
       display: grid; grid-template-rows: auto 1fr; min-height: 0;
+      border-bottom: 1px solid var(--border);
     }
-    .panel header {
-      background: transparent; border: none; padding: 8px 12px; font-size: 13px;
-      color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
+    aside section.pane:last-child { border-bottom: none; }
+    aside section.pane > header {
+      background: transparent; border: none; padding: 8px 12px;
+      font-size: 12px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.08em;
     }
-    .panel .body { overflow: auto; padding: 8px 12px; }
-    form#task-form { display: flex; gap: 8px; padding: 12px; }
-    form#task-form input {
-      flex: 1; background: var(--panel-2); color: var(--text);
-      border: 1px solid #334155; border-radius: 6px; padding: 8px 10px;
-      font-family: inherit; font-size: 14px;
+    aside section.pane > .body {
+      overflow: auto; padding: 8px 12px; min-height: 0;
     }
-    form#task-form button {
-      background: var(--accent); color: #0b1220; border: none; border-radius: 6px;
-      padding: 8px 14px; font-weight: 600; cursor: pointer;
+
+    /* ---- view container ---- */
+    section.view { display: none; min-height: 0; overflow: hidden; grid-template-rows: 1fr auto; }
+    section.view.active { display: grid; }
+
+    /* ---- chat ---- */
+    #chat-stream {
+      overflow: auto; padding: 24px 24px 8px; min-height: 0;
+      display: flex; flex-direction: column; gap: 14px;
     }
-    form#task-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .turn { display: flex; flex-direction: column; gap: 6px; }
+    .bubble {
+      max-width: 78%; padding: 12px 16px; border-radius: 14px;
+      line-height: 1.45; font-size: 14px;
+      white-space: pre-wrap; word-wrap: break-word;
+    }
+    .turn.user { align-items: flex-end; }
+    .turn.user .bubble { background: var(--user-bubble); border-top-right-radius: 4px; }
+    .turn.assistant { align-items: flex-start; }
+    .turn.assistant .bubble {
+      background: var(--asst-bubble); border-top-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .meta {
+      font-family: var(--mono); font-size: 11px; color: var(--muted);
+    }
+    .turn.user .meta { text-align: right; }
+    .turn.assistant .meta { padding-left: 4px; }
+    .turn .status { font-family: var(--mono); font-size: 12px; color: var(--muted); padding: 0 4px; }
+    .turn .status.running::after { content: "▍"; animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .turn details {
+      margin-top: 6px; background: #0b1322;
+      border: 1px solid var(--border); border-radius: 8px;
+      font-size: 12px; max-width: 78%;
+    }
+    .turn details summary {
+      padding: 6px 10px; cursor: pointer; color: var(--muted);
+      font-family: var(--mono); user-select: none;
+    }
+    .turn details pre {
+      margin: 0; padding: 10px; overflow: auto;
+      font-size: 11.5px; max-height: 320px;
+    }
+    .turn.error .bubble {
+      border-color: rgba(248,113,113,0.4); color: var(--bad);
+    }
+
+    /* ---- chat input ---- */
+    #chat-input-wrap {
+      border-top: 1px solid var(--border);
+      padding: 14px 20px;
+      background: var(--panel-2);
+    }
+    #task-form { display: flex; gap: 8px; align-items: stretch; max-width: 980px; margin: 0 auto; }
+    #task-input {
+      flex: 1; background: var(--panel); color: var(--text);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 14px; font-family: inherit; font-size: 14px;
+      outline: none;
+    }
+    #task-input:focus { border-color: var(--accent); }
+    #task-submit {
+      background: var(--accent); color: #0b1220; border: none;
+      border-radius: 10px; padding: 0 18px; font-weight: 600; cursor: pointer;
+      font-size: 14px;
+    }
+    #task-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    #task-submit:hover:not(:disabled) { background: var(--accent-strong); color: #fff; }
+    #chat-input-wrap .hint {
+      max-width: 980px; margin: 6px auto 0; font-size: 11px;
+      color: var(--muted); font-family: var(--mono); padding-left: 4px;
+    }
+
+    /* ---- bus events (left sidebar) ---- */
     .event {
-      font-family: var(--mono); font-size: 12px; line-height: 1.45;
-      padding: 4px 0; border-bottom: 1px dashed #243047;
+      font-family: var(--mono); font-size: 11px; line-height: 1.4;
+      padding: 4px 0; border-bottom: 1px dashed var(--border);
       white-space: pre-wrap; word-break: break-word;
     }
-    .event .kind { display: inline-block; min-width: 64px; color: var(--accent); }
+    .event .kind {
+      display: inline-block; min-width: 56px; color: var(--accent);
+    }
     .event .kind.result { color: var(--good); }
-    .event .kind.error  { color: var(--bad); }
     .event .kind.approval_request { color: var(--warn); }
-    .event .ts { color: var(--muted); margin-right: 8px; }
+    .event .kind.log, .event .kind.progress { color: var(--muted); }
+    .event .ts { color: var(--muted); margin-right: 6px; }
     .event .arrow { color: var(--muted); }
 
+    /* ---- approval cards (right sidebar) ---- */
     .approval {
-      border: 1px solid #475569; background: var(--panel-2); border-radius: 8px;
+      border: 1px solid var(--warn); border-radius: 8px;
+      background: rgba(251,191,36,0.06);
       padding: 10px 12px; margin-bottom: 10px;
     }
     .approval h3 {
-      margin: 0 0 4px 0; font-size: 13px; color: var(--warn); font-family: var(--mono);
+      margin: 0 0 4px; font-size: 12px; color: var(--warn);
+      font-family: var(--mono); text-transform: lowercase;
     }
+    .approval .rationale { font-size: 12px; color: var(--text); margin-bottom: 6px; }
     .approval pre {
-      margin: 4px 0 8px; padding: 6px 8px; background: #0b1220; border-radius: 6px;
-      font-size: 11.5px; max-height: 180px; overflow: auto;
+      margin: 4px 0 8px; padding: 6px 8px; background: var(--panel-2);
+      border-radius: 6px; font-size: 11px; max-height: 200px; overflow: auto;
     }
     .approval .actions { display: flex; gap: 6px; }
     .approval button {
-      border: none; border-radius: 6px; padding: 6px 10px; font-weight: 600;
-      cursor: pointer;
+      border: none; border-radius: 6px; padding: 6px 12px;
+      font-weight: 600; cursor: pointer; font-size: 12px;
     }
     .approval .approve { background: var(--good); color: #0b1220; }
-    .approval .reject  { background: var(--bad);  color: #0b1220; }
-    .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
+    .approval .reject { background: var(--bad); color: #0b1220; }
+
+    /* ---- audit panel ---- */
     .audit-row {
-      font-family: var(--mono); font-size: 11.5px;
-      padding: 2px 0; border-bottom: 1px dashed #243047; white-space: pre-wrap;
+      font-family: var(--mono); font-size: 11px; padding: 2px 0;
+      border-bottom: 1px dashed var(--border); white-space: pre-wrap; word-break: break-word;
     }
-    .audit-row .approved-true   { color: var(--good); }
-    .audit-row .approved-false  { color: var(--bad); }
-    .audit-row .approved-null   { color: var(--muted); }
+    .audit-row .approved-true { color: var(--good); }
+    .audit-row .approved-false { color: var(--bad); }
+    .audit-row .approved-null { color: var(--muted); }
+
+    .empty { color: var(--muted); font-style: italic; padding: 10px 4px; font-size: 12px; }
+
+    /* ---- Tools view ---- */
+    #tools-view { padding: 18px 22px; overflow: auto; display: block; }
+    #tools-view.active { display: block; }
+    #tools-view h2 {
+      font-size: 14px; font-weight: 600; margin: 16px 0 8px;
+      color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .tool-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); margin-bottom: 24px; }
+    .tool-card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 12px 14px;
+    }
+    .tool-card.destructive { border-color: rgba(248,113,113,0.4); }
+    .tool-card h3 {
+      margin: 0 0 4px; font-family: var(--mono); font-size: 13px;
+      color: var(--text);
+    }
+    .tool-card .agent-tag {
+      display: inline-block; font-size: 10px; color: var(--muted);
+      background: var(--panel-2); padding: 1px 6px; border-radius: 4px;
+      margin-left: 6px;
+    }
+    .tool-card .destructive-tag {
+      display: inline-block; font-size: 10px; color: var(--bad);
+      background: rgba(248,113,113,0.1); padding: 1px 6px; border-radius: 4px;
+      margin-left: 4px;
+    }
+    .tool-card .desc { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+    .tool-card .args { display: grid; gap: 6px; margin: 8px 0; }
+    .tool-card .args label {
+      font-size: 11px; color: var(--muted); font-family: var(--mono);
+    }
+    .tool-card .args input, .tool-card .args textarea {
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 6px 8px; font-family: var(--mono); font-size: 12px;
+      width: 100%;
+    }
+    .tool-card .args input:focus, .tool-card .args textarea:focus { border-color: var(--accent); outline: none; }
+    .tool-card .args textarea { min-height: 60px; resize: vertical; }
+    .tool-card button.invoke {
+      background: var(--accent); color: #0b1220; border: none;
+      border-radius: 6px; padding: 6px 14px; font-weight: 600;
+      cursor: pointer; font-size: 12px; margin-top: 4px;
+    }
+    .tool-card.destructive button.invoke { background: var(--bad); color: #0b1220; }
+    .tool-card .result {
+      margin-top: 10px; background: #0b1322; padding: 8px 10px;
+      border-radius: 6px; font-family: var(--mono); font-size: 11.5px;
+      max-height: 280px; overflow: auto; white-space: pre-wrap;
+      border: 1px solid var(--border);
+    }
+    .tool-card .result.error { border-color: rgba(248,113,113,0.4); color: var(--bad); }
+    .tool-card .stack-pick {
+      display: flex; gap: 4px; align-items: center;
+      font-size: 11px; color: var(--muted); margin-bottom: 4px;
+    }
+    .tool-card .stack-pick select {
+      background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: 2px 4px; font-family: var(--mono); font-size: 11px;
+    }
   </style>
 </head>
 <body>
+
   <header>
-    <h1>Olympus — multi-agent DevOps</h1>
+    <h1>Olympus</h1>
+    <nav>
+      <button class="nav-tab active" data-view="chat-view">💬 Chat</button>
+      <button class="nav-tab" data-view="tools-view">🛠 Tools</button>
+    </nav>
+    <div class="spacer"></div>
     <div class="pill" id="health">connecting…</div>
   </header>
+
   <main>
-    <section class="col">
-      <div class="panel">
-        <header>Submit a task</header>
-        <form id="task-form" autocomplete="off">
-          <input id="task-input" placeholder="Describe a task (e.g. 'list pods in default')" />
-          <button type="submit" id="task-submit">Submit</button>
-        </form>
-      </div>
-      <div class="panel">
-        <header>Live agent activity (bus events)</header>
+    <!-- LEFT SIDEBAR: live bus activity -->
+    <aside class="left">
+      <section class="pane">
+        <header>Live activity</header>
         <div class="body" id="events"></div>
-      </div>
-    </section>
-    <section class="col">
-      <div class="panel">
+      </section>
+    </aside>
+
+    <!-- CENTER: views (chat | tools) -->
+    <div style="display: grid; min-height: 0; overflow: hidden;">
+
+      <!-- chat view -->
+      <section id="chat-view" class="view active">
+        <div id="chat-stream"></div>
+        <div id="chat-input-wrap">
+          <form id="task-form" autocomplete="off">
+            <input id="task-input" placeholder="Describe a task (e.g. 'list pods in default')…" />
+            <button type="submit" id="task-submit">Send</button>
+          </form>
+          <div class="hint">↵ submits — agents pick the right tool, ⚠ destructive ops surface as approval cards →</div>
+        </div>
+      </section>
+
+      <!-- tools view -->
+      <section id="tools-view" class="view">
+        <p style="color: var(--muted); font-size: 13px; max-width: 720px;">
+          Every tool Olympus exposes — invoke directly without the LLM. Runs through the
+          same gating + audit as the agent path; destructive tools still surface an approval
+          card in the right sidebar.
+        </p>
+        <div id="tools-by-agent"></div>
+      </section>
+
+    </div>
+
+    <!-- RIGHT SIDEBAR: approvals on top, audit on bottom -->
+    <aside class="right">
+      <section class="pane">
         <header>Approval queue</header>
         <div class="body" id="approvals"></div>
-      </div>
-      <div class="panel">
+      </section>
+      <section class="pane">
         <header>Audit log</header>
         <div class="body" id="audit"></div>
-      </div>
-    </section>
+      </section>
+    </aside>
   </main>
 
   <script>
-    const $ = (sel) => document.querySelector(sel);
+    const $ = (sel, root = document) => root.querySelector(sel);
+    const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+    }[c]));
 
-    // ---------- Health pill ----------
+    // ---------- top-nav switching ----------
+    $$(".nav-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $$(".nav-tab").forEach((b) => b.classList.toggle("active", b === btn));
+        $$(".view").forEach((v) => v.classList.toggle("active", v.id === btn.dataset.view));
+      });
+    });
+
+    // ---------- health pill ----------
     async function refreshHealth() {
       try {
         const r = await fetch("/healthz");
-        if (r.ok) $("#health").textContent = "connected";
-        else $("#health").textContent = "degraded";
-      } catch { $("#health").textContent = "offline"; }
+        const pill = $("#health");
+        if (r.ok) { pill.textContent = "connected"; pill.className = "pill connected"; }
+        else { pill.textContent = "degraded"; pill.className = "pill degraded"; }
+      } catch { $("#health").textContent = "offline"; $("#health").className = "pill"; }
     }
     refreshHealth();
     setInterval(refreshHealth, 5000);
 
-    // ---------- Live events (SSE on /events) ----------
+    // ---------- live bus events (left sidebar) ----------
     const eventsBox = $("#events");
-    function appendEvent(ev) {
+    function renderEvent(ev) {
       const ts = new Date(ev.timestamp * 1000).toLocaleTimeString();
-      const kindClass = ["result","error","approval_request"].includes(ev.kind) ? ev.kind : "";
+      const kindClass = ["result", "approval_request", "progress", "log"].includes(ev.kind) ? ev.kind : "";
       const payload =
         ev.payload === null || ev.payload === undefined ? ""
         : typeof ev.payload === "string" ? ev.payload
@@ -152,30 +364,75 @@
       row.className = "event";
       row.innerHTML =
         `<span class="ts">${ts}</span>` +
-        `<span class="kind ${kindClass}">${ev.kind}</span> ` +
-        `${escapeHtml(ev.sender)} <span class="arrow">→</span> ${escapeHtml(ev.recipient)} ` +
-        `<span class="arrow">|</span> ${escapeHtml(payload).slice(0, 1000)}`;
+        `<span class="kind ${kindClass}">${esc(ev.kind)}</span> ` +
+        `${esc(ev.sender)} <span class="arrow">→</span> ${esc(ev.recipient)} ` +
+        `<span class="arrow">|</span> ${esc(payload).slice(0, 600)}`;
       eventsBox.prepend(row);
       while (eventsBox.children.length > 200) eventsBox.removeChild(eventsBox.lastChild);
     }
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, (c) => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;",
-      }[c]));
-    }
-    function startEventStream() {
-      const src = new EventSource("/events");
-      src.onmessage = (e) => {
-        try { appendEvent(JSON.parse(e.data)); } catch {}
-      };
-      src.onerror = () => {
-        setTimeout(startEventStream, 2000); // reconnect
-        src.close();
-      };
-    }
-    startEventStream();
 
-    // ---------- Submit a task ----------
+    // ---------- chat ----------
+    const chatStream = $("#chat-stream");
+    const mySubmittedTasks = new Map();  // task_id → {turn element, status element, details element, agent}
+
+    function renderUserBubble(text) {
+      const turn = document.createElement("div");
+      turn.className = "turn user";
+      turn.innerHTML =
+        `<div class="bubble">${esc(text)}</div>` +
+        `<div class="meta">${new Date().toLocaleTimeString()}</div>`;
+      chatStream.appendChild(turn);
+      chatStream.scrollTop = chatStream.scrollHeight;
+      return turn;
+    }
+    function renderAssistantBubble(taskId) {
+      const turn = document.createElement("div");
+      turn.className = "turn assistant";
+      turn.dataset.taskId = taskId;
+      turn.innerHTML =
+        `<div class="bubble">` +
+          `<div class="status running">picking the right agent…</div>` +
+          `<div class="content" style="margin-top: 4px;"></div>` +
+          `<details style="display:none;"><summary>details</summary><pre></pre></details>` +
+        `</div>` +
+        `<div class="meta">${new Date().toLocaleTimeString()} · task <code>${taskId.slice(0,8)}</code></div>`;
+      chatStream.appendChild(turn);
+      chatStream.scrollTop = chatStream.scrollHeight;
+      return turn;
+    }
+    function onTaskEvent(ev) {
+      const tracked = mySubmittedTasks.get(ev.task_id);
+      if (!tracked) return;
+      const { turn } = tracked;
+      const statusEl = turn.querySelector(".status");
+      const contentEl = turn.querySelector(".content");
+      const details = turn.querySelector("details");
+
+      if (ev.kind === "task") {
+        // orchestrator dispatched to an agent
+        const agent = ev.recipient;
+        tracked.agent = agent;
+        statusEl.textContent = `running on ${agent} agent…`;
+        statusEl.className = "status running";
+      } else if (ev.kind === "approval_request") {
+        statusEl.textContent = "⚠ awaiting approval — see the right sidebar";
+        statusEl.className = "status";
+      } else if (ev.kind === "result") {
+        statusEl.style.display = "none";
+        const p = ev.payload || {};
+        const status = p.status || "done";
+        const summary = p.summary || "(no summary)";
+        const artifacts = p.artifacts || {};
+        contentEl.textContent = summary;
+        if (status !== "success") turn.classList.add("error");
+        if (Object.keys(artifacts).length) {
+          details.style.display = "block";
+          details.querySelector("pre").textContent = JSON.stringify(artifacts, null, 2);
+        }
+        chatStream.scrollTop = chatStream.scrollHeight;
+      }
+    }
+
     $("#task-form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const input = $("#task-input");
@@ -184,47 +441,86 @@
       $("#task-submit").disabled = true;
       try {
         const res = await fetch("/tasks", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({natural_language: text}),
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ natural_language: text }),
         });
         if (!res.ok) throw new Error("submit failed");
+        const { task_id } = await res.json();
+        renderUserBubble(text);
+        const turn = renderAssistantBubble(task_id);
+        mySubmittedTasks.set(task_id, { turn });
         input.value = "";
+        // Fallback poll for the final result in case SSE drops a frame.
+        const pollUntilDone = async () => {
+          for (let i = 0; i < 180; i++) {
+            await new Promise((r) => setTimeout(r, 2000));
+            try {
+              const r = await fetch(`/tasks/${task_id}`);
+              if (!r.ok && r.status !== 202) continue;
+              const data = await r.json();
+              if (data.status && data.status !== "running" && data.status !== "pending") {
+                // Synthesize a result event so the bubble fills in if SSE missed it.
+                onTaskEvent({
+                  task_id, kind: "result",
+                  payload: {
+                    status: data.status, summary: data.result_summary || "",
+                    artifacts: data.result_artifacts || {},
+                  },
+                });
+                return;
+              }
+            } catch {}
+          }
+        };
+        pollUntilDone();
       } catch (err) {
-        alert("could not submit task: " + err.message);
+        renderUserBubble(text);
+        const turn = renderAssistantBubble("error");
+        turn.classList.add("error");
+        turn.querySelector(".status").remove();
+        turn.querySelector(".content").textContent = `submission failed: ${err.message}`;
       } finally {
         $("#task-submit").disabled = false;
+        $("#task-input").focus();
       }
     });
 
-    // ---------- Approvals (poll /approvals) ----------
+    // ---------- single SSE feed wires both sidebar + chat ----------
+    function startEventStream() {
+      const src = new EventSource("/events");
+      src.onmessage = (e) => {
+        let ev; try { ev = JSON.parse(e.data); } catch { return; }
+        renderEvent(ev);
+        onTaskEvent(ev);
+      };
+      src.onerror = () => { src.close(); setTimeout(startEventStream, 2000); };
+    }
+    startEventStream();
+
+    // ---------- approval queue (right sidebar) ----------
     const approvalsBox = $("#approvals");
-    let knownApprovals = new Set();
     async function refreshApprovals() {
       try {
         const r = await fetch("/approvals");
         if (!r.ok) return;
-        const items = await r.json();
-        renderApprovals(items);
+        renderApprovals(await r.json());
       } catch {}
     }
     function renderApprovals(items) {
       if (!items.length) {
         approvalsBox.innerHTML = `<div class="empty">no pending approvals</div>`;
-        knownApprovals.clear();
         return;
       }
       approvalsBox.innerHTML = "";
-      knownApprovals = new Set(items.map(a => a.approval_id));
       for (const a of items) {
         const card = document.createElement("div");
         card.className = "approval";
         const argsStr = JSON.stringify(a.args, null, 2);
-        const diffStr = a.diff ? `<pre>${escapeHtml(a.diff).slice(0, 4000)}</pre>` : "";
+        const diffStr = a.diff ? `<pre>${esc(a.diff).slice(0, 2000)}</pre>` : "";
         card.innerHTML =
-          `<h3>${escapeHtml(a.agent)} → ${escapeHtml(a.tool)}</h3>` +
-          `<div>${escapeHtml(a.rationale)}</div>` +
-          `<pre>args = ${escapeHtml(argsStr)}</pre>` +
+          `<h3>${esc(a.agent)} → ${esc(a.tool)}</h3>` +
+          `<div class="rationale">${esc(a.rationale)}</div>` +
+          `<pre>${esc(argsStr)}</pre>` +
           diffStr +
           `<div class="actions">` +
             `<button class="approve" data-id="${a.approval_id}">Approve</button>` +
@@ -233,23 +529,23 @@
         approvalsBox.appendChild(card);
       }
     }
-    approvalsBox.addEventListener("click", async (ev) => {
-      const btn = ev.target.closest("button[data-id]");
+    approvalsBox.addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-id]");
       if (!btn) return;
       const approved = btn.classList.contains("approve");
       const reason = window.prompt(approved ? "Reason for approval:" : "Reason for rejection:") || "no reason given";
-      const r = await fetch(`/approvals/${btn.dataset.id}`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({approved, reason}),
-      });
-      if (!r.ok) alert("could not resolve approval");
+      try {
+        const r = await fetch(`/approvals/${btn.dataset.id}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approved, reason }),
+        });
+        if (!r.ok) alert("could not resolve approval");
+      } catch (err) { alert(`error: ${err.message}`); }
       refreshApprovals();
     });
-    refreshApprovals();
-    setInterval(refreshApprovals, 1500);
+    refreshApprovals(); setInterval(refreshApprovals, 1500);
 
-    // ---------- Audit log viewer ----------
+    // ---------- audit log (right sidebar) ----------
     const auditBox = $("#audit");
     let lastAuditBytes = 0;
     async function refreshAudit() {
@@ -259,31 +555,129 @@
         const text = await r.text();
         if (text.length === lastAuditBytes) return;
         lastAuditBytes = text.length;
-        renderAudit(text);
+        const lines = text.trim().split("\n").filter(Boolean).slice(-100).reverse();
+        auditBox.innerHTML = lines.length ? "" : `<div class="empty">no entries yet</div>`;
+        for (const line of lines) {
+          let rec; try { rec = JSON.parse(line); } catch { continue; }
+          const ts = new Date(rec.ts * 1000).toLocaleTimeString();
+          const cls = rec.approved === true ? "approved-true"
+                    : rec.approved === false ? "approved-false" : "approved-null";
+          const argsStr = typeof rec.args === "string" ? rec.args : JSON.stringify(rec.args);
+          const row = document.createElement("div");
+          row.className = "audit-row";
+          row.innerHTML =
+            `<span class="${cls}">[${rec.approved === null ? "—" : rec.approved}]</span> ` +
+            `${ts} ${esc(rec.agent)} ${esc(rec.tool)} ` +
+            `${esc(argsStr).slice(0, 200)}`;
+          auditBox.appendChild(row);
+        }
       } catch {}
     }
-    function renderAudit(text) {
-      const lines = text.trim().split("\n").filter(Boolean).slice(-100).reverse();
-      auditBox.innerHTML = "";
-      for (const line of lines) {
-        let rec;
-        try { rec = JSON.parse(line); } catch { continue; }
-        const ts = new Date(rec.ts * 1000).toLocaleTimeString();
-        const cls =
-          rec.approved === true  ? "approved-true" :
-          rec.approved === false ? "approved-false" : "approved-null";
-        const argsStr = typeof rec.args === "string" ? rec.args : JSON.stringify(rec.args);
-        const row = document.createElement("div");
-        row.className = "audit-row";
-        row.innerHTML =
-          `<span class="${cls}">[${rec.approved === null ? "—" : rec.approved}]</span> ` +
-          `${ts} ${escapeHtml(rec.agent)} ${escapeHtml(rec.tool)} ` +
-          `${escapeHtml(argsStr).slice(0, 200)}`;
-        auditBox.appendChild(row);
+    refreshAudit(); setInterval(refreshAudit, 3000);
+
+    // ---------- tools view ----------
+    const toolsContainer = $("#tools-by-agent");
+    let tfStacks = [], ansiblePlays = [];
+    async function loadStacks() {
+      try { tfStacks = await (await fetch("/stacks/terraform")).json(); } catch {}
+      try { ansiblePlays = await (await fetch("/stacks/ansible")).json(); } catch {}
+    }
+    async function loadTools() {
+      const tools = await (await fetch("/tools")).json();
+      // Group by agent
+      const byAgent = {};
+      for (const t of tools) (byAgent[t.agent] = byAgent[t.agent] || []).push(t);
+      toolsContainer.innerHTML = "";
+      for (const [agent, list] of Object.entries(byAgent)) {
+        const h = document.createElement("h2");
+        h.textContent = agent;
+        toolsContainer.appendChild(h);
+        const grid = document.createElement("div");
+        grid.className = "tool-grid";
+        for (const t of list) grid.appendChild(renderToolCard(t));
+        toolsContainer.appendChild(grid);
       }
     }
-    refreshAudit();
-    setInterval(refreshAudit, 3000);
+    function renderToolCard(t) {
+      const card = document.createElement("div");
+      card.className = "tool-card" + (t.destructive ? " destructive" : "");
+      const props = (t.args_schema && t.args_schema.properties) || {};
+      const required = new Set(t.args_schema && t.args_schema.required || []);
+      const inputs = Object.entries(props).map(([name, prop]) => {
+        const inputId = `arg-${t.agent}-${t.name}-${name}`;
+        const isLong = (prop.type === "string" && (prop.maxLength || 0) > 80) || prop.format === "textarea" || name === "content";
+        const placeholder = prop.default !== undefined ? `default: ${JSON.stringify(prop.default)}` : (prop.description || "");
+        // Pre-populate Terraform working_dir + Ansible playbook with dropdowns
+        let stackPick = "";
+        if ((t.agent === "terraform" && name === "working_dir") && tfStacks.length) {
+          stackPick = `<div class="stack-pick">stack: <select data-target="${inputId}"><option value="">(custom)</option>` +
+            tfStacks.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("") + `</select></div>`;
+        }
+        if ((t.agent === "ansible" && name === "playbook") && ansiblePlays.length) {
+          stackPick = `<div class="stack-pick">playbook: <select data-target="${inputId}"><option value="">(custom)</option>` +
+            ansiblePlays.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("") + `</select></div>`;
+        }
+        const reqMark = required.has(name) ? " *" : "";
+        return `<label>${esc(name)}${reqMark} <span style="color:var(--muted)">(${esc(prop.type || "any")})</span></label>` +
+               stackPick +
+               (isLong
+                 ? `<textarea id="${inputId}" data-arg="${esc(name)}" placeholder="${esc(placeholder)}"></textarea>`
+                 : `<input id="${inputId}" data-arg="${esc(name)}" placeholder="${esc(placeholder)}" />`);
+      }).join("");
+      card.innerHTML =
+        `<h3>${esc(t.name)}` +
+          `<span class="agent-tag">${esc(t.agent)}</span>` +
+          (t.destructive ? `<span class="destructive-tag">destructive</span>` : "") +
+        `</h3>` +
+        `<div class="desc">${esc(t.description.split("\n")[0] || "")}</div>` +
+        `<div class="args">${inputs}</div>` +
+        `<button class="invoke">Run ${t.destructive ? "(requires approval)" : ""}</button>` +
+        `<div class="result" style="display:none;"></div>`;
+      // Stack-pick dropdowns wire into their input.
+      $$("select[data-target]", card).forEach((sel) => {
+        sel.addEventListener("change", () => {
+          const input = card.querySelector(`#${CSS.escape(sel.dataset.target)}`);
+          if (input) input.value = sel.value;
+        });
+      });
+      $(".invoke", card).addEventListener("click", async () => {
+        const args = {};
+        $$("[data-arg]", card).forEach((el) => {
+          const v = el.value.trim();
+          if (v === "") return;
+          // Best-effort JSON coercion: try to parse, fall back to string.
+          try {
+            const parsed = JSON.parse(v);
+            // Only use the parsed value if it's not just a bare unquoted string Pythonism.
+            if (typeof parsed === "object" || typeof parsed === "boolean" || typeof parsed === "number") {
+              args[el.dataset.arg] = parsed; return;
+            }
+          } catch {}
+          args[el.dataset.arg] = v;
+        });
+        const rbox = $(".result", card);
+        rbox.style.display = "block"; rbox.classList.remove("error");
+        rbox.textContent = "running…";
+        const btn = $(".invoke", card);
+        btn.disabled = true;
+        try {
+          const r = await fetch(`/tools/${encodeURIComponent(t.agent)}/${encodeURIComponent(t.name)}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(args),
+          });
+          const body = await r.json();
+          if (!r.ok) { rbox.classList.add("error"); rbox.textContent = body.error || `HTTP ${r.status}`; }
+          else {
+            const out = typeof body.result === "string" ? body.result : JSON.stringify(body.result, null, 2);
+            rbox.textContent = out;
+          }
+        } catch (err) {
+          rbox.classList.add("error"); rbox.textContent = err.message;
+        } finally { btn.disabled = false; }
+      });
+      return card;
+    }
+    (async () => { await loadStacks(); await loadTools(); })();
   </script>
 </body>
 </html>

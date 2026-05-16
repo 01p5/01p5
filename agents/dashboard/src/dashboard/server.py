@@ -1,31 +1,54 @@
 """
-Olympus dashboard backend (W5-6).
+Olympus dashboard backend.
 
 Stdlib HTTP server. Same family of decisions as ``WebhookApprovalHook``:
 no FastAPI/Flask. The bus is the source of truth for live activity;
-the dashboard is a thin SSE bridge over it plus the approval queue.
+the dashboard is a thin SSE bridge over it plus the approval queue and
+the direct-tool-invocation endpoints.
 
 Endpoints
 ---------
 
+LLM-driven (agent picks the tools):
+
 - ``GET /``                       — static index.html (the UI).
 - ``POST /tasks``                 — body: ``{natural_language, router?}``,
-                                    returns ``{task_id}``. Submission runs
-                                    in a worker thread; the response is
-                                    immediate.
+                                    returns ``{task_id}``.
 - ``GET /tasks``                  — list known task ids + status.
 - ``GET /tasks/{id}``             — final result (``404`` if unknown,
                                     ``202`` while in flight).
 - ``GET /tasks/{id}/events``      — SSE stream of bus messages for the
                                     task.
-- ``GET /events``                 — SSE stream of every bus message
-                                    (broadcast / "*" subscriber).
+
+Live activity + audit:
+
+- ``GET /events``                 — SSE stream of every bus message.
+- ``GET /audit``                  — JSONL audit log download.
+- ``GET /healthz``                — liveness check.
+
+Human approval queue (also used by the LLM-driven path):
+
 - ``GET /approvals``              — list pending approvals.
 - ``POST /approvals/{id}``        — body: ``{approved, reason,
                                     modified_args?}``. Resolves a
                                     pending approval.
-- ``GET /audit``                  — JSONL audit log download.
-- ``GET /healthz``                — liveness check.
+
+Human-driven tool invocation (no LLM in the loop, same gating + audit):
+
+- ``GET /tools``                  — catalog: every tool, the agent it
+                                    belongs to, its args JSON schema,
+                                    and whether it is destructive.
+- ``POST /tools/{agent}/{tool}``  — body: tool args dict, returns
+                                    ``{result}``. Synchronously blocks
+                                    until tool returns (or until the
+                                    human resolves the approval queue
+                                    card, for destructive tools).
+- ``GET /stacks/terraform``       — list known terraform stacks
+                                    (subdirs of infra/terraform/
+                                    containing *.tf), to feed into
+                                    tf_plan/tf_apply args.
+- ``GET /stacks/ansible``         — list known ansible playbooks
+                                    (top-level *.yml under infra/ansible/).
 
 This module is import-safe even when the LLM stack and the agent
 packages are not installed — the orchestrator + agents are passed in by
@@ -53,7 +76,9 @@ from agentlib import (
     QueueApprovalHook,
     Router,
     TaskMessage,
+    gate_tools,
 )
+from langchain_core.tools import BaseTool
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +246,12 @@ class DashboardServer:
                         content_type="application/x-ndjson",
                         allow_missing=True,
                     )
+                if path == "/tools":
+                    return outer._handle_list_tools(self)
+                if path == "/stacks/terraform":
+                    return outer._handle_list_terraform_stacks(self)
+                if path == "/stacks/ansible":
+                    return outer._handle_list_ansible_playbooks(self)
                 if path.startswith("/static/"):
                     return outer._serve_static(self, path[len("/static/"):])
                 self.send_response(404)
@@ -233,6 +264,11 @@ class DashboardServer:
                     return outer._handle_resolve_approval(
                         self, self.path[len("/approvals/"):]
                     )
+                if self.path.startswith("/tools/"):
+                    rest = self.path[len("/tools/"):]
+                    if "/" in rest:
+                        agent_name, _, tool_name = rest.partition("/")
+                        return outer._handle_invoke_tool(self, agent_name, tool_name)
                 self.send_response(404)
                 self.end_headers()
 
@@ -359,6 +395,129 @@ class DashboardServer:
             return
         self._send_json(req, 200, {"resolved": approval_id})
 
+    # ---- Human-driven tool invocation (no LLM) ----
+
+    def _handle_list_tools(self, req: BaseHTTPRequestHandler) -> None:
+        """Catalog every tool every registered agent exposes.
+
+        Returned schema is exactly what the UI needs to build a form
+        per tool: name, description, JSON schema for args, and the
+        destructive flag (so the UI can warn before submit).
+        """
+        out: list[dict] = []
+        for agent_name, agent in self.orchestrator.agents.items():
+            destructive = set(agent.destructive_verbs or set())
+            for raw_tool in agent.tools:
+                tool = _as_base_tool(raw_tool)
+                schema = _tool_args_schema(tool)
+                out.append({
+                    "agent": agent_name,
+                    "name": tool.name,
+                    "description": tool.description or "",
+                    "args_schema": schema,
+                    "destructive": tool.name in destructive,
+                })
+        self._send_json(req, 200, out)
+
+    def _handle_invoke_tool(
+        self, req: BaseHTTPRequestHandler, agent_name: str, tool_name: str
+    ) -> None:
+        """Invoke a single tool directly. Same gate_tools wrapping the
+        LLM-driven path uses — destructive tools still surface the
+        approval card and block until resolved."""
+        try:
+            args = self._read_json(req)
+        except json.JSONDecodeError:
+            self._send_json(req, 400, {"error": "invalid JSON"})
+            return
+        if not isinstance(args, dict):
+            self._send_json(req, 400, {"error": "body must be an object"})
+            return
+        agent = self.orchestrator.agents.get(agent_name)
+        if agent is None:
+            self._send_json(req, 404, {"error": f"unknown agent {agent_name!r}"})
+            return
+        # Synthetic task id — keeps the audit log + approval queue stamps
+        # honest about where the invocation came from.
+        task_id = f"manual:{uuid.uuid4()}"
+        try:
+            gated = gate_tools(agent, self.orchestrator.ctx, task_id)
+        except Exception as exc:
+            logger.exception("gate_tools failed for %s.%s", agent_name, tool_name)
+            self._send_json(req, 500, {"error": f"{type(exc).__name__}: {exc}"})
+            return
+        target = next((t for t in gated if t.name == tool_name), None)
+        if target is None:
+            self._send_json(req, 404, {"error": f"unknown tool {tool_name!r} on agent {agent_name!r}"})
+            return
+        # Optionally publish a bus event so the live feed shows the
+        # human-driven invocation too.
+        try:
+            from agentlib import new_message
+            self.bus.publish(new_message(
+                task_id=task_id, sender="human", recipient=agent_name,
+                kind="task",
+                payload={"natural_language": f"[direct] {tool_name}({args})", "inputs": args},
+            ))
+        except Exception:
+            pass  # bus publish is best-effort for UI feedback
+        try:
+            result = target.invoke(args)
+        except Exception as exc:
+            logger.exception("tool invocation %s.%s failed", agent_name, tool_name)
+            self._send_json(req, 500, {
+                "task_id": task_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            return
+        # Mirror the result back on the bus for the live feed.
+        try:
+            from agentlib import new_message
+            self.bus.publish(new_message(
+                task_id=task_id, sender=agent_name, recipient="human",
+                kind="result",
+                payload={"status": "success", "summary": str(result)[:500]},
+            ))
+        except Exception:
+            pass
+        self._send_json(req, 200, {
+            "task_id": task_id,
+            "agent": agent_name,
+            "tool": tool_name,
+            "result": result if isinstance(result, (str, int, float, bool, type(None), list, dict)) else str(result),
+        })
+
+    def _handle_list_terraform_stacks(self, req: BaseHTTPRequestHandler) -> None:
+        """Scan infra/terraform/ for directories that look like a stack
+        (contain at least one .tf file). Returns relative paths."""
+        roots = self._infra_roots("terraform")
+        stacks: list[str] = []
+        for root in roots:
+            for tf_dir in sorted({p.parent for p in root.rglob("*.tf")}):
+                stacks.append(str(tf_dir.relative_to(root.parent)))
+        self._send_json(req, 200, sorted(set(stacks)))
+
+    def _handle_list_ansible_playbooks(self, req: BaseHTTPRequestHandler) -> None:
+        """Scan infra/ansible/ for top-level *.yml playbooks."""
+        roots = self._infra_roots("ansible")
+        plays: list[str] = []
+        for root in roots:
+            for yml in sorted(root.glob("*.yml")):
+                plays.append(str(yml.relative_to(root.parent)))
+        self._send_json(req, 200, sorted(set(plays)))
+
+    def _infra_roots(self, kind: str) -> list[Path]:
+        """Resolve infra/<kind> against a few likely repo locations.
+
+        Container layout has it at /opt/olympus/infra/<kind>;
+        dev-box layout has it at the project root walked up from this
+        file. We try both and return only existing paths."""
+        candidates = [
+            Path("/opt/olympus/infra") / kind,
+            Path(__file__).resolve().parent.parent.parent.parent.parent / "infra" / kind,
+        ]
+        return [p for p in candidates if p.is_dir()]
+
     # ---- SSE streaming ----
 
     def _handle_task_events(
@@ -436,6 +595,33 @@ def _send_sse_event(req: BaseHTTPRequestHandler, msg: BusMessage) -> bool:
         return True
     except (ConnectionError, BrokenPipeError):
         return False
+
+
+def _as_base_tool(raw: Any) -> BaseTool:
+    """Tools on AgentSpec.tools may be either @tool-decorated functions
+    (which expose .name / .description / .args_schema) or raw callables.
+    For the UI catalog we just want a duck-typed BaseTool view."""
+    if isinstance(raw, BaseTool):
+        return raw
+    # Last-resort: synthesize a minimal stand-in. We never invoke through
+    # this path — gate_tools handles the real wrapping — but the catalog
+    # endpoint should not crash on an unusual entry.
+    from langchain_core.tools import StructuredTool
+
+    return StructuredTool.from_function(raw)
+
+
+def _tool_args_schema(tool: BaseTool) -> dict:
+    """Return the JSON schema for a tool's args (for UI form generation).
+    Tolerates schema being a dict, a Pydantic class, or absent entirely."""
+    schema = getattr(tool, "args_schema", None)
+    if schema is None:
+        return {"type": "object", "properties": {}}
+    if isinstance(schema, dict):
+        return schema
+    if hasattr(schema, "model_json_schema"):
+        return schema.model_json_schema()
+    return {"type": "object", "properties": {}}
 
 
 def _payload_to_jsonable(value: Any) -> Any:

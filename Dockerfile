@@ -46,11 +46,28 @@ RUN if [ "$INSTALL_LLM_STACK" = "1" ]; then \
             'python-dotenv==1.2.1' ; \
     fi
 
+# Tooling the agents shell out to: git for source fetches, ansible-core
+# for the ansible agent, terraform (pinned binary fetch — repo route was
+# flaky on intranet DNS) for the terraform agent.
+ARG TERRAFORM_VERSION=1.9.8
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git openssh-client ansible-core unzip ca-certificates curl \
+ && curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/tf.zip \
+ && unzip -o /tmp/tf.zip -d /usr/local/bin/ \
+ && rm /tmp/tf.zip \
+ && apt-get purge -y curl unzip \
+ && rm -rf /var/lib/apt/lists/*
+
 # Source — copy after deps so layer cache survives most edits.
 COPY libs/agentlib libs/agentlib
 COPY agents agents
 COPY docs docs
 COPY PROJECT_PLAN.md PROJECT_PLAN.md
+# infra/terraform and infra/ansible let the dashboard's /stacks/* endpoints
+# enumerate stacks, and let the agents actually operate on them (cwd
+# defaults to /opt/olympus when not specified).
+COPY infra/terraform infra/terraform
+COPY infra/ansible infra/ansible
 
 # Editable installs of every Olympus package the dashboard depends on
 # (the dashboard's build_default_server constructs all four agents).

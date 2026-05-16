@@ -42,7 +42,34 @@ curl -s -X POST http://10.0.10.30/approvals/<approval_id> \
 
 # Audit log (JSONL)
 curl -s http://10.0.10.30/audit
+
+# Catalog every tool every agent exposes
+curl -s http://10.0.10.30/tools | jq
+
+# Invoke a tool directly (no LLM in the loop). Destructive tools still
+# surface as approval cards in the right sidebar.
+curl -s -X POST http://10.0.10.30/tools/sysadmin/get_pods \
+     -H 'Content-Type: application/json' \
+     -d '{"namespace": "default"}' | jq
+
+# Enumerate the terraform stacks + ansible playbooks the container has
+# (the UI uses these to pre-fill working_dir / playbook dropdowns)
+curl -s http://10.0.10.30/stacks/terraform | jq
+curl -s http://10.0.10.30/stacks/ansible   | jq
 ```
+
+The browser UI at `http://10.0.10.30/` has two tabs:
+- **💬 Chat** — three-column app: live bus events on the left,
+  conversation in the middle (one bubble pair per task, status streams
+  from "picking an agent…" → "running on X agent…" → final structured
+  result), approval queue + audit on the right.
+- **🛠 Tools** — every tool every agent exposes, rendered as a per-tool
+  card with a form pre-built from the args JSON schema. Destructive tools
+  are red-bordered and still queue an approval card before they fire.
+  Terraform `working_dir` and Ansible `playbook` fields auto-populate
+  from `GET /stacks/terraform` and `GET /stacks/ansible` (dropdown of
+  detected stacks/playbooks shipped in the container at
+  `/opt/olympus/infra/terraform/*` and `/opt/olympus/infra/ansible/*.yml`).
 
 The browser UI at `http://10.0.10.30/` shows live events, the
 approval queue, and the audit log — all auto-refreshing.
@@ -62,6 +89,8 @@ Every check below ran end-to-end against the real cluster. ✅ = passed.
 | 7 | Crash recovery | ✅ Force-killed the pod mid-task; new pod up + `/healthz` ok in **~4s**. In-flight tasks are lost (in-memory bus + emptyDir). |
 | 8 | External access | ✅ Caddy on the dev VM proxies `http://10.0.10.30/` → cluster NodePort. |
 | 9 | Browser E2E suite (5 tests via headless Chromium) | ✅ All 5 pass in ~46s — see below. |
+| 10 | Direct tool invocation via `/tools` + UI Tools tab | ✅ Every agent's tool catalogued at `GET /tools`; `POST /tools/{agent}/{tool}` runs through the same `gate_tools` so destructive ops still queue an approval card. UI exposes a form per tool. |
+| 11 | Chat-centric UI redesign | ✅ 3-column layout: live bus on the left, streaming chat in the center, approval queue + audit on the right. SSE filtered by `task_id` so each turn streams as the orchestrator → agent → result events arrive. |
 
 ## E2E browser tests
 
