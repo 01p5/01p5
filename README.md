@@ -259,7 +259,6 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 ## Further reading
 
 - [`PROJECT_PLAN.md`](PROJECT_PLAN.md) — the 10-week course plan with weekly deliverables and threat model.
-- [`FINAL_REPORT.md`](FINAL_REPORT.md) — draft CS 153 writeup: architecture, week-by-week narrative, design decisions, success-metric report, limitations, future work, lessons learned.
 - [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md) — the `AgentSpec` contract every agent implements.
 - [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md) — why the bus looks the way it does (in-memory default, Redis Streams optional).
 - [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) — runbook for the live deployment, every endpoint, what's been exercised, known issues.
