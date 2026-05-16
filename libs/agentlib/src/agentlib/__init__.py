@@ -83,6 +83,7 @@ from .spec import (
     AuditLogger,
     CostBreakdown,
     TaskMessage,
+    cost_from_agent,
 )
 
 __all__ = [
@@ -101,6 +102,7 @@ __all__ = [
     "ApprovalHook",
     "AuditLogger",
     "CostBreakdown",
+    "cost_from_agent",
     "TaskMessage",
     "ToolGateError",
     "gate_tools",

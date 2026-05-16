@@ -351,3 +351,58 @@ describe("ChatPage — settled-turn intelligence layer", () => {
     );
   });
 });
+
+
+describe("ChatPage — cost chip on settled turns", () => {
+  it("renders the CostChip with the SSE result's cost payload", async () => {
+    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-cost" });
+    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+    render(<ChatPage />);
+    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
+    await userEvent.type(input, "with cost");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+
+    const src = MockEventSource.latest!;
+    await act(async () => {
+      src.onmessage?.({
+        data: JSON.stringify({
+          msg_id: "m-cost", task_id: "task-cost",
+          sender: "sysadmin", recipient: "orchestrator", kind: "result",
+          timestamp: 1,
+          payload: {
+            status: "success",
+            summary: "cost-tracked",
+            cost: {
+              total_usd: 0.00321,
+              input_tokens: 200,
+              output_tokens: 120,
+              wall_seconds: 2.4,
+            },
+          },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    // CostChip carries the data via attributes — assert against those
+    // rather than reformatted text to keep the test stable across
+    // formatting tweaks.
+    await waitFor(() => {
+      const chip = document.querySelector(".cost-chip");
+      expect(chip).not.toBeNull();
+      expect(chip!.getAttribute("data-cost-usd")).toBe("0.00321");
+      expect(chip!.getAttribute("data-wall-seconds")).toBe("2.4");
+    });
+  });
+
+  it("does NOT render the CostChip on a still-running turn", async () => {
+    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-running" });
+    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+    render(<ChatPage />);
+    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
+    await userEvent.type(input, "still going");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+
+    await waitFor(() => screen.getByText(/picking the right agent/i));
+    expect(document.querySelector(".cost-chip")).toBeNull();
+  });
+});

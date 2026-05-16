@@ -6,6 +6,7 @@ import { BusSidebar } from "./BusSidebar";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { AuditPanel } from "./AuditPanel";
 import { RollbackPanel } from "./RollbackPanel";
+import { TelemetryFooter } from "./TelemetryFooter";
 
 const TABS = [
   { to: "/chat",       label: "Chat",       icon: MessageSquare },
@@ -17,7 +18,7 @@ const TABS = [
 
 export function Layout(): JSX.Element {
   return (
-    <div className="h-full grid grid-rows-[auto_1fr]">
+    <div className="h-full grid grid-rows-[auto_1fr_auto]">
       {/* Topnav */}
       <header className="bg-dark-secondary/80 backdrop-blur-xl border-b border-border-subtle">
         <div className="flex items-center h-16 px-5 gap-6">
@@ -66,6 +67,7 @@ export function Layout(): JSX.Element {
           <AuditPanel />
         </aside>
       </main>
+      <TelemetryFooter />
     </div>
   );
 }

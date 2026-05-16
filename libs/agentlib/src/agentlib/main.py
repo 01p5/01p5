@@ -134,6 +134,15 @@ class StructuralAgent:
         self.request_extra_body = request_extra_body
         self.agent_type = agent_type
         self.budget_guard = budget_guard
+        # Per-instance cost accumulator. Each ``invoke()`` appends one
+        # (cost, breakdown) tuple here. Lives next to the global
+        # ``agent_execution_context`` so the existing telemetry
+        # callers stay working; this list is what the orchestrator
+        # reads to populate ``AgentResult.cost`` thread-safely.
+        self._invocation_costs: list[tuple[float, dict[str, float]]] = []
+        self._total_input_tokens: int = 0
+        self._total_output_tokens: int = 0
+        self._last_token_counts: tuple[int, int] = (0, 0)
 
         if (
             "additionalProperties" not in self.response_class.model_json_schema()
@@ -327,6 +336,51 @@ class StructuralAgent:
             # Prepend the folded sum as a single entry so total_cost stays accurate
             cpi.insert(0, old_total)
         agent_execution_context[self.agent_type]["total_cost"] = sum_costs(cpi)
+        # Also accumulate per-instance so the caller can read just THIS
+        # agent run's cost without racing with concurrent tasks of the
+        # same agent_type. The global ``agent_execution_context`` stays
+        # for backwards compatibility; this list is the thread-safe
+        # source of truth for AgentResult.cost.
+        self._invocation_costs.append(cost_obj)
+        self._last_token_counts = self._extract_token_counts(response)
+
+    def total_cost_breakdown(self) -> tuple[float, dict[str, float]]:
+        """Aggregate cost across every ``invoke()`` call on this
+        StructuralAgent instance. Pure function over the per-instance
+        list — safe to call mid-run or after."""
+        if not self._invocation_costs:
+            return 0.0, {
+                "input": 0.0, "cached_input": 0.0, "input_total": 0.0,
+                "output": 0.0, "web_search": 0.0,
+            }
+        return sum_costs(self._invocation_costs)
+
+    def total_token_counts(self) -> tuple[int, int]:
+        """(input_tokens, output_tokens) summed across this instance's
+        invocations. Best-effort; messages without usage_metadata
+        contribute zero."""
+        return (
+            self._total_input_tokens,
+            self._total_output_tokens,
+        )
+
+    def _extract_token_counts(self, response) -> tuple[int, int]:
+        """Pull token counts out of the last AIMessage. Accumulates on
+        the instance so total_token_counts() stays a cheap O(1) call."""
+        try:
+            messages = response.get("messages", [])
+            for message in messages[::-1]:
+                if not isinstance(message, AIMessage):
+                    continue
+                meta = getattr(message, "usage_metadata", None) or {}
+                inp = int(meta.get("input_tokens", 0) or 0)
+                out = int(meta.get("output_tokens", 0) or 0)
+                self._total_input_tokens += inp
+                self._total_output_tokens += out
+                return inp, out
+        except Exception:
+            pass
+        return 0, 0
 
     _TELEMETRY_MAX_MSG_LEN = 2000   # per-message content cap for telemetry
     _TELEMETRY_MAX_MSGS = 20        # max messages included in telemetry

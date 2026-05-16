@@ -1068,3 +1068,177 @@ def test_rollback_endpoint_empty_when_no_store():
         assert status == 409
     finally:
         srv.shutdown()
+
+
+# ---------------------------------------------------------------------
+# /telemetry endpoint
+# ---------------------------------------------------------------------
+
+from agentlib import AlwaysApprove  # noqa: E402
+
+
+class _CostAgent(AgentSpec):
+    """Returns AgentResult with a deterministic cost so the dashboard
+    can roll it up. Skips the approval queue entirely."""
+    name = "costy"
+    domain = "telemetry-test"
+    tools: Sequence[Any] = []
+    destructive_verbs: set[str] = set()
+
+    def __init__(self, usd: float = 0.0012, in_tok: int = 100, out_tok: int = 50):
+        self.usd = usd
+        self.in_tok = in_tok
+        self.out_tok = out_tok
+
+    def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
+        return AgentResult(
+            task_id=task.task_id,
+            status="success",
+            summary="telemetry agent ran",
+            cost=CostBreakdown(
+                total_usd=self.usd,
+                input_tokens=self.in_tok,
+                output_tokens=self.out_tok,
+                wall_seconds=1.25,
+            ),
+        )
+
+
+def _telemetry_server(agent: _CostAgent) -> DashboardServer:
+    bus = InMemoryBus()
+    ctx = AgentContext(approval=AlwaysApprove(), audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[agent], ctx=ctx,
+        router=ManualRouter(default="costy"),
+        result_timeout_seconds=2.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    return srv
+
+
+def test_telemetry_endpoint_returns_zeros_when_no_tasks():
+    srv = _telemetry_server(_CostAgent())
+    try:
+        status, body = _get(srv, "/telemetry")
+        assert status == 200
+        assert body["totals"]["tasks"] == 0
+        assert body["totals"]["settled"] == 0
+        assert body["totals"]["usd"] == 0.0
+        assert body["by_agent"] == {}
+        assert body["recent"] == []
+    finally:
+        srv.shutdown()
+
+
+def test_telemetry_endpoint_rolls_up_cost_across_settled_tasks():
+    srv = _telemetry_server(_CostAgent(usd=0.0010, in_tok=200, out_tok=80))
+    try:
+        for nl in ("task A", "task B", "task C"):
+            srv.submit(nl)
+        assert _wait(lambda: len(srv._tasks) == 3 and all(
+            t.status == "success" for t in srv._tasks.values()
+        ))
+        _, body = _get(srv, "/telemetry")
+        assert body["totals"]["tasks"] == 3
+        assert body["totals"]["settled"] == 3
+        # 3 × 0.0010
+        assert abs(body["totals"]["usd"] - 0.0030) < 1e-9
+        assert body["totals"]["input_tokens"] == 600
+        assert body["totals"]["output_tokens"] == 240
+        assert body["totals"]["wall_seconds"] == 3.75
+    finally:
+        srv.shutdown()
+
+
+def test_telemetry_endpoint_includes_per_agent_breakdown():
+    srv = _telemetry_server(_CostAgent(usd=0.0020, in_tok=100, out_tok=50))
+    try:
+        srv.submit("one task")
+        assert _wait(lambda: len(srv._tasks) == 1 and all(
+            t.status == "success" for t in srv._tasks.values()
+        ))
+        _, body = _get(srv, "/telemetry")
+        assert "costy" in body["by_agent"]
+        bucket = body["by_agent"]["costy"]
+        assert bucket["tasks"] == 1
+        assert abs(bucket["usd"] - 0.0020) < 1e-9
+        assert bucket["input_tokens"] == 100
+        assert bucket["output_tokens"] == 50
+    finally:
+        srv.shutdown()
+
+
+def test_telemetry_endpoint_includes_by_status_count():
+    srv = _telemetry_server(_CostAgent())
+    try:
+        srv.submit("a")
+        assert _wait(lambda: len(srv._tasks) == 1)
+        _, body = _get(srv, "/telemetry")
+        assert body["by_status"].get("success", 0) >= 1
+    finally:
+        srv.shutdown()
+
+
+def test_telemetry_endpoint_recent_returns_at_most_10_newest_first():
+    srv = _telemetry_server(_CostAgent())
+    try:
+        for i in range(12):
+            srv.submit(f"task {i}")
+        assert _wait(lambda: len(srv._tasks) == 12)
+        _, body = _get(srv, "/telemetry")
+        recent = body["recent"]
+        assert len(recent) == 10
+        # Newest first → submitted_at descending.
+        ts = [r["submitted_at"] for r in recent]
+        assert ts == sorted(ts, reverse=True)
+    finally:
+        srv.shutdown()
+
+
+def test_telemetry_endpoint_ignores_in_flight_tasks_in_settled_totals():
+    """An in-flight task contributes to ``totals.tasks`` but NOT to
+    ``settled`` or to the dollar totals — so the average doesn't drift
+    down while we're waiting for a slow task to finish."""
+
+    class _BlockingAgent(AgentSpec):
+        name = "block"
+        domain = "x"
+        tools: Sequence[Any] = []
+        destructive_verbs: set[str] = set()
+        def __init__(self) -> None:
+            self.event = threading.Event()
+        def handle(self, task, ctx):
+            self.event.wait(timeout=10)
+            return AgentResult(
+                task_id=task.task_id, status="success",
+                summary="done", cost=CostBreakdown(total_usd=0.001),
+            )
+
+    blocking = _BlockingAgent()
+    bus = InMemoryBus()
+    ctx = AgentContext(approval=AlwaysApprove(), audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[blocking], ctx=ctx,
+        router=ManualRouter(default="block"),
+        result_timeout_seconds=10.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    try:
+        srv.submit("slow task")
+        assert _wait(lambda: any(t.status == "running" for t in srv._tasks.values()))
+        _, body = _get(srv, "/telemetry")
+        assert body["totals"]["tasks"] == 1
+        assert body["totals"]["settled"] == 0
+        assert body["totals"]["usd"] == 0.0
+        # Let it finish so srv.shutdown() doesn't hang.
+        blocking.event.set()
+    finally:
+        srv.shutdown()

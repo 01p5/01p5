@@ -19,9 +19,9 @@ from agentlib import (
     AgentContext,
     AgentResult,
     AgentSpec,
-    CostBreakdown,
     StructuralAgent,
     TaskMessage,
+    cost_from_agent,
     gate_tools,
     gpt5_mini,
 )
@@ -95,7 +95,7 @@ class SysadminAgent(AgentSpec):
                     "findings": response.findings,
                     "actions_taken": response.actions_taken,
                 },
-                cost=CostBreakdown(wall_seconds=elapsed),
+                cost=cost_from_agent(agent, wall_seconds=elapsed),
             )
         except Exception as exc:
             elapsed = time.monotonic() - started
@@ -103,7 +103,7 @@ class SysadminAgent(AgentSpec):
                 task_id=task.task_id,
                 status="failed",
                 summary=f"Sysadmin agent raised {type(exc).__name__}: {exc}",
-                cost=CostBreakdown(wall_seconds=elapsed),
+                cost=cost_from_agent(agent, wall_seconds=elapsed),
             )
         finally:
             agent.cleanup()

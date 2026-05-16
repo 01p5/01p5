@@ -457,3 +457,59 @@ def test_rollback_uses_modified_args_when_approver_modifies():
     [entry] = store.list_for_task("task-G")
     assert entry.forward_args == {"path": "/tmp/safer", "content": "sanitized"}
     assert entry.snapshot["prior_content"] == "<prior>"  # snapshot ran AFTER modify
+
+
+# ---------------------------------------------------------------------
+# cost_from_agent — telemetry helper
+# ---------------------------------------------------------------------
+
+from agentlib import cost_from_agent  # noqa: E402
+
+
+class _StubStructuralAgent:
+    """Test seam: exposes the same `total_cost_breakdown` /
+    `total_token_counts` shape StructuralAgent does, without dragging
+    in the full LangChain stack."""
+
+    def __init__(self, total_usd=0.001234, input_tokens=120, output_tokens=80):
+        self._total_usd = total_usd
+        self._in = input_tokens
+        self._out = output_tokens
+
+    def total_cost_breakdown(self):
+        return self._total_usd, {
+            "input": self._total_usd / 2, "cached_input": 0.0,
+            "input_total": self._total_usd / 2, "output": self._total_usd / 2,
+            "web_search": 0.0,
+        }
+
+    def total_token_counts(self):
+        return self._in, self._out
+
+
+def test_cost_from_agent_pulls_usd_and_tokens_from_agent():
+    cb = cost_from_agent(_StubStructuralAgent(), wall_seconds=1.5)
+    assert cb.total_usd == 0.001234
+    assert cb.input_tokens == 120
+    assert cb.output_tokens == 80
+    assert cb.wall_seconds == 1.5
+
+
+def test_cost_from_agent_tolerates_stub_without_accumulator():
+    """Tests pass in test stubs that don't implement total_cost_breakdown.
+    Helper must degrade to wall_seconds-only rather than crash."""
+    class _Bare:
+        pass
+
+    cb = cost_from_agent(_Bare(), wall_seconds=0.5)
+    assert cb.total_usd == 0.0
+    assert cb.input_tokens == 0
+    assert cb.output_tokens == 0
+    assert cb.wall_seconds == 0.5
+
+
+def test_cost_from_agent_zero_run_returns_zeros():
+    cb = cost_from_agent(_StubStructuralAgent(total_usd=0.0, input_tokens=0, output_tokens=0), wall_seconds=0.0)
+    assert cb.total_usd == 0.0
+    assert cb.input_tokens == 0
+    assert cb.output_tokens == 0

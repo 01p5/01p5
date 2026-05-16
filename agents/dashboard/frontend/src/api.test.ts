@@ -276,3 +276,20 @@ describe("api.executeRollback", () => {
     expect(out.tool).toBe("write_file");
   });
 });
+
+describe("api.telemetry", () => {
+  it("GETs /telemetry and returns the rolled-up envelope", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      json: {
+        totals: { tasks: 1, settled: 1, usd: 0.001, input_tokens: 100, output_tokens: 50, wall_seconds: 1.2 },
+        by_agent: {},
+        by_status: { success: 1 },
+        recent: [],
+      },
+    }));
+    const out = await api.telemetry();
+    expect(fetchMock).toHaveBeenCalledWith("/telemetry");
+    expect(out.totals.usd).toBe(0.001);
+    expect(out.totals.settled).toBe(1);
+  });
+});

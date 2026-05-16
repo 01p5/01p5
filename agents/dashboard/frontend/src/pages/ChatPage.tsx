@@ -7,6 +7,7 @@ import { useSSE } from "../hooks/useSSE";
 import type { BusEvent, TaskRecord } from "../types";
 import { MemoryChips } from "../components/MemoryChips";
 import { FeedbackButtons } from "../components/FeedbackButtons";
+import { CostChip } from "../components/CostChip";
 
 // exported for tests
 export interface Turn {
@@ -19,6 +20,13 @@ export interface Turn {
   error?: string;
   approvalsPending: number;
   submitted: number;
+  // Telemetry data, populated when the orchestrator's "result" event
+  // lands. The SSE payload's cost field is the canonical source; the
+  // poll fallback below also reads from /tasks/{id}.
+  cost_usd?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  wall_seconds?: number;
 }
 
 /**
@@ -57,10 +65,19 @@ export function ChatPage(): JSX.Element {
       } else if (ev.kind === "approval_decision") {
         t.approvalsPending = Math.max(0, t.approvalsPending - 1);
       } else if (ev.kind === "result") {
-        const p = (ev.payload ?? {}) as Partial<TaskRecord> & { artifacts?: Record<string, unknown> };
+        const p = (ev.payload ?? {}) as Partial<TaskRecord> & {
+          artifacts?: Record<string, unknown>;
+          cost?: { total_usd?: number; input_tokens?: number; output_tokens?: number; wall_seconds?: number };
+        };
         t.status = (p.status as Turn["status"]) ?? "success";
         t.summary = (p as unknown as { summary?: string }).summary ?? "";
         t.artifacts = (p as { artifacts?: Record<string, unknown> }).artifacts ?? undefined;
+        if (p.cost) {
+          t.cost_usd = p.cost.total_usd ?? t.cost_usd;
+          t.input_tokens = p.cost.input_tokens ?? t.input_tokens;
+          t.output_tokens = p.cost.output_tokens ?? t.output_tokens;
+          t.wall_seconds = p.cost.wall_seconds ?? t.wall_seconds;
+        }
       }
       const next = [...prev];
       next[idx] = t;
@@ -87,6 +104,10 @@ export function ChatPage(): JSX.Element {
                     summary: r.result_summary ?? p.summary,
                     artifacts: r.result_artifacts ?? p.artifacts,
                     error: r.error ?? p.error,
+                    cost_usd: r.cost_usd ?? p.cost_usd,
+                    input_tokens: r.input_tokens ?? p.input_tokens,
+                    output_tokens: r.output_tokens ?? p.output_tokens,
+                    wall_seconds: r.wall_seconds ?? p.wall_seconds,
                   }
                 : p,
             ));
@@ -288,11 +309,22 @@ function TurnView({ turn }: { turn: Turn }): JSX.Element {
                 agent={turn.agent}
               />
             )}
-            <div className="text-[10px] font-mono text-text-muted mt-1 pl-1">
-              {new Date(turn.submitted).toLocaleTimeString()}
-              {" · "}
+            <div className="text-[10px] font-mono text-text-muted mt-1 pl-1 flex flex-wrap items-center gap-2">
+              <span>{new Date(turn.submitted).toLocaleTimeString()}</span>
+              <span>·</span>
               <code>{turn.task_id.slice(0, 8)}</code>
-              {turn.agent && <> · agent: {turn.agent}</>}
+              {turn.agent && <span>· agent: {turn.agent}</span>}
+              {settled && (
+                <>
+                  <span>·</span>
+                  <CostChip
+                    costUsd={turn.cost_usd}
+                    wallSeconds={turn.wall_seconds}
+                    inputTokens={turn.input_tokens}
+                    outputTokens={turn.output_tokens}
+                  />
+                </>
+              )}
             </div>
             {settled && turn.summary && (
               <FeedbackButtons taskId={turn.task_id} />

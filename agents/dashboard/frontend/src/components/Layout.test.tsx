@@ -23,6 +23,12 @@ beforeEach(() => {
   vi.spyOn(api, "listApprovals").mockResolvedValue([]);
   vi.spyOn(api, "audit").mockResolvedValue([]);
   vi.spyOn(api, "listRollbacks").mockResolvedValue([]);
+  vi.spyOn(api, "telemetry").mockResolvedValue({
+    totals: { tasks: 0, settled: 0, usd: 0, input_tokens: 0, output_tokens: 0, wall_seconds: 0 },
+    by_agent: {},
+    by_status: {},
+    recent: [],
+  });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -86,5 +92,26 @@ describe("Layout", () => {
     await waitFor(() => expect(screen.getByText(/approval queue/i)).toBeInTheDocument());
     expect(screen.getByText(/rollback queue/i)).toBeInTheDocument();
     expect(screen.getByText(/audit log/i)).toBeInTheDocument();
+  });
+
+  it("telemetry footer mounts and stays hidden until tasks > 0", async () => {
+    // Empty telemetry (default mock) → no footer visible.
+    renderLayout("/chat");
+    await waitFor(() => expect(api.telemetry).toHaveBeenCalled());
+    expect(document.getElementById("telemetry-footer")).toBeNull();
+  });
+
+  it("telemetry footer renders once tasks > 0", async () => {
+    vi.spyOn(api, "telemetry").mockResolvedValue({
+      totals: { tasks: 2, settled: 2, usd: 0.005, input_tokens: 400, output_tokens: 100, wall_seconds: 6 },
+      by_agent: { sysadmin: { tasks: 2, usd: 0.005, input_tokens: 400, output_tokens: 100, wall_seconds: 6 } },
+      by_status: { success: 2 },
+      recent: [],
+    });
+    renderLayout("/chat");
+    await waitFor(() =>
+      expect(document.getElementById("telemetry-footer")).not.toBeNull(),
+    );
+    expect(screen.getByText(/2\/2 tasks/)).toBeInTheDocument();
   });
 });

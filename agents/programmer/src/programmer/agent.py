@@ -15,9 +15,9 @@ from agentlib import (
     AgentContext,
     AgentResult,
     AgentSpec,
-    CostBreakdown,
     StructuralAgent,
     TaskMessage,
+    cost_from_agent,
     gate_tools,
     gpt5_mini,
 )
@@ -104,14 +104,14 @@ class ProgrammerAgent(AgentSpec):
                     "generated": response.artifacts,
                     "files_written": response.files_written,
                 },
-                cost=CostBreakdown(wall_seconds=time.monotonic() - started),
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
             )
         except Exception as exc:
             return AgentResult(
                 task_id=task.task_id,
                 status="failed",
                 summary=f"Programmer agent raised {type(exc).__name__}: {exc}",
-                cost=CostBreakdown(wall_seconds=time.monotonic() - started),
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
             )
         finally:
             agent.cleanup()

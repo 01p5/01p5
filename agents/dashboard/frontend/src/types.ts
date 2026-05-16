@@ -13,6 +13,47 @@ export interface TaskRecord {
   result_summary?: string | null;
   result_artifacts?: Record<string, unknown> | null;
   error?: string | null;
+  cost_usd?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  wall_seconds?: number | null;
+  agent?: string | null;
+}
+
+export interface TelemetryTotals {
+  tasks: number;
+  settled: number;
+  usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  wall_seconds: number;
+}
+
+export interface TelemetryAgentBucket {
+  tasks: number;
+  usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  wall_seconds: number;
+}
+
+export interface TelemetryRecentEntry {
+  task_id: string;
+  agent: string | null;
+  status: string;
+  submitted_at: number;
+  cost_usd: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  wall_seconds: number | null;
+  natural_language: string;
+}
+
+export interface TelemetryResponse {
+  totals: TelemetryTotals;
+  by_agent: Record<string, TelemetryAgentBucket>;
+  by_status: Record<string, number>;
+  recent: TelemetryRecentEntry[];
 }
 
 export interface BusEvent {

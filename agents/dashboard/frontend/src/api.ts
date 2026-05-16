@@ -9,6 +9,7 @@ import type {
   PendingApproval,
   RollbackEntry,
   TaskRecord,
+  TelemetryResponse,
   ToolDescriptor,
   ToolInvokeResponse,
 } from "./types";
@@ -126,4 +127,7 @@ export const api = {
     tool: string;
     result: unknown;
   }> => postJson(`/rollback/${encodeURIComponent(rollbackId)}/execute`, {}),
+
+  // Telemetry — rolled-up cost + tokens across stored task records.
+  telemetry: (): Promise<TelemetryResponse> => getJson("/telemetry"),
 };

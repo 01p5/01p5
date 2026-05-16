@@ -103,6 +103,13 @@ class TaskRecord:
     result_summary: Optional[str] = None
     result_artifacts: Optional[dict] = None
     error: Optional[str] = None
+    # Per-task cost from the agent's CostBreakdown. Populated when the
+    # orchestrator's "result" lands on the bus. None until then.
+    cost_usd: Optional[float] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    wall_seconds: Optional[float] = None
+    agent: Optional[str] = None
 
 
 class DashboardServer:
@@ -157,10 +164,24 @@ class DashboardServer:
                 rec.status = payload.get("status", "success")
                 rec.result_summary = payload.get("summary")
                 rec.result_artifacts = payload.get("artifacts")
+                cost = payload.get("cost") or {}
+                if isinstance(cost, dict):
+                    rec.cost_usd = cost.get("total_usd")
+                    rec.input_tokens = cost.get("input_tokens")
+                    rec.output_tokens = cost.get("output_tokens")
+                    rec.wall_seconds = cost.get("wall_seconds")
             else:
                 rec.status = getattr(payload, "status", "success")
                 rec.result_summary = getattr(payload, "summary", None)
                 rec.result_artifacts = getattr(payload, "artifacts", None)
+                cost = getattr(payload, "cost", None)
+                if cost is not None:
+                    rec.cost_usd = getattr(cost, "total_usd", None)
+                    rec.input_tokens = getattr(cost, "input_tokens", None)
+                    rec.output_tokens = getattr(cost, "output_tokens", None)
+                    rec.wall_seconds = getattr(cost, "wall_seconds", None)
+            # Sender of the "result" message is the agent that handled it.
+            rec.agent = msg.sender or rec.agent
 
     # ---- task submission (worker thread) ----
 
@@ -265,6 +286,8 @@ class DashboardServer:
                     return outer._handle_list_memory(self)
                 if path == "/rollback":
                     return outer._handle_list_rollbacks(self)
+                if path == "/telemetry":
+                    return outer._handle_telemetry(self)
                 if path == "/stacks/terraform":
                     return outer._handle_list_terraform_stacks(self)
                 if path == "/stacks/ansible":
@@ -734,6 +757,77 @@ class DashboardServer:
                 req, 404, {"error": f"no memory entry for task_id {task_id!r}"}
             )
         return self._send_json(req, 200, {"updated": True, "task_id": task_id})
+
+    def _handle_telemetry(self, req: BaseHTTPRequestHandler) -> None:
+        """Aggregate task-record cost into a single response.
+
+        Body shape:
+          {
+            "totals": {"tasks": N, "settled": M, "usd": F, "input_tokens": I,
+                       "output_tokens": O, "wall_seconds": W},
+            "by_agent": {"sysadmin": {tasks, usd, input_tokens, output_tokens, wall_seconds}, ...},
+            "by_status": {"success": N, "failed": M, "rejected": K, ...},
+            "recent": [<TaskRecord-as-dict>, ...]   # last 10
+          }
+
+        "settled" means status != pending/running. The aggregate ignores
+        in-flight tasks so an unfinished run can't pull the averages
+        toward zero."""
+        with self._tasks_lock:
+            tasks = list(self._tasks.values())
+        settled_statuses = {"success", "failed", "rejected", "cancelled"}
+        settled = [t for t in tasks if t.status in settled_statuses]
+
+        def _add(into: dict, t: TaskRecord) -> None:
+            into["tasks"] = into.get("tasks", 0) + 1
+            into["usd"] = into.get("usd", 0.0) + (t.cost_usd or 0.0)
+            into["input_tokens"] = into.get("input_tokens", 0) + (t.input_tokens or 0)
+            into["output_tokens"] = into.get("output_tokens", 0) + (t.output_tokens or 0)
+            into["wall_seconds"] = into.get("wall_seconds", 0.0) + (t.wall_seconds or 0.0)
+
+        totals: dict = {
+            "tasks": len(tasks),
+            "settled": len(settled),
+            "usd": 0.0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "wall_seconds": 0.0,
+        }
+        by_agent: dict[str, dict] = {}
+        by_status: dict[str, int] = {}
+        for t in tasks:
+            by_status[t.status] = by_status.get(t.status, 0) + 1
+        for t in settled:
+            totals["usd"] += t.cost_usd or 0.0
+            totals["input_tokens"] += t.input_tokens or 0
+            totals["output_tokens"] += t.output_tokens or 0
+            totals["wall_seconds"] += t.wall_seconds or 0.0
+            agent_key = t.agent or "unknown"
+            agent_bucket = by_agent.setdefault(agent_key, {})
+            _add(agent_bucket, t)
+
+        recent = sorted(tasks, key=lambda t: t.submitted_at, reverse=True)[:10]
+        recent_payload = [
+            {
+                "task_id": t.task_id,
+                "agent": t.agent,
+                "status": t.status,
+                "submitted_at": t.submitted_at,
+                "cost_usd": t.cost_usd,
+                "input_tokens": t.input_tokens,
+                "output_tokens": t.output_tokens,
+                "wall_seconds": t.wall_seconds,
+                "natural_language": t.natural_language[:120],
+            }
+            for t in recent
+        ]
+
+        self._send_json(req, 200, {
+            "totals": totals,
+            "by_agent": by_agent,
+            "by_status": by_status,
+            "recent": recent_payload,
+        })
 
     def _handle_list_memory(self, req: BaseHTTPRequestHandler) -> None:
         """List recent memory entries.

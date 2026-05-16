@@ -35,6 +35,31 @@ class CostBreakdown:
     wall_seconds: float = 0.0
 
 
+def cost_from_agent(structural_agent: Any, wall_seconds: float) -> "CostBreakdown":
+    """Build a ``CostBreakdown`` from a StructuralAgent's per-instance
+    cost accumulator. Tolerates an agent that doesn't expose the
+    accumulator (e.g. test stubs) by zeroing those fields.
+
+    Lives in spec.py so concrete agents can call it from ``handle()``
+    without depending on the (LLM-stack-heavy) ``agentlib.main`` import."""
+    total_usd = 0.0
+    input_tokens = 0
+    output_tokens = 0
+    try:
+        total_usd, _ = structural_agent.total_cost_breakdown()
+        input_tokens, output_tokens = structural_agent.total_token_counts()
+    except (AttributeError, Exception):
+        # Agent didn't track per-instance cost — fall back to just
+        # the wall clock. Never let a telemetry hiccup fail a run.
+        pass
+    return CostBreakdown(
+        total_usd=float(total_usd),
+        input_tokens=int(input_tokens),
+        output_tokens=int(output_tokens),
+        wall_seconds=float(wall_seconds),
+    )
+
+
 @dataclass
 class AgentResult:
     task_id: str
