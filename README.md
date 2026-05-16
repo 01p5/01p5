@@ -2,7 +2,7 @@
 
 Multi-agent DevOps system: one human, five LLM agents, real infrastructure.
 
-Built for [CS 153 – Frontier Systems](https://www.classes.cs.chicago.edu/) as a one-person frontier lab. Live at <https://0lympu5.com> (intranet endpoint: <http://10.0.10.30/>).
+Built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford. Project domain: <https://0lympu5.com>.
 
 > The vibe-coding tools enable anyone to build anything they can imagine, but keeping it running is still a DevOps problem. Olympus is the smallest viable answer: built by one person, used by one person, to operate infrastructure that used to take a whole DevOps team.
 
@@ -76,7 +76,7 @@ Open <http://localhost:5173/>.
 
 ### 3. Drive the live cluster
 
-The live system is on the dev-VM intranet at `http://10.0.10.30/`. See [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) for the full runbook (every endpoint, every probe that's been exercised, known issues, tear-down).
+The live system runs on a self-hosted Kubernetes cluster fronted by a reverse proxy. See [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) for the full runbook (every endpoint, every probe that's been exercised, known issues, tear-down).
 
 ### 4. Run the test suite
 
@@ -185,12 +185,12 @@ The multi-stage `Dockerfile` builds the SPA with Node 20 and bakes it into the P
 | Path | Purpose |
 |------|---------|
 | `infra/terraform/aws/` | (W3–4) minimal AWS path — single EC2, K3s, deploy script. Currently mothballed in favour of the PVE path. |
-| `infra/terraform/pve/` | The path that's actually deployed. 4 VMs on a Proxmox host (`10.0.10.20-23`), provisioned via Terraform's `bpg/proxmox` provider. |
+| `infra/terraform/pve/` | The path that's actually deployed. Four VMs on a Proxmox host, provisioned via Terraform's `bpg/proxmox` provider. |
 | `infra/terraform/deployment/` | Inventory + SSH key emission. Output of `pve/` feeds straight into `infra/ansible/`. |
 | `infra/ansible/master.yml`, `workers.yml`, `docker.yml`, `wg.yml` | The kubeadm bootstrap. End-to-end: empty Ubuntu VMs → working cluster with Calico + a private registry → ~12 minutes. |
 | `infra/k8s/charts/olympus/` | Helm chart for the dashboard. Single Deployment (dashboard + orchestrator + bus + all four agent runtimes), Service + NodePort, `ClusterRole` for cluster-scoped reads. |
 
-End state on the live system: Caddy on `10.0.10.30` proxies plain HTTP → cluster NodePort `30093`. See [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md).
+End state on the live system: a Caddy reverse proxy fronts the cluster's NodePort (`30093`) on plain HTTP. See [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) for the operator-facing endpoints.
 
 ## The intelligence layer (W7-8)
 
@@ -234,7 +234,7 @@ Executing a rollback is itself a destructive operation: `POST /rollback/{id}/exe
 
 `StructuralAgent` accumulates per-invocation cost (USD + input/output tokens) on the instance itself (not the shared global), so concurrent tasks don't race. Each agent calls `cost_from_agent(agent, wall_seconds)` to fill in the `CostBreakdown` on its `AgentResult`. The dashboard surfaces it on `TaskRecord` and rolls it up via `GET /telemetry` (totals, by-agent, by-status, recent-10). The UI shows a per-turn cost chip next to the task-id and a one-row telemetry footer at the bottom of the layout.
 
-Live cluster note: the deployment at `http://10.0.10.30/` predates the intelligence layer — these endpoints will return SPA-fallback HTML until the dashboard image is rebuilt and re-rolled. The Helm chart already mounts the audit volume that memory + rollback persistence write to (`audit.persistence.enabled`).
+Live cluster note: the currently-running deployment predates the intelligence layer — these endpoints will return SPA-fallback HTML until the dashboard image is rebuilt and re-rolled. The Helm chart already mounts the audit volume that memory + rollback persistence write to (`audit.persistence.enabled`).
 
 ## Testing
 

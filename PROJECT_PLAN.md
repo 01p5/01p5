@@ -3,7 +3,7 @@
 > The vibe-coding tools enable anyone to build anything they can imagine, but keeping them running remains a DevOps problem. The goal of Olympus is simple: built by one person, used by one person, to manage infrastructure that used to require a full DevOps team.
 
 **Domain:** 0lympu5.com  
-**Course:** CS 153 Frontier Systems — The One-Person Frontier Lab  
+**Course:** [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford  
 **Track:** Automation / Agent Systems  
 **Reference:** [Artemis](https://github.com/artemis-sysadmin/artemis) (prior art, architectural patterns)
 

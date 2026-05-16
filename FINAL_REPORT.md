@@ -1,9 +1,8 @@
 # Olympus — Final Report
 
-**Course:** CS 153 Frontier Systems — The One-Person Frontier Lab
+**Course:** [CS 153: Frontier Systems](https://cs153.stanford.edu/), Stanford University
 **Project:** Olympus — Multi-Agent DevOps from Terraform to Terminal
-**Author:** Tianle Yu
-**Domain:** 0lympu5.com
+**Domain:** [0lympu5.com](https://0lympu5.com)
 
 > This file is a *draft* scaffold for the CS 153 final writeup. Every
 > claim cites the code or commit that backs it. Edit prose into your
@@ -125,14 +124,14 @@ Built the orchestrator + LLMRouter / ManualRouter, the bus
 implementations. Terminal UI with `textual` shipped at
 `agents/olympus_cli/src/olympus_cli/tui.py`.
 
-The AWS deploy path was deprioritized partway through W3 (budget +
-the user's local creds pointing at corporate AWS — see
-[`feedback_no_aws_apply.md`](.claude/projects/-home-unics-Desktop-cs153-01p5/memory/feedback_no_aws_apply.md)
-in auto-memory). Replaced with a Proxmox-based deploy on the user's
-intranet: 4 VMs provisioned by `infra/terraform/pve/`, configured by
-`infra/ansible/` playbooks (kubeadm + Calico CNI), running a Helm
+The AWS deploy path was deprioritized partway through W3 (budget;
+the available AWS credentials weren't appropriate for sandbox use).
+Replaced with a Proxmox-based deploy on a self-hosted lab cluster:
+four VMs provisioned by `infra/terraform/pve/`, configured by
+`infra/ansible/` playbooks (kubeadm + Calico CNI), running the Helm
 chart from `infra/k8s/charts/olympus/`. Same "one agent against real
-infrastructure" deliverable, on infra the user actually owns.
+infrastructure" deliverable, on infrastructure under our own
+operational control.
 
 ### Weeks 5–6: Cross-Agent Workflows & Web UI
 
@@ -385,12 +384,12 @@ touching Olympus core.
 
 ### 7.3 Live cluster re-deploy after W7-8
 
-The deploy at `http://10.0.10.30/` is from before the W7-8 work.
-Re-rolling the Helm chart would surface `/memory`, `/rollback`,
-`/telemetry` on the live system. Not done in-session per the
-operator's "no AWS apply without permission" stance applied to all
-shared infrastructure — the demo at `docs/DEMO.md` runs locally
-end-to-end instead.
+The currently-running deployment of the dashboard predates the W7-8
+intelligence layer. Re-rolling the Helm chart would surface
+`/memory`, `/rollback`, and `/telemetry` on the live system, but
+that was held back as a shared-infrastructure change requiring
+explicit operator authorization. The demo in `docs/DEMO.md` runs
+locally end-to-end instead, against the same code.
 
 ---
 
