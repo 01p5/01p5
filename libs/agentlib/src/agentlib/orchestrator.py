@@ -229,6 +229,11 @@ class Orchestrator:
         Routing is bypassed: each step is pinned to a named agent
         (``PlanStep.agent``). Failure short-circuits unless the failing
         step is marked ``allow_failure=True``.
+
+        Memory retrieval runs per-step (scoped to that step's pinned
+        agent) so a long plan benefits from prior runs at each
+        hop — and each completed step's outcome is written back so
+        a later step (or a future plan) can pull it in.
         """
         prior: list[AgentResult] = []
         total_seconds = 0.0
@@ -242,7 +247,9 @@ class Orchestrator:
                     f"{step.agent!r}; registered: {list(self.agents)}"
                 )
             task = step_to_task(plan, step, i, prior)
+            task = self._with_memory_context(task, agent=step.agent)
             result = self._dispatch(task, step.agent)
+            self._remember(task, step.agent, result)
             prior.append(result)
             total_seconds += result.cost.wall_seconds
             total_usd += result.cost.total_usd
