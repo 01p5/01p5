@@ -166,10 +166,17 @@ class StructuralAgent:
         #     rejects every tool call because the auto-generated schema
         #     omits additionalProperties=false.
         #   - ProviderStrategy: create_agent calls bind_tools(strict=True)
-        #     and lets the provider's native structured-output path do
-        #     the schema enforcement. Works on both OpenAI and Anthropic.
-        # We always wrap in ProviderStrategy.
+        #     to make the tool schema strict, and lets the provider's
+        #     native structured-output path do the schema enforcement.
+        # OpenAI needs ProviderStrategy; Anthropic chokes on strict=True
+        # (Messages.create() rejects the kwarg) so use the raw class.
         from langchain.agents.structured_output import ProviderStrategy
+
+        is_openai = "claude" not in self.model
+        response_format = (
+            ProviderStrategy(self.response_class) if is_openai
+            else self.response_class
+        )
 
         self.agent = create_agent(
             model=llm,
@@ -177,7 +184,7 @@ class StructuralAgent:
             debug=self.debug,
             system_prompt=self.system_prompt,
             checkpointer=self.checkpointer,
-            response_format=ProviderStrategy(self.response_class),
+            response_format=response_format,
         ).with_config({"recursion_limit": self.recursion_limit})
 
     def _get_checkpoint_config(self) -> dict:

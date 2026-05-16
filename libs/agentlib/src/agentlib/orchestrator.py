@@ -58,7 +58,7 @@ class LLMRouter:
 
     def route(self, task: TaskMessage) -> str:
         from .main import StructuralAgent
-        from .models import claude45
+        from .models import gpt5_mini
 
         catalog = "\n".join(
             f"  - {name}: {desc}" for name, desc in self.agent_descriptions.items()
@@ -66,13 +66,19 @@ class LLMRouter:
         prompt = (
             f"Olympus task router. Available agents:\n{catalog}\n\n"
             f"Task: {task.natural_language}\n\n"
-            "Pick exactly one agent by name."
+            "Pick exactly one agent by name. "
+            "If the task is to AUTHOR / CREATE / WRITE / EDIT source "
+            "files for any tool (terraform .tf, ansible .yml, Dockerfiles, "
+            "Helm values, compose blocks, scripts), route to the "
+            "programmer agent — it owns generation + write_file. The "
+            "terraform / ansible / sysadmin agents only EXECUTE existing "
+            "stacks / playbooks / kubectl commands; they cannot author."
         )
         agent = StructuralAgent(
             task_id=f"router:{task.task_id}",
             system_prompt="You route DevOps tasks to the right specialist agent. Be decisive.",
             response_class=_RouteDecision,
-            model=self.model or claude45,
+            model=self.model or gpt5_mini,
             agent_type="orchestrator-router",
         )
         try:
