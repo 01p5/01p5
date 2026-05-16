@@ -751,3 +751,99 @@ def test_memory_endpoint_returns_empty_when_no_memory_store():
         assert body["entries"] == []
     finally:
         srv.shutdown()
+
+
+# ---------------------------------------------------------------------
+# POST /memory/{task_id}/feedback
+# ---------------------------------------------------------------------
+
+
+def test_memory_feedback_marks_entry_good_and_boosts_ranking():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1", nl="delete pod nginx in default"))
+    mem.write(_entry(task_id="T2", nl="delete pod web in default"))
+    srv = _memory_server(mem)
+    try:
+        status, body = _post(srv, "/memory/T2/feedback", {"feedback": "good"})
+        assert status == 200
+        assert body == {"updated": True, "task_id": "T2"}
+
+        # After marking T2 good, retrieval ranks it above T1 on a
+        # similar query (same Jaccard score, +boost).
+        _, listing = _get(srv, "/memory?q=delete+pod+api+in+default&k=2")
+        assert listing["entries"][0]["task_id"] == "T2"
+    finally:
+        srv.shutdown()
+
+
+def test_memory_feedback_bad_excludes_entry_from_search():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1", nl="delete pod nginx"))
+    mem.write(_entry(task_id="T2", nl="delete pod web"))
+    srv = _memory_server(mem)
+    try:
+        status, _ = _post(srv, "/memory/T1/feedback", {"feedback": "bad"})
+        assert status == 200
+
+        _, listing = _get(srv, "/memory?q=delete+pod+something&k=10")
+        ids = [e["task_id"] for e in listing["entries"]]
+        assert "T1" not in ids
+        assert "T2" in ids
+    finally:
+        srv.shutdown()
+
+
+def test_memory_feedback_correction_persists_and_surfaces_in_recent_list():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1", nl="delete pod web"))
+    srv = _memory_server(mem)
+    try:
+        status, body = _post(
+            srv, "/memory/T1/feedback",
+            {"correction": "check the replicaset first next time"},
+        )
+        assert status == 200, body
+
+        _, listing = _get(srv, "/memory")
+        [entry] = listing["entries"]
+        assert entry["metadata"].get("correction", "").startswith(
+            "check the replicaset first"
+        )
+    finally:
+        srv.shutdown()
+
+
+def test_memory_feedback_unknown_task_id_404():
+    mem = InMemoryMemoryStore()
+    srv = _memory_server(mem)
+    try:
+        status, body = _post(srv, "/memory/ghost/feedback", {"feedback": "good"})
+        assert status == 404
+        assert "ghost" in body.get("error", "")
+    finally:
+        srv.shutdown()
+
+
+def test_memory_feedback_invalid_value_400():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1"))
+    srv = _memory_server(mem)
+    try:
+        status, body = _post(srv, "/memory/T1/feedback", {"feedback": "meh"})
+        assert status == 400
+        assert "good" in body.get("error", "")
+    finally:
+        srv.shutdown()
+
+
+def test_memory_feedback_empty_body_400():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1"))
+    srv = _memory_server(mem)
+    try:
+        status, body = _post(srv, "/memory/T1/feedback", {})
+        assert status == 400
+        assert "feedback" in body.get("error", "").lower() or \
+            "correction" in body.get("error", "").lower()
+    finally:
+        srv.shutdown()

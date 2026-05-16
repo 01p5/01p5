@@ -43,7 +43,16 @@ from typing import Any, Optional, Protocol
 
 @dataclass
 class MemoryEntry:
-    """One past task. Keep this small — it's threaded into prompts."""
+    """One past task. Keep this small — it's threaded into prompts.
+
+    Feedback fields live in ``metadata``:
+      - ``metadata["feedback"]`` ∈ {"good", "bad"} or absent.
+      - ``metadata["correction"]`` is free-form text the user added
+        to describe what should have happened instead.
+
+    "bad" entries are filtered out of retrieval entirely. "good"
+    entries get a small score boost so they rank higher for
+    borderline queries (see ``_feedback_adjusted_score``)."""
 
     task_id: str
     agent: str
@@ -53,20 +62,40 @@ class MemoryEntry:
     ts: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def feedback(self) -> Optional[str]:
+        v = self.metadata.get("feedback")
+        return v if v in ("good", "bad") else None
+
+    @property
+    def correction(self) -> Optional[str]:
+        v = self.metadata.get("correction")
+        return v if isinstance(v, str) and v.strip() else None
+
     def index_text(self) -> str:
         """The text that gets embedded / fuzzy-matched. Combining the
         request with the summary catches both 'what was asked' and
-        'what was learned' in a single similarity pass."""
-        return f"{self.natural_language}\n\n{self.summary}".strip()
+        'what was learned' in a single similarity pass. Corrections,
+        when present, ride along so they shape retrieval too."""
+        parts = [self.natural_language, self.summary]
+        if self.correction:
+            parts.append(self.correction)
+        return "\n\n".join(p for p in parts if p).strip()
 
     def to_prompt_block(self) -> str:
         """Short human-readable block for prepending to a future task.
-        Includes the agent + status so the LLM can judge relevance."""
-        return (
-            f"[past run — agent={self.agent}, status={self.status}] "
+        Includes the agent + status so the LLM can judge relevance.
+        Adds the user's correction when one exists — that's the whole
+        point of the feedback loop."""
+        verified = " (verified by user)" if self.feedback == "good" else ""
+        block = (
+            f"[past run — agent={self.agent}, status={self.status}{verified}] "
             f"Task: {self.natural_language.strip()}\n"
             f"Outcome: {self.summary.strip()}"
         )
+        if self.correction:
+            block += f"\nUser correction: {self.correction.strip()}"
+        return block
 
 
 def _tokens(text: str) -> set[str]:
@@ -85,6 +114,48 @@ def _token_similarity(query: str, candidate: str) -> float:
     return len(a & b) / len(a | b)
 
 
+# Score adjustment applied to "good"-tagged entries. Small enough that
+# a verified-but-irrelevant entry never beats an unverified-but-very-
+# similar one, but big enough to tip ties (and to keep verified
+# corrections sticky once the user has annotated them).
+_FEEDBACK_GOOD_BOOST = 0.15
+
+
+def _feedback_filter(entries: list[MemoryEntry]) -> list[MemoryEntry]:
+    """Drop entries the user explicitly flagged as bad. They stay in
+    the store (for audit) but never resurface in retrieval."""
+    return [e for e in entries if e.feedback != "bad"]
+
+
+def _adjust_score(raw_score: float, entry: MemoryEntry) -> float:
+    if entry.feedback == "good":
+        return raw_score + _FEEDBACK_GOOD_BOOST
+    return raw_score
+
+
+def _apply_annotation(
+    entry: MemoryEntry,
+    feedback: Optional[str],
+    correction: Optional[str],
+) -> None:
+    """Mutate ``entry.metadata`` in place. ``feedback=None`` clears
+    a previous annotation; a non-empty ``correction`` overwrites any
+    prior one (an explicit empty string clears it)."""
+    if feedback is None:
+        entry.metadata.pop("feedback", None)
+    elif feedback in ("good", "bad"):
+        entry.metadata["feedback"] = feedback
+    else:
+        raise ValueError(
+            f"feedback must be 'good', 'bad', or None — got {feedback!r}"
+        )
+    if correction is not None:
+        if correction.strip():
+            entry.metadata["correction"] = correction.strip()
+        else:
+            entry.metadata.pop("correction", None)
+
+
 class MemoryStore(Protocol):
     def write(self, entry: MemoryEntry) -> None: ...
     def search(
@@ -93,6 +164,23 @@ class MemoryStore(Protocol):
         k: int = 3,
         agent: Optional[str] = None,
     ) -> list[MemoryEntry]: ...
+    def annotate(
+        self,
+        task_id: str,
+        feedback: Optional[str] = None,
+        correction: Optional[str] = None,
+    ) -> bool:
+        """Attach user feedback to a previously-written entry.
+
+        ``feedback``: one of ``"good"``, ``"bad"``, or ``None`` to
+        clear an existing annotation.
+        ``correction``: free-form text describing what should have
+        happened instead. Stored on the entry and surfaced in future
+        prompt blocks so the agent can avoid repeating the mistake.
+
+        Returns ``True`` when the entry was found and updated. False
+        when no entry with that ``task_id`` exists."""
+        ...
 
 
 class NullMemoryStore:
@@ -109,6 +197,14 @@ class NullMemoryStore:
         agent: Optional[str] = None,
     ) -> list[MemoryEntry]:
         return []
+
+    def annotate(
+        self,
+        task_id: str,
+        feedback: Optional[str] = None,
+        correction: Optional[str] = None,
+    ) -> bool:
+        return False
 
 
 class InMemoryMemoryStore:
@@ -134,12 +230,28 @@ class InMemoryMemoryStore:
     ) -> list[MemoryEntry]:
         with self._lock:
             entries = list(self._entries)
-        candidates = [e for e in entries if agent is None or e.agent == agent]
+        candidates = _feedback_filter(
+            [e for e in entries if agent is None or e.agent == agent]
+        )
         scored = [
-            (_token_similarity(query, e.index_text()), e) for e in candidates
+            (_adjust_score(_token_similarity(query, e.index_text()), e), e)
+            for e in candidates
         ]
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [e for score, e in scored[:k] if score > 0]
+
+    def annotate(
+        self,
+        task_id: str,
+        feedback: Optional[str] = None,
+        correction: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            for entry in self._entries:
+                if entry.task_id == task_id:
+                    _apply_annotation(entry, feedback, correction)
+                    return True
+        return False
 
 
 class JsonlMemoryStore:
@@ -185,12 +297,42 @@ class JsonlMemoryStore:
     ) -> list[MemoryEntry]:
         with self._lock:
             entries = self._read_all()
-        candidates = [e for e in entries if agent is None or e.agent == agent]
+        candidates = _feedback_filter(
+            [e for e in entries if agent is None or e.agent == agent]
+        )
         scored = [
-            (_token_similarity(query, e.index_text()), e) for e in candidates
+            (_adjust_score(_token_similarity(query, e.index_text()), e), e)
+            for e in candidates
         ]
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [e for score, e in scored[:k] if score > 0]
+
+    def annotate(
+        self,
+        task_id: str,
+        feedback: Optional[str] = None,
+        correction: Optional[str] = None,
+    ) -> bool:
+        """Rewrite the file with one entry updated. Append-only stores
+        normally avoid this, but at the scales we expect (<10k entries)
+        a full rewrite under the lock is cheaper than the alternative
+        of merging append-only annotation records at read time."""
+        with self._lock:
+            entries = self._read_all()
+            found = False
+            for entry in entries:
+                if entry.task_id == task_id:
+                    _apply_annotation(entry, feedback, correction)
+                    found = True
+                    break
+            if not found:
+                return False
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                for entry in entries:
+                    f.write(json.dumps(asdict(entry)) + "\n")
+            tmp.replace(self.path)
+            return True
 
 
 class EmbeddingMemoryStore:
@@ -303,13 +445,19 @@ class EmbeddingMemoryStore:
             qnorm = np.linalg.norm(qvec) + 1e-12
             vnorms = np.linalg.norm(vecs, axis=1) + 1e-12
             sims = (vecs @ qvec) / (vnorms * qnorm)
+            # Feedback adjustments are applied post-cosine so the
+            # boost/filter semantics stay identical to the lexical
+            # backends.
             order = np.argsort(-sims)
             picked: list[MemoryEntry] = []
             for idx in order:
                 e = self._entries[int(idx)]
                 if agent is not None and e.agent != agent:
                     continue
-                if float(sims[int(idx)]) <= 0:
+                if e.feedback == "bad":
+                    continue
+                adjusted = _adjust_score(float(sims[int(idx)]), e)
+                if adjusted <= 0:
                     continue
                 picked.append(e)
                 if len(picked) >= k:
@@ -324,12 +472,43 @@ class EmbeddingMemoryStore:
     ) -> list[MemoryEntry]:
         with self._lock:
             entries, _ = self._load_entries_raw()
-        candidates = [e for e in entries if agent is None or e.agent == agent]
+        candidates = _feedback_filter(
+            [e for e in entries if agent is None or e.agent == agent]
+        )
         scored = [
-            (_token_similarity(query, e.index_text()), e) for e in candidates
+            (_adjust_score(_token_similarity(query, e.index_text()), e), e)
+            for e in candidates
         ]
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [e for score, e in scored[:k] if score > 0]
+
+    def annotate(
+        self,
+        task_id: str,
+        feedback: Optional[str] = None,
+        correction: Optional[str] = None,
+    ) -> bool:
+        """Rewrite the embedding-store file with one entry updated.
+        Vectors are preserved — annotation doesn't invalidate them
+        because ``index_text()`` only depends on the entry text and
+        corrections, both of which stay attached to the same row."""
+        with self._lock:
+            entries, vecs = self._load_entries_raw()
+            found = False
+            for entry in entries:
+                if entry.task_id == task_id:
+                    _apply_annotation(entry, feedback, correction)
+                    found = True
+                    break
+            if not found:
+                return False
+            tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                for entry, vec in zip(entries, vecs):
+                    f.write(json.dumps({"entry": asdict(entry), "vec": vec}) + "\n")
+            tmp.replace(self.path)
+            self._dirty = True
+            return True
 
 
 def render_memory_block(entries: list[MemoryEntry]) -> str:

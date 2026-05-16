@@ -236,3 +236,153 @@ def test_render_memory_block_includes_each_entry():
     assert "outcome one" in block
     assert "task two" in block
     assert "outcome two" in block
+
+
+# ---------------------------------------------------------------------
+# Feedback annotation
+# ---------------------------------------------------------------------
+
+
+def test_memory_entry_feedback_properties_round_trip():
+    e = _entry()
+    assert e.feedback is None
+    assert e.correction is None
+    e.metadata["feedback"] = "good"
+    e.metadata["correction"] = "use namespace=staging next time"
+    assert e.feedback == "good"
+    assert e.correction == "use namespace=staging next time"
+    # Invalid feedback values are not surfaced.
+    e.metadata["feedback"] = "meh"
+    assert e.feedback is None
+
+
+def test_memory_entry_prompt_block_includes_correction_when_present():
+    e = _entry(nl="delete pod web", summary="approved + deleted")
+    e.metadata["feedback"] = "good"
+    e.metadata["correction"] = "use --force=false next time"
+    block = e.to_prompt_block()
+    assert "(verified by user)" in block
+    assert "User correction: use --force=false next time" in block
+
+
+def test_memory_entry_index_text_includes_correction():
+    e = _entry(nl="delete pod web", summary="deleted")
+    e.metadata["correction"] = "should have checked replicaset first"
+    # Correction is part of the searchable text so a future similar
+    # request retrieves *this* entry over an unannotated one.
+    assert "replicaset" in e.index_text()
+
+
+def test_in_memory_store_annotate_good_boosts_ranking():
+    s = InMemoryMemoryStore()
+    s.write(_entry(task_id="T1", nl="delete pod nginx in default"))
+    s.write(_entry(task_id="T2", nl="delete pod web in default"))
+
+    # Pre-annotation: equal Jaccard scores; ordering is arbitrary.
+    pre = [h.task_id for h in s.search("delete pod foo in default", k=2)]
+    assert set(pre) == {"T1", "T2"}
+
+    # Annotating T2 as good should pull it above T1 on the same query.
+    assert s.annotate(task_id="T2", feedback="good") is True
+    post = [h.task_id for h in s.search("delete pod foo in default", k=2)]
+    assert post[0] == "T2"
+
+
+def test_in_memory_store_annotate_bad_excludes_entry_from_results():
+    s = InMemoryMemoryStore()
+    s.write(_entry(task_id="T1", nl="delete pod nginx"))
+    s.write(_entry(task_id="T2", nl="delete pod web"))
+
+    assert s.annotate(task_id="T1", feedback="bad") is True
+
+    hits = s.search("delete pod something", k=10)
+    ids = [h.task_id for h in hits]
+    assert "T1" not in ids
+    assert "T2" in ids
+
+
+def test_annotate_returns_false_for_unknown_task_id():
+    s = InMemoryMemoryStore()
+    s.write(_entry(task_id="T1"))
+    assert s.annotate(task_id="ghost", feedback="good") is False
+
+
+def test_annotate_clears_feedback_when_none():
+    s = InMemoryMemoryStore()
+    s.write(_entry(task_id="T1"))
+    s.annotate(task_id="T1", feedback="good")
+    assert s.search("list pods", k=1)[0].feedback == "good"
+    s.annotate(task_id="T1", feedback=None)
+    assert s.search("list pods", k=1)[0].feedback is None
+
+
+def test_annotate_rejects_invalid_feedback_value():
+    s = InMemoryMemoryStore()
+    s.write(_entry(task_id="T1"))
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        s.annotate(task_id="T1", feedback="meh")
+
+
+def test_annotate_stores_correction_and_surfaces_in_prompt_block():
+    s = InMemoryMemoryStore()
+    s.write(_entry(task_id="T1", nl="delete pod web"))
+    s.annotate(
+        task_id="T1",
+        feedback="good",
+        correction="check replicaset first; this pod was managed",
+    )
+    [hit] = s.search("delete pod api", k=1)
+    block = hit.to_prompt_block()
+    assert "User correction:" in block
+    assert "check replicaset first" in block
+
+
+def test_annotate_empty_correction_clears_existing():
+    s = InMemoryMemoryStore()
+    s.write(_entry(task_id="T1"))
+    s.annotate(task_id="T1", correction="original advice")
+    s.annotate(task_id="T1", correction="   ")  # whitespace-only
+    [hit] = s.search("list pods", k=1)
+    assert hit.correction is None
+
+
+def test_jsonl_store_annotate_persists_across_instances(tmp_path):
+    path = tmp_path / "memory.jsonl"
+    s1 = JsonlMemoryStore(path)
+    s1.write(_entry(task_id="A", nl="delete pod web"))
+    s1.write(_entry(task_id="B", nl="delete pod api"))
+    assert s1.annotate(task_id="A", feedback="bad") is True
+
+    # New instance on the same file must respect the annotation.
+    s2 = JsonlMemoryStore(path)
+    ids = [h.task_id for h in s2.search("delete pod something", k=5)]
+    assert "A" not in ids
+    assert "B" in ids
+
+
+def test_jsonl_store_annotate_atomic_does_not_corrupt_file(tmp_path):
+    """A failed annotate must leave the original file intact (the
+    temp-rename pattern). We can't easily simulate a mid-write crash
+    in a unit test, but verifying the file still parses cleanly after
+    a successful annotate is the smoke test that proves the rewrite
+    path is sound."""
+    path = tmp_path / "memory.jsonl"
+    s = JsonlMemoryStore(path)
+    for i in range(5):
+        s.write(_entry(task_id=f"T{i}", nl=f"task number {i}"))
+    s.annotate(task_id="T2", feedback="good")
+
+    # File still parses + has all 5 entries.
+    lines = [
+        line for line in path.read_text().splitlines() if line.strip()
+    ]
+    assert len(lines) == 5
+    for line in lines:
+        rec = json.loads(line)  # must parse
+        assert "task_id" in rec
+
+
+def test_null_store_annotate_returns_false():
+    s = NullMemoryStore()
+    assert s.annotate(task_id="T1", feedback="good") is False

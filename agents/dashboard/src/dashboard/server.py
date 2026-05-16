@@ -285,6 +285,9 @@ class DashboardServer:
                     return outer._handle_resolve_approval(
                         self, self.path[len("/approvals/"):]
                     )
+                if self.path.startswith("/memory/") and self.path.endswith("/feedback"):
+                    inner = self.path[len("/memory/"):-len("/feedback")]
+                    return outer._handle_memory_feedback(self, inner)
                 if self.path.startswith("/tools/"):
                     rest = self.path[len("/tools/"):]
                     if "/" in rest:
@@ -519,6 +522,60 @@ class DashboardServer:
             "tool": tool_name,
             "result": result if isinstance(result, (str, int, float, bool, type(None), list, dict)) else str(result),
         })
+
+    def _handle_memory_feedback(
+        self, req: BaseHTTPRequestHandler, task_id: str
+    ) -> None:
+        """Attach user feedback to a memory entry.
+
+        POST body: ``{"feedback": "good" | "bad" | null,
+                      "correction": "..." | null}``
+        Both fields are optional but at least one must be present —
+        a POST with neither is a 400."""
+        memory = getattr(self.orchestrator, "memory", None)
+        if memory is None or not hasattr(memory, "annotate"):
+            return self._send_json(
+                req, 409, {"error": "memory store does not support feedback"}
+            )
+
+        length = int(req.headers.get("Content-Length") or 0)
+        try:
+            raw = req.rfile.read(length).decode("utf-8") if length else "{}"
+            body = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON body"})
+        if not isinstance(body, dict):
+            return self._send_json(
+                req, 400, {"error": "body must be a JSON object"}
+            )
+
+        feedback = body.get("feedback")
+        correction = body.get("correction")
+        if feedback is None and correction is None:
+            return self._send_json(
+                req, 400, {"error": "supply at least one of feedback / correction"}
+            )
+        if feedback is not None and feedback not in ("good", "bad"):
+            return self._send_json(
+                req, 400,
+                {"error": "feedback must be 'good', 'bad', or null"},
+            )
+
+        try:
+            updated = memory.annotate(
+                task_id=task_id, feedback=feedback, correction=correction
+            )
+        except ValueError as exc:
+            return self._send_json(req, 400, {"error": str(exc)})
+        except Exception as exc:
+            logger.warning("memory annotate failed: %s", exc)
+            return self._send_json(req, 500, {"error": "annotate failed"})
+
+        if not updated:
+            return self._send_json(
+                req, 404, {"error": f"no memory entry for task_id {task_id!r}"}
+            )
+        return self._send_json(req, 200, {"updated": True, "task_id": task_id})
 
     def _handle_list_memory(self, req: BaseHTTPRequestHandler) -> None:
         """List recent memory entries.
