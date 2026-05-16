@@ -60,8 +60,21 @@ export function ApprovalsPanel(): JSX.Element {
             >
               {a.rationale}
             </div>
-            <CodeBlock text={JSON.stringify(a.args, null, 2)} maxHeight="120px" />
-            {a.diff && <CodeBlock text={a.diff} language="diff" maxHeight="200px" />}
+            {/* When a diff preview is present (write_file / edit_file)
+                make it the headline view; the raw args dict is folded
+                into a collapsible because it's already encoded in the
+                diff. */}
+            {a.diff ? (
+              <>
+                <CodeBlock text={a.diff} language="diff" maxHeight="260px" />
+                <details className="text-[10px] text-text-muted">
+                  <summary className="cursor-pointer hover:text-text-secondary">raw args</summary>
+                  <CodeBlock text={JSON.stringify(a.args, null, 2)} maxHeight="120px" />
+                </details>
+              </>
+            ) : (
+              <CodeBlock text={JSON.stringify(a.args, null, 2)} maxHeight="160px" />
+            )}
             <div className="actions flex gap-2 pt-1">
               <Button
                 variant="primary"

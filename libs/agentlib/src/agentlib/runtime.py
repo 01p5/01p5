@@ -80,6 +80,7 @@ def _wrap_one(
                 tool=inner.name,
                 args=kwargs,
                 rationale=f"{spec.name} requesting {inner.name}",
+                diff=_preview_diff(inner.name, kwargs),
             )
             audit.log_tool_call(
                 task_id=task_id,
@@ -168,6 +169,73 @@ def _truncate(value: Any, limit: int = 4000) -> Any:
     if isinstance(value, str) and len(value) > limit:
         return value[:limit] + "…[truncated]"
     return value
+
+
+# ---------------------------------------------------------------------------
+# Diff preview for file-mutating tools
+# ---------------------------------------------------------------------------
+
+def _preview_diff(tool_name: str, args: dict[str, Any]) -> Optional[str]:
+    """Return a unified diff for a file-mutating tool BEFORE it runs, so
+    the approval card shows the reviewer exactly what's going to change.
+
+    Two diff-able tools today:
+      - write_file(path, content): diff between current file (or empty)
+        and proposed content.
+      - edit_file(path, old_string, new_string, replace_all): diff
+        between current file and what `.replace()` would produce.
+
+    Returns None for tools we don't know how to preview, or when the
+    preview computation throws — the approval still happens, just
+    without the diff hint.
+    """
+    import difflib
+    from pathlib import Path
+
+    try:
+        if tool_name == "write_file":
+            path = args.get("path", "")
+            new = args.get("content", "")
+            old = ""
+            try:
+                p = Path(path).expanduser()
+                if p.is_file():
+                    old = p.read_text()
+            except Exception:
+                pass
+            return _unified_diff(old, new, path)
+        if tool_name == "edit_file":
+            path = args.get("path", "")
+            old_string = args.get("old_string", "")
+            new_string = args.get("new_string", "")
+            replace_all = bool(args.get("replace_all", False))
+            try:
+                current = Path(path).expanduser().read_text()
+            except Exception:
+                return None
+            proposed = (
+                current.replace(old_string, new_string)
+                if replace_all
+                else current.replace(old_string, new_string, 1)
+            )
+            return _unified_diff(current, proposed, path)
+    except Exception:
+        return None
+    return None
+
+
+def _unified_diff(old: str, new: str, path: str) -> str:
+    import difflib
+    diff_lines = list(difflib.unified_diff(
+        old.splitlines(keepends=True),
+        new.splitlines(keepends=True),
+        fromfile=f"a/{path}",
+        tofile=f"b/{path}",
+        n=3,
+    ))
+    if not diff_lines:
+        return "(no textual difference)"
+    return "".join(diff_lines)
 
 
 # ---------------------------------------------------------------------------
