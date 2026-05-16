@@ -262,7 +262,9 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 - [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md) — the `AgentSpec` contract every agent implements.
 - [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md) — why the bus looks the way it does (in-memory default, Redis Streams optional).
 - [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) — runbook for the live deployment, every endpoint, what's been exercised, known issues.
+- [`docs/INTELLIGENCE_LAYER.md`](docs/INTELLIGENCE_LAYER.md) — depth doc for memory + feedback + rollback + telemetry: design decisions, ranking math, prompt-injection mitigations.
 - [`docs/MCP.md`](docs/MCP.md) — Model Context Protocol integration walkthrough + worked example.
+- [`docs/DEMO.md`](docs/DEMO.md) — 14-minute class-presentation script exercising every shipped feature in order.
 - [`infra/demo-mcp-server/`](infra/demo-mcp-server/) — pure-Python stdio MCP server for demos / smoke tests.
 - [`infra/k8s/README.md`](infra/k8s/README.md) — the Helm chart's deploy story.
 
