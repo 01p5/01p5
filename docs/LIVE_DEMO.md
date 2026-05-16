@@ -91,6 +91,7 @@ Every check below ran end-to-end against the real cluster. ✅ = passed.
 | 9 | Browser E2E suite (5 tests via headless Chromium) | ✅ All 5 pass in ~46s — see below. |
 | 10 | Direct tool invocation via `/tools` + UI Tools tab | ✅ Every agent's tool catalogued at `GET /tools`; `POST /tools/{agent}/{tool}` runs through the same `gate_tools` so destructive ops still queue an approval card. UI exposes a form per tool. |
 | 11 | Chat-centric UI redesign | ✅ 3-column layout: live bus on the left, streaming chat in the center, approval queue + audit on the right. SSE filtered by `task_id` so each turn streams as the orchestrator → agent → result events arrive. |
+| 12 | Real React+TS+Vite frontend with 5 product-style pages | ✅ Tabs: **Chat** / **Kubernetes** / **Terraform** / **Ansible** / **Programmer**. Kubernetes page has pod/node/event tables with inline `logs` / `describe` / `delete` buttons; Terraform page renders stack cards with `init` / `validate` / `plan` / `apply` flow (plan modal includes an "Apply this plan" header action that fires `tf_apply`); Ansible page lists playbooks with `check` / `run`; Programmer page is three generators (Dockerfile / docker-compose / Helm values) with previews + save-to-file via the gated `write_file`. Dark "security console" palette ported from Artemis (Outfit + JetBrains Mono, near-black backgrounds, neon-green accent). Multi-stage Docker build (node:20-alpine vite → python:3.12-slim) bakes the SPA into the image at `static/dist/`. |
 
 ## E2E browser tests
 

@@ -5,3 +5,8 @@
 **/*.pyc
 **/.pytest_cache
 .olympus-data
+# Frontend artifacts — multi-stage build does the npm install + vite
+# build itself; don't ship local node_modules/dist into the build
+# context.
+agents/dashboard/frontend/node_modules
+agents/dashboard/static/dist

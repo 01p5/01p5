@@ -1,22 +1,27 @@
-# Olympus dev image — agentlib + sysadmin agent.
+# Olympus dashboard image.
 #
-# This is a *dev* image (W1-2): one container with kubectl + the lean
-# test set installed (langchain.tools + pydantic, same as CI). It's
-# enough to exercise the AgentSpec contract, tool-gating, the in-memory
-# bus, and the sysadmin smoke tests.
+# Two stages:
+#   1. frontend-build (node:20-alpine) — runs vite to produce the SPA
+#      under agents/dashboard/static/dist/.
+#   2. python:3.12-slim — installs agentlib + every agent + the
+#      dashboard server, copies in the built SPA, and exposes :8765.
 #
-# It is NOT enough to run the LLM-backed ``StructuralAgent.invoke()``
-# path — that needs langchain>=1.0 + olympus_telemetry, neither of
-# which is on PyPI yet. To enable it locally:
-#
-#   docker compose build --build-arg INSTALL_LLM_STACK=1
-#
-# (You'll also need olympus_telemetry available — bind-mount it or
-# publish it first.)
-#
-# Production per-agent images are W5-6 work and will live alongside
-# each agent.
+# Build:
+#   docker build -t olympus/dashboard:dev .                          # lean (no LLM stack)
+#   docker build -t olympus/dashboard:llm --build-arg INSTALL_LLM_STACK=1 .
 
+# ---------- stage 1: frontend ----------
+FROM node:20-alpine AS frontend-build
+WORKDIR /build
+COPY agents/dashboard/frontend/package.json agents/dashboard/frontend/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci --silent; else npm install --silent; fi
+COPY agents/dashboard/frontend/ ./
+RUN npm run build
+# Output lands at /build/../static/dist relative to vite.config.ts,
+# i.e. /static/dist after the COPY layout. Re-copy to a known path.
+RUN mkdir -p /spa && cp -r /static/dist/. /spa/
+
+# ---------- stage 2: backend ----------
 FROM python:3.12-slim
 
 ARG KUBECTL_VERSION=v1.30.0
@@ -78,6 +83,10 @@ RUN pip install --no-cache-dir --no-deps -e ./libs/agentlib \
  && pip install --no-cache-dir --no-deps -e ./agents/ansible \
  && pip install --no-cache-dir --no-deps -e ./agents/olympus_cli \
  && pip install --no-cache-dir --no-deps -e ./agents/dashboard
+
+# Drop the Vite-built SPA bundle on top of the python source tree.
+# DashboardServer auto-picks static/dist when present.
+COPY --from=frontend-build /spa /opt/olympus/agents/dashboard/static/dist
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8765

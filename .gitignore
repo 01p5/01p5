@@ -15,3 +15,8 @@ infra/terraform/deployment/
 *.tfstate
 *.tfstate.*
 *.pem
+
+# Frontend
+agents/dashboard/frontend/node_modules
+agents/dashboard/static/dist
+agents/dashboard/frontend/tsconfig.tsbuildinfo

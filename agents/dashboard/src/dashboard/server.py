@@ -116,7 +116,14 @@ class DashboardServer:
         self.bus = bus
         self.approval_hook = approval_hook
         self.audit_log_path = audit_log_path
-        self.static_dir = static_dir or Path(__file__).resolve().parent.parent.parent / "static"
+        # Static dir resolution: the Vite-built SPA at static/dist/ is
+        # the preferred source. Fall back to legacy static/ if dist/
+        # doesn't exist (e.g. dev test without a frontend build).
+        if static_dir is not None:
+            self.static_dir = static_dir
+        else:
+            base = Path(__file__).resolve().parent.parent.parent / "static"
+            self.static_dir = base / "dist" if (base / "dist").is_dir() else base
 
         self._tasks: dict[str, TaskRecord] = {}
         self._tasks_lock = threading.Lock()
@@ -254,8 +261,16 @@ class DashboardServer:
                     return outer._handle_list_ansible_playbooks(self)
                 if path.startswith("/static/"):
                     return outer._serve_static(self, path[len("/static/"):])
-                self.send_response(404)
-                self.end_headers()
+                # Vite-built hashed assets live under /assets/.
+                if path.startswith("/assets/"):
+                    return outer._serve_static(self, path.lstrip("/"))
+                # Top-level static files Vite may emit (favicon, vite.svg, etc).
+                if path in ("/favicon.svg", "/favicon.ico", "/vite.svg"):
+                    return outer._serve_static(self, path.lstrip("/"))
+                # SPA fallback — any unmatched GET serves index.html so
+                # client-side routes (/chat, /kubernetes, /terraform, …)
+                # work on a hard refresh.
+                return outer._serve_static(self, "index.html")
 
             def do_POST(self):  # noqa: N802
                 if self.path == "/tasks":
@@ -291,8 +306,15 @@ class DashboardServer:
         return json.loads(req.rfile.read(length) or b"{}")
 
     def _serve_static(self, req: BaseHTTPRequestHandler, name: str) -> None:
-        path = self.static_dir / name
-        if not path.is_file() or self.static_dir.resolve() not in path.resolve().parents and path.resolve() != (self.static_dir / name).resolve():
+        path = (self.static_dir / name).resolve()
+        # Path-traversal defense: requested path must be inside static_dir.
+        try:
+            path.relative_to(self.static_dir.resolve())
+        except ValueError:
+            req.send_response(404)
+            req.end_headers()
+            return
+        if not path.is_file():
             req.send_response(404)
             req.end_headers()
             return
@@ -302,6 +324,11 @@ class DashboardServer:
             ".js": "application/javascript; charset=utf-8",
             ".css": "text/css; charset=utf-8",
             ".json": "application/json",
+            ".svg": "image/svg+xml",
+            ".png": "image/png",
+            ".ico": "image/x-icon",
+            ".woff": "font/woff",
+            ".woff2": "font/woff2",
         }.get(ext, "application/octet-stream")
         self._serve_static_file(req, path, content_type=ctype, allow_missing=False)
 
