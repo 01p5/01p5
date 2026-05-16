@@ -94,28 +94,36 @@ export function ChatPage(): JSX.Element {
     return () => clearInterval(id);
   }, []);
 
-  const send = async (e: React.FormEvent): Promise<void> => {
-    e.preventDefault();
-    const text = input.trim();
-    if (!text || sending) return;
+  // Single submission path used by both the form's onSubmit and the
+  // empty-state example buttons. Takes the text directly so the
+  // examples don't need to round-trip through React's controlled-input
+  // setter (which doesn't fire from a direct DOM mutation).
+  const submit = async (text: string): Promise<void> => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
     setSending(true);
     try {
-      const { task_id } = await api.submitTask(text);
+      const { task_id } = await api.submitTask(trimmed);
       const turn: Turn = {
-        task_id, user: text, status: "pending",
+        task_id, user: trimmed, status: "pending",
         approvalsPending: 0, submitted: Date.now(),
       };
       setTurns((prev) => [...prev, turn]);
       setInput("");
     } catch (err) {
       setTurns((prev) => [...prev, {
-        task_id: `error-${Date.now()}`, user: text, status: "failed",
+        task_id: `error-${Date.now()}`, user: trimmed, status: "failed",
         error: (err as Error).message, approvalsPending: 0, submitted: Date.now(),
       }]);
     } finally {
       setSending(false);
       inputRef.current?.focus();
     }
+  };
+
+  const send = (e: React.FormEvent): void => {
+    e.preventDefault();
+    void submit(input);
   };
 
   return (
@@ -139,7 +147,7 @@ export function ChatPage(): JSX.Element {
         id="chat-stream"
         className="flex-1 overflow-auto px-6 py-8 space-y-6"
       >
-        {turns.length === 0 && <EmptyChat />}
+        {turns.length === 0 && <EmptyChat onPick={submit} />}
         {turns.map((t) => <TurnView key={t.task_id} turn={t} />)}
       </div>
 
@@ -177,7 +185,7 @@ export function ChatPage(): JSX.Element {
   );
 }
 
-function EmptyChat(): JSX.Element {
+function EmptyChat({ onPick }: { onPick: (text: string) => void }): JSX.Element {
   const examples = [
     "list pods in default namespace",
     "describe the olympus-olympus pod and show its last 50 log lines",
@@ -203,14 +211,7 @@ function EmptyChat(): JSX.Element {
         {examples.map((ex) => (
           <button
             key={ex}
-            onClick={() => {
-              const el = document.getElementById("task-input") as HTMLInputElement | null;
-              if (el) {
-                el.value = ex;
-                el.dispatchEvent(new Event("input", { bubbles: true }));
-                el.focus();
-              }
-            }}
+            onClick={() => onPick(ex)}
             className="text-sm bg-dark-panel border border-border-subtle hover:border-accent-green/40 hover:text-text-primary text-text-secondary rounded-md px-3 py-2.5 transition-colors"
           >
             {ex}
