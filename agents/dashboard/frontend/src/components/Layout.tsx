@@ -5,6 +5,7 @@ import { StatusDot } from "./StatusDot";
 import { BusSidebar } from "./BusSidebar";
 import { ApprovalsPanel } from "./ApprovalsPanel";
 import { AuditPanel } from "./AuditPanel";
+import { RollbackPanel } from "./RollbackPanel";
 
 const TABS = [
   { to: "/chat",       label: "Chat",       icon: MessageSquare },
@@ -59,8 +60,9 @@ export function Layout(): JSX.Element {
         <div className="min-h-0 overflow-hidden flex flex-col">
           <Outlet />
         </div>
-        <aside className="bg-dark-secondary border-l border-border-subtle grid grid-rows-[1fr_1fr] min-h-0">
+        <aside className="bg-dark-secondary border-l border-border-subtle grid grid-rows-3 min-h-0">
           <ApprovalsPanel />
+          <RollbackPanel />
           <AuditPanel />
         </aside>
       </main>

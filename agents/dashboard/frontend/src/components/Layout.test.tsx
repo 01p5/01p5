@@ -22,6 +22,7 @@ beforeEach(() => {
   vi.spyOn(api, "health").mockResolvedValue({ ok: true });
   vi.spyOn(api, "listApprovals").mockResolvedValue([]);
   vi.spyOn(api, "audit").mockResolvedValue([]);
+  vi.spyOn(api, "listRollbacks").mockResolvedValue([]);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -77,5 +78,13 @@ describe("Layout", () => {
     expect(screen.getByRole("link", { name: /chat/i })).not.toHaveAttribute("aria-current");
     // And the Outlet swapped.
     expect(screen.getByText("k8s-content")).toBeInTheDocument();
+  });
+
+  it("right sidebar surfaces the three intelligence-layer panels", async () => {
+    renderLayout("/chat");
+    // Approvals + Rollback + Audit panels are all mounted in the right column.
+    await waitFor(() => expect(screen.getByText(/approval queue/i)).toBeInTheDocument());
+    expect(screen.getByText(/rollback queue/i)).toBeInTheDocument();
+    expect(screen.getByText(/audit log/i)).toBeInTheDocument();
   });
 });

@@ -79,3 +79,35 @@ export interface ToolInvokeResponse {
   result: unknown;
   error?: string;
 }
+
+export interface MemoryEntry {
+  task_id: string;
+  agent: string;
+  natural_language: string;
+  summary: string;
+  status: "success" | "failed" | "rejected" | "cancelled";
+  ts: number;
+  metadata: {
+    feedback?: "good" | "bad";
+    correction?: string;
+    wall_seconds?: number;
+    total_usd?: number;
+    [k: string]: unknown;
+  };
+}
+
+export interface RollbackEntry {
+  rollback_id: string;
+  task_id: string;
+  agent: string;
+  forward_tool: string;
+  forward_args: Record<string, unknown>;
+  inverse_tool: string;
+  inverse_args: Record<string, unknown>;
+  description: string;
+  snapshot: Record<string, unknown>;
+  ts: number;
+  executed: boolean;
+  executed_ts: number | null;
+  executed_result: string | null;
+}

@@ -173,3 +173,106 @@ describe("error path", () => {
     await expect(api.health()).rejects.toThrow(/404 Not Found/);
   });
 });
+
+describe("api.listMemory", () => {
+  it("GETs /memory with no params when called bare", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ json: { entries: [] } }),
+    );
+    const out = await api.listMemory();
+    expect(fetchMock).toHaveBeenCalledWith("/memory");
+    expect(out).toEqual([]);
+  });
+
+  it("encodes q, agent, and k as query params", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ json: { entries: [{ task_id: "T1" }] } }),
+    );
+    await api.listMemory({ q: "delete pod web", agent: "sysadmin", k: 5 });
+    const url = (fetchMock.mock.calls[0]?.[0] ?? "") as string;
+    expect(url).toContain("/memory?");
+    expect(url).toContain("q=delete+pod+web");
+    expect(url).toContain("agent=sysadmin");
+    expect(url).toContain("k=5");
+  });
+
+  it("unwraps the `entries` envelope into a list", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ json: { entries: [{ task_id: "T1" }, { task_id: "T2" }] } }),
+    );
+    const out = await api.listMemory();
+    expect(out).toHaveLength(2);
+    expect(out[0]?.task_id).toBe("T1");
+  });
+});
+
+describe("api.memoryFeedback", () => {
+  it("POSTs the feedback body to /memory/{id}/feedback", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ json: { updated: true, task_id: "T1" } }),
+    );
+    const out = await api.memoryFeedback("T1", { feedback: "good" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/memory/T1/feedback",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ feedback: "good" }),
+      }),
+    );
+    expect(out.updated).toBe(true);
+  });
+
+  it("URL-encodes task ids with colons", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ json: { updated: true, task_id: "P:0" } }),
+    );
+    await api.memoryFeedback("P:0", { correction: "use staging" });
+    const url = (fetchMock.mock.calls[0]?.[0] ?? "") as string;
+    expect(url).toBe("/memory/P%3A0/feedback");
+  });
+});
+
+describe("api.listRollbacks", () => {
+  it("GETs /rollback with no params when called bare", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ json: { entries: [] } }),
+    );
+    await api.listRollbacks();
+    expect(fetchMock).toHaveBeenCalledWith("/rollback");
+  });
+
+  it("encodes task_id and k as query params", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ json: { entries: [] } }),
+    );
+    await api.listRollbacks({ task_id: "P:0", k: 10 });
+    const url = (fetchMock.mock.calls[0]?.[0] ?? "") as string;
+    expect(url).toContain("task_id=P%3A0");
+    expect(url).toContain("k=10");
+  });
+});
+
+describe("api.executeRollback", () => {
+  it("POSTs /rollback/{id}/execute with an empty body", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        json: {
+          rollback_id: "RB1",
+          task_id: "rollback:RB1",
+          agent: "programmer",
+          tool: "write_file",
+          result: "ok",
+        },
+      }),
+    );
+    const out = await api.executeRollback("RB1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/rollback/RB1/execute",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(out.tool).toBe("write_file");
+  });
+});

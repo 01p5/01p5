@@ -236,3 +236,118 @@ describe("CollapsibleProse via ChatPage", () => {
     expect(await screen.findByText(/show less/i)).toBeInTheDocument();
   });
 });
+
+
+describe("ChatPage — settled-turn intelligence layer", () => {
+  // The new MemoryChips + FeedbackButtons should render under the
+  // assistant bubble once the turn settles, and stay absent while it's
+  // still running.
+
+  it("settled turn renders the FeedbackButtons (👍/👎/✎)", async () => {
+    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-fb" });
+    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+    render(<ChatPage />);
+
+    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
+    await userEvent.type(input, "do thing");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+
+    // While still running, the feedback controls are absent.
+    expect(screen.queryByRole("button", { name: /mark as good/i })).toBeNull();
+
+    const src = MockEventSource.latest!;
+    await act(async () => {
+      src.onmessage?.({
+        data: JSON.stringify({
+          msg_id: "m1", task_id: "task-fb",
+          sender: "agent", recipient: "orchestrator", kind: "result",
+          timestamp: 1,
+          payload: { status: "success", summary: "Did the thing." },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /mark as good/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: /mark as bad/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add correction/i })).toBeInTheDocument();
+  });
+
+  it("settled turn renders MemoryChips when prior runs exist", async () => {
+    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-mem" });
+    vi.spyOn(api, "listMemory").mockResolvedValue([
+      {
+        task_id: "T-prior",
+        agent: "sysadmin",
+        natural_language: "list pods in default",
+        summary: "found 3",
+        status: "success",
+        ts: 0,
+        metadata: {},
+      },
+    ]);
+    render(<ChatPage />);
+    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
+    await userEvent.type(input, "list pods");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+
+    const src = MockEventSource.latest!;
+    await act(async () => {
+      src.onmessage?.({
+        data: JSON.stringify({
+          msg_id: "m2", task_id: "task-mem",
+          sender: "agent", recipient: "orchestrator", kind: "result",
+          timestamp: 1,
+          payload: { status: "success", summary: "found 3 pods" },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() => expect(screen.getByText(/seen before/i)).toBeInTheDocument());
+    expect(screen.getByText("list pods in default")).toBeInTheDocument();
+  });
+
+  it("a still-running turn does NOT render the intelligence-layer widgets", async () => {
+    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-r" });
+    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+    render(<ChatPage />);
+
+    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
+    await userEvent.type(input, "x");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+
+    // Still pending → no feedback, no chips.
+    await waitFor(() => screen.getByText(/picking the right agent/i));
+    expect(screen.queryByRole("button", { name: /mark as good/i })).toBeNull();
+    expect(screen.queryByText(/seen before/i)).toBeNull();
+  });
+
+  it("failed turn shows the feedback buttons too (so users can flag bad outcomes)", async () => {
+    // Whether a failed turn needs feedback is a design call — we
+    // choose YES because a thumbs-down on a wrong-answer is at least
+    // as valuable as a thumbs-up on a right one.
+    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-fail" });
+    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+    render(<ChatPage />);
+    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
+    await userEvent.type(input, "break things");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
+
+    const src = MockEventSource.latest!;
+    await act(async () => {
+      src.onmessage?.({
+        data: JSON.stringify({
+          msg_id: "m3", task_id: "task-fail",
+          sender: "agent", recipient: "orchestrator", kind: "result",
+          timestamp: 1,
+          payload: { status: "failed", summary: "could not break things" },
+        }),
+      } as MessageEvent<string>);
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /mark as bad/i })).toBeInTheDocument(),
+    );
+  });
+});

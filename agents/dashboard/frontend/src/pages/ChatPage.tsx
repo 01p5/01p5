@@ -5,6 +5,8 @@ import ReactMarkdown from "react-markdown";
 import { api } from "../api";
 import { useSSE } from "../hooks/useSSE";
 import type { BusEvent, TaskRecord } from "../types";
+import { MemoryChips } from "../components/MemoryChips";
+import { FeedbackButtons } from "../components/FeedbackButtons";
 
 // exported for tests
 export interface Turn {
@@ -250,6 +252,14 @@ function EmptyChat({ onPick }: { onPick: (text: string) => void }): JSX.Element 
 }
 
 function TurnView({ turn }: { turn: Turn }): JSX.Element {
+  // The W7-8 intelligence layer (memory retrieval, feedback, rollback)
+  // only makes sense on settled turns — a still-running turn has no
+  // memory entry to give feedback on, and the retrieval at submit time
+  // is what shaped the agent's reply, so we surface it post-hoc.
+  const settled = turn.status === "success"
+    || turn.status === "failed"
+    || turn.status === "rejected";
+
   return (
     <div className="space-y-3">
       {/* User bubble — right-aligned */}
@@ -271,12 +281,22 @@ function TurnView({ turn }: { turn: Turn }): JSX.Element {
           </div>
           <div className="flex-1">
             <AssistantBody turn={turn} />
+            {settled && turn.summary && (
+              <MemoryChips
+                taskId={turn.task_id}
+                query={turn.user}
+                agent={turn.agent}
+              />
+            )}
             <div className="text-[10px] font-mono text-text-muted mt-1 pl-1">
               {new Date(turn.submitted).toLocaleTimeString()}
               {" · "}
               <code>{turn.task_id.slice(0, 8)}</code>
               {turn.agent && <> · agent: {turn.agent}</>}
             </div>
+            {settled && turn.summary && (
+              <FeedbackButtons taskId={turn.task_id} />
+            )}
           </div>
         </div>
       </div>

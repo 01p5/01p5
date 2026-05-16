@@ -5,7 +5,9 @@
 import type {
   AuditRecord,
   HealthResponse,
+  MemoryEntry,
   PendingApproval,
+  RollbackEntry,
   TaskRecord,
   ToolDescriptor,
   ToolInvokeResponse,
@@ -82,4 +84,46 @@ export const api = {
   // Infra catalog
   terraformStacks: (): Promise<string[]> => getJson("/stacks/terraform"),
   ansiblePlaybooks: (): Promise<string[]> => getJson("/stacks/ansible"),
+
+  // Memory (retrieval + feedback)
+  listMemory: async (params?: {
+    q?: string;
+    agent?: string;
+    k?: number;
+  }): Promise<MemoryEntry[]> => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.agent) qs.set("agent", params.agent);
+    if (params?.k) qs.set("k", String(params.k));
+    const path = qs.toString() ? `/memory?${qs.toString()}` : "/memory";
+    const body = await getJson<{ entries: MemoryEntry[] }>(path);
+    return body.entries;
+  },
+  memoryFeedback: (
+    taskId: string,
+    body: { feedback?: "good" | "bad" | null; correction?: string | null },
+  ): Promise<{ updated: true; task_id: string }> =>
+    postJson(`/memory/${encodeURIComponent(taskId)}/feedback`, body),
+
+  // Rollback (list + execute the captured inverse)
+  listRollbacks: async (params?: {
+    task_id?: string;
+    k?: number;
+  }): Promise<RollbackEntry[]> => {
+    const qs = new URLSearchParams();
+    if (params?.task_id) qs.set("task_id", params.task_id);
+    if (params?.k) qs.set("k", String(params.k));
+    const path = qs.toString() ? `/rollback?${qs.toString()}` : "/rollback";
+    const body = await getJson<{ entries: RollbackEntry[] }>(path);
+    return body.entries;
+  },
+  executeRollback: (
+    rollbackId: string,
+  ): Promise<{
+    rollback_id: string;
+    task_id: string;
+    agent: string;
+    tool: string;
+    result: unknown;
+  }> => postJson(`/rollback/${encodeURIComponent(rollbackId)}/execute`, {}),
 };
