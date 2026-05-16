@@ -44,6 +44,7 @@ function renderLayout(initial = "/chat"): void {
           <Route path="terraform" element={<div>tf-content</div>} />
           <Route path="ansible" element={<div>ansible-content</div>} />
           <Route path="programmer" element={<div>prog-content</div>} />
+          <Route path="mcp" element={<div>mcp-content</div>} />
         </Route>
       </Routes>
     </MemoryRouter>,
@@ -51,10 +52,10 @@ function renderLayout(initial = "/chat"): void {
 }
 
 describe("Layout", () => {
-  it("renders all 5 tabs and the Olympus brand", () => {
+  it("renders all 6 tabs and the Olympus brand", () => {
     renderLayout();
     expect(screen.getByText(/^olympus$/i)).toBeInTheDocument();
-    ["Chat", "Kubernetes", "Terraform", "Ansible", "Programmer"].forEach((label) => {
+    ["Chat", "Kubernetes", "Terraform", "Ansible", "Programmer", "MCP"].forEach((label) => {
       expect(screen.getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
     });
   });

@@ -293,3 +293,39 @@ describe("api.telemetry", () => {
     expect(out.totals.settled).toBe(1);
   });
 });
+
+describe("api.listMcpServers", () => {
+  it("GETs /mcp/servers and unwraps the {servers:[...]} envelope", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      json: {
+        servers: [
+          { name: "fs", target_agent: "programmer", tool_count: 3, tools: ["a", "b", "c"], destructive: [], status: "connected", command: "x", error: null },
+        ],
+      },
+    }));
+    const out = await api.listMcpServers();
+    expect(fetchMock).toHaveBeenCalledWith("/mcp/servers");
+    expect(out).toHaveLength(1);
+    expect(out[0]?.name).toBe("fs");
+  });
+});
+
+describe("api.getMcpServerTools", () => {
+  it("GETs /mcp/servers/{name}/tools", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      json: { name: "fs", tools: [{ name: "read", description: "x", inputSchema: {} }] },
+    }));
+    const out = await api.getMcpServerTools("fs");
+    expect(fetchMock).toHaveBeenCalledWith("/mcp/servers/fs/tools");
+    expect(out.tools[0]?.name).toBe("read");
+  });
+
+  it("URL-encodes server names with special chars", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      json: { name: "a/b", tools: [] },
+    }));
+    await api.getMcpServerTools("a/b");
+    const url = (fetchMock.mock.calls[0]?.[0] ?? "") as string;
+    expect(url).toBe("/mcp/servers/a%2Fb/tools");
+  });
+});

@@ -1242,3 +1242,240 @@ def test_telemetry_endpoint_ignores_in_flight_tasks_in_settled_totals():
         blocking.event.set()
     finally:
         srv.shutdown()
+
+
+# ---------------------------------------------------------------------
+# /mcp/servers endpoints
+# ---------------------------------------------------------------------
+
+from agentlib import (  # noqa: E402
+    MCPClient,
+    MCPServerConfig,
+    MockTransport,
+)
+
+
+def _mcp_registry_server(mcp_servers: list[dict] | None = None) -> DashboardServer:
+    """A bare server with the rb agent plus an arbitrary MCP registry."""
+    bus = InMemoryBus()
+    ctx = AgentContext(approval=AlwaysApprove(), audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[_RollbackAgent()], ctx=ctx,
+        router=ManualRouter(default="rb"),
+        result_timeout_seconds=2.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
+        host="127.0.0.1", port=0,
+        mcp_servers=mcp_servers or [],
+    )
+    srv.serve()
+    return srv
+
+
+def test_mcp_servers_endpoint_returns_empty_when_no_registry():
+    srv = _mcp_registry_server()
+    try:
+        status, body = _get(srv, "/mcp/servers")
+        assert status == 200
+        assert body == {"servers": []}
+    finally:
+        srv.shutdown()
+
+
+def test_mcp_servers_endpoint_returns_registered_servers():
+    registry = [
+        {
+            "name": "filesystem",
+            "target_agent": "programmer",
+            "command_summary": "npx fs-server /tmp",
+            "destructive": {"write_file"},
+            "status": "connected",
+            "tools": [
+                {"name": "read", "description": "Read a file", "inputSchema": {}},
+                {"name": "write_file", "description": "Write a file", "inputSchema": {}},
+            ],
+            "error": None,
+        },
+        {
+            "name": "github",
+            "target_agent": "programmer",
+            "command_summary": "gh-mcp-server",
+            "destructive": set(),
+            "status": "error",
+            "tools": [],
+            "error": "ECONNREFUSED",
+        },
+    ]
+    srv = _mcp_registry_server(mcp_servers=registry)
+    try:
+        status, body = _get(srv, "/mcp/servers")
+        assert status == 200
+        servers = body["servers"]
+        assert len(servers) == 2
+        by_name = {s["name"]: s for s in servers}
+        # Connected server has 2 tools + destructive set as sorted list.
+        fs = by_name["filesystem"]
+        assert fs["tool_count"] == 2
+        assert fs["tools"] == ["read", "write_file"]
+        assert fs["destructive"] == ["write_file"]
+        assert fs["status"] == "connected"
+        assert fs["error"] is None
+        # Failed server exposes the error in the payload.
+        gh = by_name["github"]
+        assert gh["status"] == "error"
+        assert gh["error"] == "ECONNREFUSED"
+    finally:
+        srv.shutdown()
+
+
+def test_mcp_server_tools_returns_full_descriptor():
+    """The tools-per-server endpoint must surface the full descriptor
+    (description + inputSchema) so the UI can render arg fields."""
+    registry = [{
+        "name": "fs",
+        "target_agent": "programmer",
+        "command_summary": "",
+        "destructive": set(),
+        "status": "connected",
+        "tools": [
+            {
+                "name": "stat",
+                "description": "Filesystem stat",
+                "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            },
+        ],
+        "error": None,
+    }]
+    srv = _mcp_registry_server(mcp_servers=registry)
+    try:
+        status, body = _get(srv, "/mcp/servers/fs/tools")
+        assert status == 200
+        assert body["name"] == "fs"
+        [tool] = body["tools"]
+        assert tool["name"] == "stat"
+        assert tool["description"] == "Filesystem stat"
+        assert tool["inputSchema"]["properties"]["path"]["type"] == "string"
+    finally:
+        srv.shutdown()
+
+
+def test_mcp_server_tools_unknown_name_returns_404():
+    srv = _mcp_registry_server()
+    try:
+        status, body = _get(srv, "/mcp/servers/ghost/tools")
+        assert status == 404
+        assert "ghost" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_wire_mcp_servers_registers_tools_on_target_agent():
+    """The startup wiring path connects, lists, and lifts destructive
+    names. Use a MockTransport to keep the test in-process."""
+    from dashboard.server import _wire_mcp_servers
+
+    # Mock MCP server with 2 tools, one flagged destructive.
+    def handler(msg):
+        method = msg.get("method")
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": msg["id"], "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "mock", "version": "0.0.1"},
+            }}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": msg["id"], "result": {
+                "tools": [
+                    {"name": "read", "description": "R", "inputSchema": {"type": "object"}},
+                    {"name": "write", "description": "W", "inputSchema": {"type": "object"}},
+                ],
+            }}
+        return {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "?"}}
+
+    client = MCPClient(MockTransport(handler))
+    client.initialize()
+
+    rb = _RollbackAgent()
+    agents = [rb]
+    registry = _wire_mcp_servers(agents, [{
+        "name": "ext",
+        "target_agent": "rb",
+        "config": MCPServerConfig(name="ext", destructive={"write"}),
+        "client": client,
+    }])
+    assert len(registry) == 1
+    entry = registry[0]
+    assert entry["status"] == "connected"
+    assert {t["name"] for t in entry["tools"]} == {"read", "write"}
+    # Agent now has MCP tools alongside its native one.
+    agent_tool_names = {t.name for t in rb.tools}
+    assert "ext_read" in agent_tool_names
+    assert "ext_write" in agent_tool_names
+    # Destructive verb prefix-applied to the agent set.
+    assert "ext_write" in rb.destructive_verbs
+
+
+def test_wire_mcp_servers_isolates_failures():
+    """A misbehaving server must not crash the dashboard build —
+    it lands as status='error' in the registry, and other servers
+    still register."""
+    from dashboard.server import _wire_mcp_servers
+
+    def good_handler(msg):
+        method = msg.get("method")
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": msg["id"], "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {},
+                "serverInfo": {"name": "good", "version": "0.1"},
+            }}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": msg["id"], "result": {
+                "tools": [{"name": "ok", "description": "x", "inputSchema": {"type": "object"}}],
+            }}
+        return {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -1, "message": "no"}}
+
+    def bad_handler(msg):
+        # initialize succeeds but tools/list errors out — simulates a
+        # server that handshakes fine but then dies on the first
+        # real request.
+        method = msg.get("method")
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": msg["id"], "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {},
+                "serverInfo": {"name": "bad", "version": "0.1"},
+            }}
+        return {"jsonrpc": "2.0", "id": msg["id"], "error": {
+            "code": -32000, "message": "kaboom",
+        }}
+
+    good_client = MCPClient(MockTransport(good_handler))
+    good_client.initialize()
+    bad_client = MCPClient(MockTransport(bad_handler))
+    bad_client.initialize()
+
+    rb = _RollbackAgent()
+    registry = _wire_mcp_servers([rb], [
+        {"name": "good", "target_agent": "rb", "config": MCPServerConfig(name="good"), "client": good_client},
+        {"name": "bad", "target_agent": "rb", "config": MCPServerConfig(name="bad"), "client": bad_client},
+    ])
+    by_name = {r["name"]: r for r in registry}
+    assert by_name["good"]["status"] == "connected"
+    assert by_name["bad"]["status"] == "error"
+    assert "kaboom" in by_name["bad"]["error"]
+    # Good server's tool is on the agent; bad one's isn't.
+    agent_names = {t.name for t in rb.tools}
+    assert "good_ok" in agent_names
+    assert all("bad_" not in n for n in agent_names)
+
+
+def test_wire_mcp_servers_unknown_target_agent_marks_error():
+    from dashboard.server import _wire_mcp_servers
+
+    registry = _wire_mcp_servers([_RollbackAgent()], [{
+        "name": "x",
+        "target_agent": "ghost",
+        "config": MCPServerConfig(name="x"),
+        "client": None,
+    }])
+    assert registry[0]["status"] == "error"
+    assert "ghost" in registry[0]["error"]

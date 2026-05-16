@@ -124,11 +124,18 @@ class DashboardServer:
         host: str = "127.0.0.1",
         port: int = 8765,
         static_dir: Optional[Path] = None,
+        mcp_servers: Optional[list[dict[str, Any]]] = None,
     ):
         self.orchestrator = orchestrator
         self.bus = bus
         self.approval_hook = approval_hook
         self.audit_log_path = audit_log_path
+        # MCP server registry: list of dicts with the per-server view
+        # the UI needs (name, target_agent, tools, destructive set,
+        # config-summary). Populated by build_default_server when
+        # mcp_servers are wired at startup; runtime add/remove is a
+        # follow-up.
+        self.mcp_servers: list[dict[str, Any]] = list(mcp_servers or [])
         # Static dir resolution: the Vite-built SPA at static/dist/ is
         # the preferred source. Fall back to legacy static/ if dist/
         # doesn't exist (e.g. dev test without a frontend build).
@@ -288,6 +295,11 @@ class DashboardServer:
                     return outer._handle_list_rollbacks(self)
                 if path == "/telemetry":
                     return outer._handle_telemetry(self)
+                if path == "/mcp/servers":
+                    return outer._handle_list_mcp_servers(self)
+                if path.startswith("/mcp/servers/") and path.endswith("/tools"):
+                    inner = path[len("/mcp/servers/"):-len("/tools")]
+                    return outer._handle_list_mcp_tools(self, inner)
                 if path == "/stacks/terraform":
                     return outer._handle_list_terraform_stacks(self)
                 if path == "/stacks/ansible":
@@ -829,6 +841,44 @@ class DashboardServer:
             "recent": recent_payload,
         })
 
+    def _handle_list_mcp_servers(self, req: BaseHTTPRequestHandler) -> None:
+        """List MCP servers wired into the dashboard at startup.
+
+        Returns ``{"servers": [<server-record>, ...]}`` where each
+        record carries the human-relevant fields (name, target agent,
+        tool count + names, destructive set, command summary) but NOT
+        the raw client/transport (no need to leak that to the UI)."""
+        servers = [
+            {
+                "name": s["name"],
+                "target_agent": s.get("target_agent"),
+                "command": s.get("command_summary"),
+                "tool_count": len(s.get("tools", [])),
+                "tools": [t["name"] for t in s.get("tools", [])],
+                "destructive": sorted(s.get("destructive", [])),
+                "status": s.get("status", "connected"),
+                "error": s.get("error"),
+            }
+            for s in self.mcp_servers
+        ]
+        self._send_json(req, 200, {"servers": servers})
+
+    def _handle_list_mcp_tools(
+        self, req: BaseHTTPRequestHandler, server_name: str
+    ) -> None:
+        """Catalog of one MCP server's tools, with the full descriptor
+        each (description, args schema). UI uses this to render an
+        inspectable tool list under each server card."""
+        for s in self.mcp_servers:
+            if s["name"] == server_name:
+                return self._send_json(req, 200, {
+                    "name": s["name"],
+                    "tools": s.get("tools", []),
+                })
+        return self._send_json(
+            req, 404, {"error": f"unknown MCP server {server_name!r}"}
+        )
+
     def _handle_list_memory(self, req: BaseHTTPRequestHandler) -> None:
         """List recent memory entries.
 
@@ -1050,6 +1100,7 @@ def build_default_server(
     memory_log_path: Optional[str] = None,
     rollback: Optional[RollbackStore] = None,
     rollback_log_path: Optional[str] = None,
+    mcp_servers: Optional[list[dict[str, Any]]] = None,
 ) -> DashboardServer:
     """Construct a DashboardServer with the four production agents and
     an in-memory bus. Convenience for the CLI entry point.
@@ -1061,6 +1112,18 @@ def build_default_server(
         ``EmbeddingMemoryStore`` next to the audit log.
       - Else, ``JsonlMemoryStore`` at ``memory_log_path`` (defaults to
         a sibling of ``audit_log_path``).
+
+    MCP servers: each dict in ``mcp_servers`` describes one server to
+    wire onto an agent at startup. Shape:
+      {
+        "name": "filesystem",
+        "target_agent": "programmer",
+        "config": MCPServerConfig(...),
+        "client": MCPClient(...) | None,   # if None, StdioTransport is built
+      }
+    Failures during registration are recorded on the registry entry
+    (status="error") rather than crashing the dashboard — a flaky
+    third-party server shouldn't take Olympus offline.
     """
     from olympus_cli.registry import build_orchestrator, default_agents
 
@@ -1088,9 +1151,11 @@ def build_default_server(
                 )
             else:
                 memory = JsonlMemoryStore(memory_log_path)
+    agents = default_agents()
+    mcp_registry = _wire_mcp_servers(agents, mcp_servers or [])
     orch = build_orchestrator(
         ctx=ctx,
-        agents=default_agents(),
+        agents=agents,
         router=router,
         bus=bus,
         memory=memory,
@@ -1102,4 +1167,60 @@ def build_default_server(
         audit_log_path=audit_log_path,
         host=host,
         port=port,
+        mcp_servers=mcp_registry,
     )
+
+
+def _wire_mcp_servers(
+    agents: list[Any], configs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Register each MCP server's tools onto its target agent and
+    return a registry dicts list for ``DashboardServer.mcp_servers``.
+
+    Each input dict: ``{name, target_agent, config, client?}``.
+    ``config`` is an ``MCPServerConfig`` instance. If ``client`` is
+    None, a ``StdioTransport`` is built; pass an explicit client in
+    tests to use ``MockTransport`` instead.
+
+    Failures are isolated: a misbehaving server lands as
+    ``status="error"`` on the registry; other servers still register."""
+    from agentlib import MCPClient, StdioTransport, register_mcp_tools
+
+    by_name = {a.name: a for a in agents}
+    registry: list[dict[str, Any]] = []
+    for entry in configs:
+        name = entry["name"]
+        target = entry.get("target_agent")
+        config = entry["config"]
+        client = entry.get("client")
+        record: dict[str, Any] = {
+            "name": name,
+            "target_agent": target,
+            "command_summary": (
+                f"{config.command} {' '.join(config.args)}".strip()
+                if hasattr(config, "command")
+                else ""
+            ),
+            "destructive": set(getattr(config, "destructive", set())),
+            "status": "connected",
+            "tools": [],
+            "error": None,
+        }
+        if target not in by_name:
+            record["status"] = "error"
+            record["error"] = f"unknown target_agent {target!r}"
+            registry.append(record)
+            continue
+        try:
+            if client is None:
+                client = MCPClient(StdioTransport(config))
+                client.initialize()
+            tools = client.list_tools()
+            register_mcp_tools(by_name[target], config, client=client)
+            record["tools"] = tools
+        except Exception as exc:
+            logger.warning("MCP server %r registration failed: %s", name, exc)
+            record["status"] = "error"
+            record["error"] = f"{type(exc).__name__}: {exc}"
+        registry.append(record)
+    return registry

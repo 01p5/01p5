@@ -5,6 +5,8 @@
 import type {
   AuditRecord,
   HealthResponse,
+  MCPServerCatalog,
+  MCPServerSummary,
   MemoryEntry,
   PendingApproval,
   RollbackEntry,
@@ -130,4 +132,14 @@ export const api = {
 
   // Telemetry — rolled-up cost + tokens across stored task records.
   telemetry: (): Promise<TelemetryResponse> => getJson("/telemetry"),
+
+  // MCP (Model Context Protocol) — third-party tool servers wired in
+  // at dashboard startup. Read-only for v1; runtime add/remove is a
+  // follow-up.
+  listMcpServers: async (): Promise<MCPServerSummary[]> => {
+    const body = await getJson<{ servers: MCPServerSummary[] }>("/mcp/servers");
+    return body.servers;
+  },
+  getMcpServerTools: (name: string): Promise<MCPServerCatalog> =>
+    getJson(`/mcp/servers/${encodeURIComponent(name)}/tools`),
 };

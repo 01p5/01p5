@@ -56,6 +56,28 @@ export interface TelemetryResponse {
   recent: TelemetryRecentEntry[];
 }
 
+export interface MCPServerSummary {
+  name: string;
+  target_agent: string | null;
+  command: string | null;
+  tool_count: number;
+  tools: string[];           // names only — full descriptors via /mcp/servers/{name}/tools
+  destructive: string[];
+  status: "connected" | "error" | string;
+  error: string | null;
+}
+
+export interface MCPToolDescriptor {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface MCPServerCatalog {
+  name: string;
+  tools: MCPToolDescriptor[];
+}
+
 export interface BusEvent {
   msg_id: string;
   task_id: string;

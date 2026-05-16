@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { MessageSquare, Server, Layers, ListChecks, Hammer } from "lucide-react";
+import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug } from "lucide-react";
 import clsx from "clsx";
 import { StatusDot } from "./StatusDot";
 import { BusSidebar } from "./BusSidebar";
@@ -14,6 +14,7 @@ const TABS = [
   { to: "/terraform",  label: "Terraform",  icon: Layers },
   { to: "/ansible",    label: "Ansible",    icon: ListChecks },
   { to: "/programmer", label: "Programmer", icon: Hammer },
+  { to: "/mcp",        label: "MCP",        icon: Plug },
 ];
 
 export function Layout(): JSX.Element {

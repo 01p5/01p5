@@ -5,6 +5,7 @@ import { KubernetesPage } from "./pages/KubernetesPage";
 import { TerraformPage } from "./pages/TerraformPage";
 import { AnsiblePage } from "./pages/AnsiblePage";
 import { ProgrammerPage } from "./pages/ProgrammerPage";
+import { MCPPage } from "./pages/MCPPage";
 
 export default function App(): JSX.Element {
   return (
@@ -16,6 +17,7 @@ export default function App(): JSX.Element {
         <Route path="terraform" element={<TerraformPage />} />
         <Route path="ansible" element={<AnsiblePage />} />
         <Route path="programmer" element={<ProgrammerPage />} />
+        <Route path="mcp" element={<MCPPage />} />
         {/* Catch-all → chat */}
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>
