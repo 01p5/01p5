@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Bot, User, Sparkles, AlertCircle, ChevronDown } from "lucide-react";
+import { Send, Bot, User, Sparkles, AlertCircle, ChevronDown, Plus } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import { api } from "../api";
@@ -98,12 +98,20 @@ export function ChatPage(): JSX.Element {
   // empty-state example buttons. Takes the text directly so the
   // examples don't need to round-trip through React's controlled-input
   // setter (which doesn't fire from a direct DOM mutation).
+  //
+  // Conversation context: the dashboard backend is stateless per task
+  // (each /tasks submission spins up a fresh LangGraph agent with no
+  // memory of prior turns). To make the chat feel like a conversation
+  // we prepend the last few completed turns' question + summary as
+  // history into the prompt — the bubble UI still shows just what the
+  // user typed.
   const submit = async (text: string): Promise<void> => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     setSending(true);
+    const promptWithContext = buildPromptWithContext(trimmed, turnsRef.current);
     try {
-      const { task_id } = await api.submitTask(trimmed);
+      const { task_id } = await api.submitTask(promptWithContext);
       const turn: Turn = {
         task_id, user: trimmed, status: "pending",
         approvalsPending: 0, submitted: Date.now(),
@@ -121,6 +129,12 @@ export function ChatPage(): JSX.Element {
     }
   };
 
+  const resetConversation = (): void => {
+    setTurns([]);
+    setInput("");
+    inputRef.current?.focus();
+  };
+
   const send = (e: React.FormEvent): void => {
     e.preventDefault();
     void submit(input);
@@ -129,7 +143,7 @@ export function ChatPage(): JSX.Element {
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
       {/* Header */}
-      <div className="px-6 py-3 border-b border-border-subtle flex items-baseline justify-between bg-dark-secondary/40">
+      <div className="px-6 py-3 border-b border-border-subtle flex items-center justify-between bg-dark-secondary/40">
         <div className="flex items-baseline gap-3">
           <Sparkles size={14} className="text-accent-green self-center" />
           <h1 className="font-display text-base font-semibold text-text-primary">
@@ -137,8 +151,20 @@ export function ChatPage(): JSX.Element {
           </h1>
           <span className="text-[11px] font-mono text-text-muted">
             agents pick the right tool · gpt-5-mini
+            {turns.length > 0 && (
+              <> · {turns.filter((t) => t.summary).length} turn(s) of context</>
+            )}
           </span>
         </div>
+        <button
+          onClick={resetConversation}
+          disabled={turns.length === 0}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-green border border-border-subtle hover:border-accent-green/40 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          title="Clear the chat history so the next turn starts fresh"
+        >
+          <Plus size={11} />
+          New
+        </button>
       </div>
 
       {/* Message stream */}
@@ -324,4 +350,38 @@ function ArtifactsDetails({ artifacts }: { artifacts: Record<string, unknown> })
       </pre>
     </details>
   );
+}
+
+/**
+ * Build a prompt that includes recent completed turns as conversation
+ * history. Each turn becomes a "User: …" / "Assistant: …" pair; only
+ * turns with a settled status + summary contribute (so an in-flight
+ * "shut them down" doesn't poison the next turn with empty context).
+ *
+ * Window is the last MAX_HISTORY_TURNS to keep token cost bounded.
+ * The system prompt is unchanged; this just augments the user message
+ * so the dashboard backend stays per-task-stateless.
+ */
+const MAX_HISTORY_TURNS = 6;
+function buildPromptWithContext(userText: string, turns: Turn[]): string {
+  const completed = turns.filter(
+    (t) => t.summary && (t.status === "success" || t.status === "rejected"),
+  );
+  if (completed.length === 0) return userText;
+
+  const window = completed.slice(-MAX_HISTORY_TURNS);
+  const history = window
+    .map((t) => `User: ${t.user}\nAssistant: ${t.summary}`)
+    .join("\n\n");
+  return [
+    "You are continuing an ongoing conversation. Use the prior turns",
+    "below to resolve references like 'them', 'both', 'that pod', etc.",
+    "When the user refers to entities from earlier turns, act on those.",
+    "",
+    "---- prior conversation ----",
+    history,
+    "---- end prior conversation ----",
+    "",
+    `Current user message: ${userText}`,
+  ].join("\n");
 }
