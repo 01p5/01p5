@@ -191,6 +191,8 @@ def test_orchestrator_times_out_when_no_result_arrives():
         def handle(self, task, ctx):  # pragma: no cover — never called
             raise AssertionError
 
+    from agentlib import NullMemoryStore
+
     orch = Orchestrator.__new__(Orchestrator)
     orch.bus = bus
     orch.agents = {"orphan": _OrphanAgent()}
@@ -200,6 +202,8 @@ def test_orchestrator_times_out_when_no_result_arrives():
     orch._results = {}
     orch._result_events = {}
     orch._results_lock = threading.Lock()
+    orch.memory = NullMemoryStore()
+    orch._memory_k = 3
     # Note: deliberately skipping bus.subscribe() so no consumer
     # exists for the "orphan" stream.
 

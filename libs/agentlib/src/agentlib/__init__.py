@@ -25,6 +25,15 @@ from .approval_webhook import WebhookApprovalHook
 from .budget import BudgetExceededError, BudgetGuard, BudgetState
 from .bus import Bus, BusMessage, InMemoryBus, new_message
 from .bus_redis import RedisStreamsBus
+from .memory import (
+    EmbeddingMemoryStore,
+    InMemoryMemoryStore,
+    JsonlMemoryStore,
+    MemoryEntry,
+    MemoryStore,
+    NullMemoryStore,
+    render_memory_block,
+)
 from .models import (
     claude,
     claude4,
@@ -102,6 +111,13 @@ __all__ = [
     "Router",
     "ManualRouter",
     "LLMRouter",
+    "MemoryStore",
+    "MemoryEntry",
+    "NullMemoryStore",
+    "InMemoryMemoryStore",
+    "JsonlMemoryStore",
+    "EmbeddingMemoryStore",
+    "render_memory_block",
     "Plan",
     "PlanStep",
     "PlanResult",

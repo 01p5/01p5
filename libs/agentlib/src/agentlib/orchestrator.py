@@ -13,11 +13,13 @@ choose; ``ManualRouter`` returns a fixed mapping for tests.
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from typing import Optional, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .bus import Bus, BusMessage, new_message
+from .memory import MemoryEntry, MemoryStore, NullMemoryStore, render_memory_block
 from .plan import Plan, PlanResult, step_to_task
 from .spec import AgentContext, AgentResult, AgentSpec, CostBreakdown, TaskMessage
 
@@ -109,6 +111,8 @@ class Orchestrator:
         ctx: AgentContext,
         router: Optional[Router] = None,
         result_timeout_seconds: float = 600.0,
+        memory: Optional[MemoryStore] = None,
+        memory_k: int = 3,
     ):
         self.bus = bus
         self.agents = {a.name: a for a in agents}
@@ -117,6 +121,8 @@ class Orchestrator:
             {a.name: a.domain for a in agents}
         )
         self._result_timeout = result_timeout_seconds
+        self.memory: MemoryStore = memory or NullMemoryStore()
+        self._memory_k = memory_k
         self._results: dict[str, AgentResult] = {}
         self._result_events: dict[str, threading.Event] = {}
         self._results_lock = threading.Lock()
@@ -160,7 +166,61 @@ class Orchestrator:
 
     def run(self, task: TaskMessage) -> AgentResult:
         agent_name = self.router.route(task)
-        return self._dispatch(task, agent_name)
+        task = self._with_memory_context(task, agent=agent_name)
+        result = self._dispatch(task, agent_name)
+        self._remember(task, agent_name, result)
+        return result
+
+    def _with_memory_context(self, task: TaskMessage, agent: str) -> TaskMessage:
+        """Search memory for similar past runs and prepend them to the
+        natural-language prompt. Filter by agent so a Sysadmin task
+        doesn't pull in Terraform-shaped context (cross-agent
+        retrieval is a later refinement)."""
+        if isinstance(self.memory, NullMemoryStore):
+            return task
+        try:
+            past = self.memory.search(
+                task.natural_language, k=self._memory_k, agent=agent
+            )
+        except Exception:
+            # Memory must never block dispatch.
+            return task
+        block = render_memory_block(past)
+        if not block:
+            return task
+        return replace(task, natural_language=f"{block}{task.natural_language}")
+
+    def _remember(
+        self, task: TaskMessage, agent: str, result: AgentResult
+    ) -> None:
+        if isinstance(self.memory, NullMemoryStore):
+            return
+        # Skip rejected/cancelled runs — they didn't produce useful
+        # outcome text. Failed runs ARE worth keeping (the agent's
+        # failure summary often explains why a class of task is hard).
+        if result.status not in ("success", "failed"):
+            return
+        # Strip any prepended memory block from the stored request so
+        # future retrievals don't drift toward whatever was prepended
+        # this time.
+        stripped = task.natural_language.split("---\n\n", 1)[-1].strip()
+        try:
+            self.memory.write(
+                MemoryEntry(
+                    task_id=task.task_id,
+                    agent=agent,
+                    natural_language=stripped,
+                    summary=result.summary or "",
+                    status=result.status,
+                    metadata={
+                        "wall_seconds": result.cost.wall_seconds,
+                        "total_usd": result.cost.total_usd,
+                    },
+                )
+            )
+        except Exception:
+            # Memory write failures must never crash the orchestrator.
+            return
 
     def run_plan(self, plan: Plan) -> PlanResult:
         """Execute a multi-step plan sequentially, threading prior step

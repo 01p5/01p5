@@ -14,12 +14,18 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
+import os
+from pathlib import Path
+
 from agentlib import (
     AgentContext,
     AgentSpec,
+    EmbeddingMemoryStore,
     InMemoryBus,
+    JsonlMemoryStore,
     LLMRouter,
     ManualRouter,
+    MemoryStore,
     Orchestrator,
     Router,
 )
@@ -50,6 +56,7 @@ def build_orchestrator(
     agents: Optional[Sequence[AgentSpec]] = None,
     router: Optional[Router] = None,
     bus: Optional[InMemoryBus] = None,
+    memory: Optional[MemoryStore] = None,
 ) -> Orchestrator:
     """Construct an Orchestrator wired to a fresh in-memory bus by default.
 
@@ -59,13 +66,44 @@ def build_orchestrator(
     ``router``: defaults to ``LLMRouter`` over the agent name → domain
     map. Pass ``ManualRouter`` (or any other ``Router``) for deterministic
     routing in tests.
+
+    ``memory``: optional ``MemoryStore`` so prior runs are retrieved
+    at task start. When ``None``, defaults are picked from env vars:
+      - ``OLYMPUS_MEMORY=disabled``   → no memory (orchestrator default)
+      - ``OLYMPUS_MEMORY=embeddings`` → ``EmbeddingMemoryStore`` (needs
+        ``OPENAI_API_KEY``)
+      - otherwise                     → ``JsonlMemoryStore`` at
+        ``OLYMPUS_MEMORY_PATH`` (default: ``~/.olympus/memory.jsonl``)
     """
     if agents is None:
         agents = default_agents()
     bus = bus or InMemoryBus()
     if router is None:
         router = LLMRouter({a.name: a.domain for a in agents})
-    return Orchestrator(bus=bus, agents=agents, ctx=ctx, router=router)
+    if memory is None:
+        memory = _memory_from_env()
+    return Orchestrator(
+        bus=bus, agents=agents, ctx=ctx, router=router, memory=memory
+    )
+
+
+def _memory_from_env() -> Optional[MemoryStore]:
+    """Pick a default memory backend based on environment.
+
+    Returns ``None`` when the user explicitly disables memory — the
+    Orchestrator then falls back to its ``NullMemoryStore`` default."""
+    mode = os.environ.get("OLYMPUS_MEMORY", "").lower()
+    if mode == "disabled":
+        return None
+    path = os.environ.get(
+        "OLYMPUS_MEMORY_PATH",
+        str(Path.home() / ".olympus" / "memory.jsonl"),
+    )
+    if mode == "embeddings":
+        # EmbeddingMemoryStore degrades to lexical search if the API
+        # key isn't set, so this is safe to construct unconditionally.
+        return EmbeddingMemoryStore(path.replace(".jsonl", ".emb.jsonl"))
+    return JsonlMemoryStore(path)
 
 
 # Convenient mapping for ``--router=manual`` users — keyword → agent name.

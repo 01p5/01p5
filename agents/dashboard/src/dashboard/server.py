@@ -59,6 +59,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -70,8 +71,11 @@ from agentlib import (
     AgentContext,
     Bus,
     BusMessage,
+    EmbeddingMemoryStore,
     InMemoryBus,
     JsonlAuditLogger,
+    JsonlMemoryStore,
+    MemoryStore,
     Orchestrator,
     QueueApprovalHook,
     Router,
@@ -255,6 +259,8 @@ class DashboardServer:
                     )
                 if path == "/tools":
                     return outer._handle_list_tools(self)
+                if path == "/memory":
+                    return outer._handle_list_memory(self)
                 if path == "/stacks/terraform":
                     return outer._handle_list_terraform_stacks(self)
                 if path == "/stacks/ansible":
@@ -514,6 +520,66 @@ class DashboardServer:
             "result": result if isinstance(result, (str, int, float, bool, type(None), list, dict)) else str(result),
         })
 
+    def _handle_list_memory(self, req: BaseHTTPRequestHandler) -> None:
+        """List recent memory entries.
+
+        Supports a query string: ``?q=<text>&k=<int>&agent=<name>``.
+        When ``q`` is provided, returns top-K most-similar entries via
+        the orchestrator's memory store. Otherwise returns the most
+        recent entries (still bounded by ``k``, default 25)."""
+        from urllib.parse import parse_qs, urlparse
+
+        memory = getattr(self.orchestrator, "memory", None)
+        if memory is None:
+            return self._send_json(req, 200, {"entries": []})
+
+        query_string = urlparse(req.path).query
+        params = parse_qs(query_string)
+        q = (params.get("q") or [""])[0]
+        try:
+            k = max(1, min(int((params.get("k") or ["25"])[0]), 100))
+        except ValueError:
+            k = 25
+        agent = (params.get("agent") or [None])[0]
+
+        try:
+            if q:
+                entries = memory.search(q, k=k, agent=agent)
+            else:
+                # No query → most recent. Stores expose .search but no
+                # .all() — peek at well-known internals (set on every
+                # built-in store) to enumerate, then apply agent +
+                # k bounds in Python.
+                if hasattr(memory, "_load_entries_raw"):
+                    raw_entries, _ = memory._load_entries_raw()
+                    all_entries = list(reversed(raw_entries))
+                elif hasattr(memory, "_entries"):
+                    all_entries = list(reversed(memory._entries))
+                else:
+                    # Unknown store shape — fall back to a generic
+                    # lexical query that lets the agent filter still work.
+                    all_entries = memory.search("task", k=k, agent=agent)
+                if agent is not None:
+                    all_entries = [e for e in all_entries if e.agent == agent]
+                entries = all_entries[:k]
+        except Exception as exc:
+            logger.warning("memory list failed: %s", exc)
+            entries = []
+
+        payload = [
+            {
+                "task_id": e.task_id,
+                "agent": e.agent,
+                "natural_language": e.natural_language,
+                "summary": e.summary,
+                "status": e.status,
+                "ts": e.ts,
+                "metadata": e.metadata,
+            }
+            for e in entries
+        ]
+        self._send_json(req, 200, {"entries": payload})
+
     def _handle_list_terraform_stacks(self, req: BaseHTTPRequestHandler) -> None:
         """Scan infra/terraform/ for directories that look like a stack
         (contain at least one .tf file). Returns relative paths."""
@@ -671,9 +737,19 @@ def build_default_server(
     port: int = 8765,
     router: Optional[Router] = None,
     audit_log_path: str = DEFAULT_AUDIT_LOG,
+    memory: Optional[MemoryStore] = None,
+    memory_log_path: Optional[str] = None,
 ) -> DashboardServer:
     """Construct a DashboardServer with the four production agents and
     an in-memory bus. Convenience for the CLI entry point.
+
+    Memory backend resolution:
+      - ``memory=`` wins when provided.
+      - Else, if ``OLYMPUS_MEMORY=disabled`` → no memory.
+      - Else, if ``OLYMPUS_MEMORY=embeddings`` →
+        ``EmbeddingMemoryStore`` next to the audit log.
+      - Else, ``JsonlMemoryStore`` at ``memory_log_path`` (defaults to
+        a sibling of ``audit_log_path``).
     """
     from olympus_cli.registry import build_orchestrator, default_agents
 
@@ -683,8 +759,24 @@ def build_default_server(
         approval=approval_hook,
         audit=JsonlAuditLogger(audit_log_path),
     )
+    if memory is None:
+        mode = os.environ.get("OLYMPUS_MEMORY", "").lower()
+        if mode != "disabled":
+            memory_log_path = memory_log_path or str(
+                Path(audit_log_path).with_name("memory.jsonl")
+            )
+            if mode == "embeddings":
+                memory = EmbeddingMemoryStore(
+                    memory_log_path.replace(".jsonl", ".emb.jsonl")
+                )
+            else:
+                memory = JsonlMemoryStore(memory_log_path)
     orch = build_orchestrator(
-        ctx=ctx, agents=default_agents(), router=router, bus=bus
+        ctx=ctx,
+        agents=default_agents(),
+        router=router,
+        bus=bus,
+        memory=memory,
     )
     return DashboardServer(
         orchestrator=orch,

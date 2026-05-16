@@ -24,7 +24,9 @@ from agentlib import (
     CostBreakdown,
     InMemoryAuditLogger,
     InMemoryBus,
+    InMemoryMemoryStore,
     ManualRouter,
+    MemoryEntry,
     Orchestrator,
     QueueApprovalHook,
     TaskMessage,
@@ -649,3 +651,103 @@ def test_stacks_terraform_returns_sorted_list_when_populated(tools_server, monke
     # Both stacks present.
     names = [Path(p).name for p in body]
     assert "stack-a" in names and "stack-b" in names
+
+
+# ---------------------------------------------------------------------
+# /memory endpoint
+# ---------------------------------------------------------------------
+
+
+def _memory_server(memory):
+    bus = InMemoryBus()
+    approval = QueueApprovalHook(approval_timeout_seconds=2.0)
+    ctx = AgentContext(approval=approval, audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus,
+        agents=[_ApprovalSeekingAgent()],
+        ctx=ctx,
+        router=ManualRouter(default="stub"),
+        result_timeout_seconds=2.0,
+        memory=memory,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=approval,
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    return srv
+
+
+def _entry(task_id="T1", agent="sysadmin", nl="list pods", summary="ok"):
+    return MemoryEntry(
+        task_id=task_id, agent=agent,
+        natural_language=nl, summary=summary, status="success",
+    )
+
+
+def test_memory_endpoint_returns_recent_entries_without_query():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1", nl="delete pod web"))
+    mem.write(_entry(task_id="T2", nl="run terraform plan"))
+    srv = _memory_server(mem)
+    try:
+        status, body = _get(srv, "/memory")
+        assert status == 200
+        ids = [e["task_id"] for e in body["entries"]]
+        # Most-recent first.
+        assert ids == ["T2", "T1"]
+    finally:
+        srv.shutdown()
+
+
+def test_memory_endpoint_search_query_filters_by_similarity():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1", nl="delete pod web in default"))
+    mem.write(_entry(task_id="T2", nl="run terraform plan in pve"))
+    srv = _memory_server(mem)
+    try:
+        status, body = _get(srv, "/memory?q=delete+pod+nginx&k=1")
+        assert status == 200
+        assert [e["task_id"] for e in body["entries"]] == ["T1"]
+    finally:
+        srv.shutdown()
+
+
+def test_memory_endpoint_agent_filter():
+    mem = InMemoryMemoryStore()
+    mem.write(_entry(task_id="T1", agent="sysadmin", nl="delete pod"))
+    mem.write(_entry(task_id="T2", agent="programmer", nl="write dockerfile"))
+    srv = _memory_server(mem)
+    try:
+        status, body = _get(srv, "/memory?agent=programmer")
+        assert status == 200
+        agents = {e["agent"] for e in body["entries"]}
+        assert agents == {"programmer"}
+    finally:
+        srv.shutdown()
+
+
+def test_memory_endpoint_returns_empty_when_no_memory_store():
+    """Orchestrator without memory= must still respond 200 with an
+    empty entries list, not 500."""
+    bus = InMemoryBus()
+    approval = QueueApprovalHook(approval_timeout_seconds=2.0)
+    ctx = AgentContext(approval=approval, audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[_ApprovalSeekingAgent()], ctx=ctx,
+        router=ManualRouter(default="stub"), result_timeout_seconds=2.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=approval,
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    try:
+        status, body = _get(srv, "/memory")
+        assert status == 200
+        # NullMemoryStore.search returns []. The endpoint serves the
+        # raw store's _entries list when q is absent — NullMemoryStore
+        # doesn't have one, so the fallback search("task", ...) yields [].
+        assert body["entries"] == []
+    finally:
+        srv.shutdown()
