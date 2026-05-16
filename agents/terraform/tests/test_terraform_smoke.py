@@ -102,6 +102,31 @@ def test_missing_working_dir_returns_error_without_invoking_tf(tmp_path):
     run_mock.assert_not_called()
 
 
+def test_tf_apply_approval_call_carries_no_diff_preview(tmp_path):
+    """tf_apply mutates infrastructure but not a single file the runtime
+    can preview — so diff must be None at the approval card, not a
+    stringified args dump."""
+    spec = TerraformAgent()
+    seen: dict = {}
+
+    class _Snoop:
+        def request(self, **kw):
+            from agentlib import ApprovalDecision
+            seen.update(kw)
+            return ApprovalDecision(approved=False, reason="snoop")
+
+    audit = InMemoryAuditLogger()
+    ctx = AgentContext(approval=_Snoop(), audit=audit)
+    gated = gate_tools(spec, ctx, task_id="tf-diff-none-1")
+    by_name = {t.name: t for t in gated}
+
+    with patch("terraform.tools.subprocess.run"):
+        by_name["tf_apply"].invoke({"working_dir": str(tmp_path)})
+
+    assert "diff" in seen
+    assert seen["diff"] is None
+
+
 _LIVE_REQUIRED = ("OLYMPUS_LIVE_LLM", "OLYMPUS_LIVE_TF")
 
 

@@ -149,7 +149,8 @@ export function KubernetesPage(): JSX.Element {
 
 // ----- pods -----
 
-function parseKubectlTable(raw: string): Record<string, string>[] {
+// exported for tests
+export function parseKubectlTable(raw: string): Record<string, string>[] {
   // Parse a `kubectl get -o wide` table by header column positions.
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
   if (lines.length === 0) return [];

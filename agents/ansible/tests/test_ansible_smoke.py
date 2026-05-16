@@ -87,6 +87,30 @@ def test_run_module_runs_after_approval():
     assert tools == ["run_module", "run_module"]
 
 
+def test_run_playbook_approval_call_carries_no_diff_preview():
+    """run_playbook is destructive but not file-preview-able; the
+    approval card must receive diff=None, not a stringified args dump."""
+    spec = AnsibleAgent()
+    seen: dict = {}
+
+    class _Snoop:
+        def request(self, **kw):
+            from agentlib import ApprovalDecision
+            seen.update(kw)
+            return ApprovalDecision(approved=False, reason="snoop")
+
+    audit = InMemoryAuditLogger()
+    ctx = AgentContext(approval=_Snoop(), audit=audit)
+    gated = gate_tools(spec, ctx, task_id="ans-diff-none-1")
+    by_name = {t.name: t for t in gated}
+
+    with patch("ansible_agent.tools.subprocess.run"):
+        by_name["run_playbook"].invoke({"playbook": "site.yml", "inventory": "hosts.ini"})
+
+    assert "diff" in seen
+    assert seen["diff"] is None
+
+
 _LIVE_REQUIRED = ("OLYMPUS_LIVE_LLM", "OLYMPUS_LIVE_ANSIBLE")
 
 

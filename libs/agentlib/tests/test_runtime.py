@@ -142,3 +142,154 @@ def test_approval_can_modify_args():
     result = by_name["dangerous_delete"].invoke({"target": "original"})
     assert result == "deleted:edited-by-human"
     assert snoop.seen["args"] == {"target": "original"}
+
+
+# ---------------------------------------------------------------------------
+# Diff preview helpers — _preview_diff / _unified_diff
+# ---------------------------------------------------------------------------
+
+from agentlib.runtime import _preview_diff, _unified_diff  # noqa: E402
+
+
+def test_unified_diff_new_file_has_all_plus_lines():
+    """Empty old + non-empty new: every body line is a `+` add line, with
+    the standard unified-diff header (---/+++)."""
+    out = _unified_diff("", "alpha\nbeta\n", "newfile.txt")
+    assert out != "(no textual difference)"
+    assert "--- a/newfile.txt" in out
+    assert "+++ b/newfile.txt" in out
+    # Body lines (post-header) should all be additions.
+    body_lines = [ln for ln in out.splitlines() if ln and ln[0] in "+-@ "]
+    add_lines = [ln for ln in body_lines if ln.startswith("+") and not ln.startswith("+++")]
+    minus_lines = [ln for ln in body_lines if ln.startswith("-") and not ln.startswith("---")]
+    assert len(add_lines) >= 2
+    assert minus_lines == []
+
+
+def test_unified_diff_deleted_file_has_all_minus_lines():
+    """Non-empty old + empty new: every body line is a `-` remove line."""
+    out = _unified_diff("alpha\nbeta\n", "", "gone.txt")
+    assert out != "(no textual difference)"
+    assert "--- a/gone.txt" in out
+    assert "+++ b/gone.txt" in out
+    body_lines = [ln for ln in out.splitlines() if ln and ln[0] in "+-@ "]
+    add_lines = [ln for ln in body_lines if ln.startswith("+") and not ln.startswith("+++")]
+    minus_lines = [ln for ln in body_lines if ln.startswith("-") and not ln.startswith("---")]
+    assert len(minus_lines) >= 2
+    assert add_lines == []
+
+
+def test_unified_diff_identical_returns_sentinel_string():
+    """When there's nothing to diff, the sentinel string is returned so
+    the approval card can render 'no change'."""
+    assert _unified_diff("same\n", "same\n", "any.txt") == "(no textual difference)"
+
+
+def test_unified_diff_single_line_change_has_hunk_header_and_marked_lines():
+    """A 1-line change should produce a `@@ -... +... @@` hunk header
+    and the changed line should be prefixed with - and +."""
+    old = "alpha\nbeta\ngamma\n"
+    new = "alpha\nBETA\ngamma\n"
+    out = _unified_diff(old, new, "f.txt")
+    # Hunk header
+    import re
+    hunk = re.search(r"^@@ -\d+(,\d+)? \+\d+(,\d+)? @@", out, re.MULTILINE)
+    assert hunk is not None, f"missing hunk header in:\n{out}"
+    # The removed and added lines
+    assert "-beta" in out
+    assert "+BETA" in out
+
+
+def test_preview_diff_write_file_against_existing_file(tmp_path):
+    """write_file with an existing path: diff is current-vs-proposed."""
+    target = tmp_path / "x.txt"
+    target.write_text("old line\n")
+    diff = _preview_diff("write_file", {"path": str(target), "content": "new line\n"})
+    assert diff is not None
+    assert "-old line" in diff
+    assert "+new line" in diff
+
+
+def test_preview_diff_write_file_against_nonexistent_path(tmp_path):
+    """write_file with a path that doesn't exist: diff treats old as empty."""
+    target = tmp_path / "missing.txt"
+    diff = _preview_diff("write_file", {"path": str(target), "content": "hello\n"})
+    assert diff is not None
+    assert "+hello" in diff
+    # Old side should be empty (no `-` body lines).
+    body = [ln for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---")]
+    assert body == []
+
+
+def test_preview_diff_edit_file_against_existing_file(tmp_path):
+    """edit_file diff is current vs post-replace text."""
+    target = tmp_path / "c.txt"
+    target.write_text("foo = 1\nbar = 2\n")
+    diff = _preview_diff(
+        "edit_file",
+        {"path": str(target), "old_string": "foo = 1", "new_string": "foo = 42"},
+    )
+    assert diff is not None
+    assert "-foo = 1" in diff
+    assert "+foo = 42" in diff
+    # The unchanged context line should be present.
+    assert "bar = 2" in diff
+
+
+def test_preview_diff_edit_file_nonexistent_returns_none(tmp_path):
+    """edit_file against a missing file must return None (not crash)."""
+    out = _preview_diff(
+        "edit_file",
+        {"path": str(tmp_path / "nope.txt"), "old_string": "a", "new_string": "b"},
+    )
+    assert out is None
+
+
+def test_preview_diff_unknown_tool_returns_none():
+    """Tools that aren't file-mutating yield no diff preview."""
+    assert _preview_diff("delete_pod", {"name": "x"}) is None
+
+
+def test_preview_diff_write_file_empty_args_no_crash():
+    """Missing args dict shouldn't crash — diff against empty empty
+    produces the sentinel string."""
+    out = _preview_diff("write_file", {})
+    # Both old and new resolve to "" so the diff returns the sentinel.
+    assert isinstance(out, str)
+
+
+def test_preview_diff_edit_file_empty_args_returns_none():
+    """edit_file with no path arg should fail the read and return None."""
+    assert _preview_diff("edit_file", {}) is None
+
+
+def test_preview_diff_edit_file_replace_all_shows_every_change(tmp_path):
+    """replace_all=True: all three occurrences appear as +/- lines.
+    replace_all=False: only the first."""
+    target = tmp_path / "m.txt"
+    target.write_text("foo\nfoo\nfoo\n")
+    diff_all = _preview_diff(
+        "edit_file",
+        {"path": str(target), "old_string": "foo", "new_string": "bar", "replace_all": True},
+    )
+    assert diff_all is not None
+    add_lines = [ln for ln in diff_all.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+    minus_lines = [ln for ln in diff_all.splitlines() if ln.startswith("-") and not ln.startswith("---")]
+    assert len([ln for ln in add_lines if "bar" in ln]) == 3
+    assert len([ln for ln in minus_lines if "foo" in ln]) == 3
+
+    diff_one = _preview_diff(
+        "edit_file",
+        {"path": str(target), "old_string": "foo", "new_string": "bar"},
+    )
+    assert diff_one is not None
+    add_lines_one = [
+        ln for ln in diff_one.splitlines()
+        if ln.startswith("+") and not ln.startswith("+++") and "bar" in ln
+    ]
+    minus_lines_one = [
+        ln for ln in diff_one.splitlines()
+        if ln.startswith("-") and not ln.startswith("---") and "foo" in ln
+    ]
+    assert len(add_lines_one) == 1
+    assert len(minus_lines_one) == 1

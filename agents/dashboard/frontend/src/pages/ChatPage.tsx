@@ -6,7 +6,8 @@ import { api } from "../api";
 import { useSSE } from "../hooks/useSSE";
 import type { BusEvent, TaskRecord } from "../types";
 
-interface Turn {
+// exported for tests
+export interface Turn {
   task_id: string;
   user: string;
   status: "pending" | "running" | "success" | "failed" | "rejected" | "cancelled";
@@ -402,7 +403,8 @@ function ArtifactsDetails({ artifacts }: { artifacts: Record<string, unknown> })
  * so the dashboard backend stays per-task-stateless.
  */
 const MAX_HISTORY_TURNS = 6;
-function buildPromptWithContext(userText: string, turns: Turn[]): string {
+// exported for tests
+export function buildPromptWithContext(userText: string, turns: Turn[]): string {
   const completed = turns.filter(
     (t) => t.summary && (t.status === "success" || t.status === "rejected"),
   );

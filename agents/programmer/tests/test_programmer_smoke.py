@@ -175,3 +175,175 @@ def test_write_file_runs_after_approval(tmp_path):
     assert target.read_text() == "FROM scratch"
     tools = [r["tool"] for r in audit.records]
     assert tools == ["write_file", "write_file"]
+
+
+# ---------------------------------------------------------------------------
+# Edge cases — read_file, edit_file, write_file
+# ---------------------------------------------------------------------------
+
+
+def test_read_file_offset_past_end_returns_explanatory_message(tmp_path):
+    """Past-end-of-file offset returns a clear `past end of file` string,
+    not a crash and not an empty string."""
+    target = tmp_path / "short.txt"
+    target.write_text("only one line\n")
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx()
+    gated = gate_tools(spec, ctx, task_id="t-pe")
+    by_name = {t.name: t for t in gated}
+    out = by_name["read_file"].invoke({"path": str(target), "offset": 50})
+    assert "past end of file" in out
+    assert "total lines = 1" in out
+
+
+def test_read_file_binary_returns_utf8_error(tmp_path):
+    """Binary content trips UnicodeDecodeError → tool surfaces an
+    error message instead of raising."""
+    target = tmp_path / "blob.bin"
+    target.write_bytes(b"\x00\xff\x00garbage\xc3\x28")
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx()
+    gated = gate_tools(spec, ctx, task_id="t-bin")
+    by_name = {t.name: t for t in gated}
+    out = by_name["read_file"].invoke({"path": str(target)})
+    assert "not valid UTF-8" in out
+
+
+def test_read_file_limit_truncates_with_continuation_hint(tmp_path):
+    """When limit < total lines, the output ends with a hint at the
+    next offset to read from."""
+    target = tmp_path / "long.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(20)) + "\n")
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx()
+    gated = gate_tools(spec, ctx, task_id="t-lim")
+    by_name = {t.name: t for t in gated}
+    out = by_name["read_file"].invoke({"path": str(target), "limit": 5})
+    assert "more lines" in out
+    assert "offset=5" in out
+    # First 5 lines numbered 1..5 are present, line 6 is not.
+    assert "1 | line0" in out
+    assert "5 | line4" in out
+    assert "6 | line5" not in out
+
+
+def test_read_file_nonexistent_path_returns_error(tmp_path):
+    """Missing file → clean ERROR string, no crash."""
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx()
+    gated = gate_tools(spec, ctx, task_id="t-mis")
+    by_name = {t.name: t for t in gated}
+    out = by_name["read_file"].invoke({"path": str(tmp_path / "nope.txt")})
+    assert "ERROR" in out
+    assert "does not exist" in out
+
+
+def test_edit_file_noop_same_old_and_new_string(tmp_path):
+    """old_string == new_string is a no-op and rejected with a clear
+    error — file remains untouched."""
+    target = tmp_path / "noop.txt"
+    target.write_text("hello\n")
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="t-noop")
+    by_name = {t.name: t for t in gated}
+    out = by_name["edit_file"].invoke({
+        "path": str(target),
+        "old_string": "hello",
+        "new_string": "hello",
+    })
+    assert "ERROR" in out
+    assert "no-op" in out
+    assert target.read_text() == "hello\n"
+
+
+def test_edit_file_nonexistent_path_returns_use_write_file_hint(tmp_path):
+    """edit_file on a missing file: tool returns the 'use write_file'
+    error. The runtime still routes through approval (since the
+    destructive verb fires before the tool body executes), but the
+    underlying tool's error message must reach the caller."""
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="t-missedit")
+    by_name = {t.name: t for t in gated}
+    out = by_name["edit_file"].invoke({
+        "path": str(tmp_path / "ghost.txt"),
+        "old_string": "x",
+        "new_string": "y",
+    })
+    assert "ERROR" in out
+    assert "use write_file" in out
+
+
+def test_write_file_creates_nested_directories(tmp_path):
+    """mkdir(parents=True) — write_file should auto-create intermediate
+    directories."""
+    spec = ProgrammerAgent()
+    ctx, _ = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="t-nest")
+    by_name = {t.name: t for t in gated}
+    target = tmp_path / "a" / "b" / "c" / "deep.txt"
+    out = by_name["write_file"].invoke({"path": str(target), "content": "deep\n"})
+    assert "wrote" in out
+    assert target.read_text() == "deep\n"
+    assert (tmp_path / "a" / "b" / "c").is_dir()
+
+
+def test_write_file_diff_snoop_new_file_has_all_plus_lines(tmp_path):
+    """The diff kwarg passed to approval.request for a NEW file should
+    contain only additions (no `-` lines)."""
+    spec = ProgrammerAgent()
+    seen: dict = {}
+
+    class _Snoop:
+        def request(self, **kw):
+            from agentlib import ApprovalDecision
+            seen.update(kw)
+            return ApprovalDecision(approved=False, reason="snoop")
+
+    ctx = AgentContext(approval=_Snoop(), audit=InMemoryAuditLogger())
+    gated = gate_tools(spec, ctx, task_id="t-wf-new")
+    by_name = {t.name: t for t in gated}
+    target = tmp_path / "brand_new.py"
+    by_name["write_file"].invoke({
+        "path": str(target),
+        "content": "print('hello')\nprint('world')\n",
+    })
+    assert "diff" in seen
+    diff = seen["diff"] or ""
+    assert "+print('hello')" in diff
+    assert "+print('world')" in diff
+    # No `-` body lines (it's a new file).
+    minus_body = [
+        ln for ln in diff.splitlines()
+        if ln.startswith("-") and not ln.startswith("---")
+    ]
+    assert minus_body == []
+
+
+def test_write_file_diff_snoop_existing_file_shows_real_diff(tmp_path):
+    """For an existing file, the diff kwarg should contain BOTH - and
+    + lines reflecting the actual change."""
+    spec = ProgrammerAgent()
+    target = tmp_path / "existing.py"
+    target.write_text("print('old')\n")
+    seen: dict = {}
+
+    class _Snoop:
+        def request(self, **kw):
+            from agentlib import ApprovalDecision
+            seen.update(kw)
+            return ApprovalDecision(approved=False, reason="snoop")
+
+    ctx = AgentContext(approval=_Snoop(), audit=InMemoryAuditLogger())
+    gated = gate_tools(spec, ctx, task_id="t-wf-exist")
+    by_name = {t.name: t for t in gated}
+    by_name["write_file"].invoke({
+        "path": str(target),
+        "content": "print('new')\n",
+    })
+    diff = seen.get("diff") or ""
+    assert "-print('old')" in diff
+    assert "+print('new')" in diff
+    # File untouched (rejected).
+    assert target.read_text() == "print('old')\n"

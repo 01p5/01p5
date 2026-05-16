@@ -110,6 +110,32 @@ def test_destructive_tool_runs_after_approval(monkeypatch):
 # Live test — only runs with explicit opt-in. CI must not pick this up.
 # ---------------------------------------------------------------------------
 
+def test_delete_pod_approval_call_carries_no_diff_preview():
+    """Diff preview is opt-in by tool-name lookup in the runtime's
+    _preview_diff (write_file/edit_file only). For non-file-mutating
+    destructive verbs like delete_pod, the runtime must pass
+    diff=None to ApprovalHook.request — not a stringified args dump."""
+    spec = SysadminAgent()
+    seen: dict = {}
+
+    class _Snoop:
+        def request(self, **kw):
+            from agentlib import ApprovalDecision
+            seen.update(kw)
+            return ApprovalDecision(approved=False, reason="snoop")
+
+    audit = InMemoryAuditLogger()
+    ctx = AgentContext(approval=_Snoop(), audit=audit)
+    gated = gate_tools(spec, ctx, task_id="diff-none-1")
+    by_name = {t.name: t for t in gated}
+
+    with patch("sysadmin.tools.subprocess.run"):
+        by_name["delete_pod"].invoke({"name": "web-x", "namespace": "default"})
+
+    assert "diff" in seen, "ApprovalHook.request must be called with a diff kwarg"
+    assert seen["diff"] is None
+
+
 _LIVE_REQUIRED = ("OLYMPUS_LIVE_LLM", "OLYMPUS_LIVE_KUBECTL")
 
 

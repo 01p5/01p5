@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
@@ -405,3 +406,246 @@ def test_sse_events_stream_includes_task_message(server):
     assert _wait(lambda: any(e.get("kind") == "task" for e in captured))
     stop.set()
     t.join(timeout=2.0)
+
+
+# ---------------------------------------------------------------------------
+# New edge-case coverage
+# ---------------------------------------------------------------------------
+
+
+def _make_server(static_dir=None, audit_log_path=None, agent=None):
+    """Construct a one-off DashboardServer for an edge-case test.
+    Caller is responsible for calling .serve() and .shutdown()."""
+    from agentlib import AlwaysApprove
+    agents = [agent] if agent is not None else [_ApprovalSeekingAgent()]
+    router_default = agents[0].name
+    bus = InMemoryBus()
+    approval = QueueApprovalHook(approval_timeout_seconds=5.0)
+    ctx = AgentContext(approval=AlwaysApprove(), audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=agents, ctx=ctx,
+        router=ManualRouter(default=router_default),
+        result_timeout_seconds=5.0,
+    )
+    kwargs: dict = dict(
+        orchestrator=orch, bus=bus, approval_hook=approval,
+        host="127.0.0.1", port=0,
+    )
+    if static_dir is not None:
+        kwargs["static_dir"] = static_dir
+    if audit_log_path is not None:
+        kwargs["audit_log_path"] = audit_log_path
+    srv = DashboardServer(**kwargs)
+    return srv
+
+
+def test_spa_fallback_does_not_eat_known_api_endpoints(tmp_path):
+    """The SPA fallback must only catch UNKNOWN paths; known endpoints
+    like /tools, /tasks, /events, /approvals, /audit, /healthz,
+    /stacks/* must NOT return the fake index.html body."""
+    fake_index = "<!doctype html><title>OLYMPUS_FAKE_INDEX_MARKER</title>"
+    (tmp_path / "index.html").write_text(fake_index)
+    srv = _make_server(static_dir=tmp_path, agent=_ToolAgent())
+    srv.serve()
+    try:
+        # JSON endpoints — body should be JSON, not the fake index.
+        for path in ("/tools", "/tasks", "/approvals",
+                      "/healthz", "/stacks/terraform", "/stacks/ansible"):
+            status, body = _get(srv, path)
+            assert status == 200, f"{path} returned {status}"
+            # Either parsed-as-JSON (dict/list) or a raw string that is
+            # NOT the fake index body.
+            if isinstance(body, str):
+                assert "OLYMPUS_FAKE_INDEX_MARKER" not in body, (
+                    f"{path} fell through to SPA fallback"
+                )
+            else:
+                assert isinstance(body, (dict, list))
+
+        # /audit: served as a static file with allow_missing=True.
+        # Body should be empty (not the index), status 200.
+        status, body = _get(srv, "/audit")
+        assert status == 200
+        if isinstance(body, str):
+            assert "OLYMPUS_FAKE_INDEX_MARKER" not in body
+    finally:
+        srv.shutdown()
+
+
+def test_static_serve_path_traversal_returns_404(tmp_path):
+    """Requesting a path that resolves outside static_dir must 404, not
+    serve the escape file content."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<title>real</title>")
+    escape = tmp_path / "escape.txt"
+    escape.write_text("SECRET_THAT_MUST_NOT_LEAK")
+
+    srv = _make_server(static_dir=static_dir, agent=_ToolAgent())
+    srv.serve()
+    try:
+        # /../escape.txt — server canonicalizes and rejects. urllib will
+        # normalize the path before sending, so use a raw socket.
+        import socket
+        host, port = srv.address
+        for raw_path in ("/../escape.txt", "/static/../escape.txt"):
+            with socket.create_connection((host, port), timeout=2.0) as s:
+                s.sendall(
+                    f"GET {raw_path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()
+                )
+                s.settimeout(2.0)
+                buf = b""
+                while True:
+                    try:
+                        chunk = s.recv(4096)
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    buf += chunk
+                    if b"\r\n\r\n" in buf and len(buf) > 64:
+                        break
+                response = buf.decode("utf-8", errors="replace")
+                assert "SECRET_THAT_MUST_NOT_LEAK" not in response, (
+                    f"path-traversal leaked for {raw_path}"
+                )
+    finally:
+        srv.shutdown()
+
+
+def test_audit_log_missing_file_returns_empty_body(tmp_path):
+    """When audit_log_path doesn't exist, GET /audit must still 200
+    (allow_missing=True path) with empty body."""
+    missing = tmp_path / "does_not_exist.jsonl"
+    assert not missing.exists()
+    srv = _make_server(audit_log_path=str(missing))
+    srv.serve()
+    try:
+        status, body = _get(srv, "/audit")
+        assert status == 200
+        # Empty body: parsed-JSON path raises so we get the raw string ""
+        assert body == "" or body == {}
+    finally:
+        srv.shutdown()
+
+
+def test_tools_catalog_entry_shape(tools_server):
+    """Each /tools entry has the documented set of keys and the
+    args_schema is a JSON-schema object."""
+    status, body = _get(tools_server, "/tools")
+    assert status == 200
+    required = {"agent", "name", "description", "args_schema", "destructive"}
+    for entry in body:
+        assert required.issubset(entry.keys()), (
+            f"missing keys: {required - set(entry.keys())}"
+        )
+    # Specifically for _t_read_thing.
+    entry = next(e for e in body if e["name"] == "_t_read_thing")
+    schema = entry["args_schema"]
+    assert isinstance(schema, dict)
+    assert "properties" in schema
+    # langchain @tool generates Pydantic models with type: object.
+    assert schema.get("type") == "object"
+
+
+def test_invoke_tool_non_object_body_returns_400(tools_server):
+    """A JSON array (or any non-object) for the tool args body is 400."""
+    import urllib.error
+    import urllib.request
+    host, port = tools_server.address
+    req = urllib.request.Request(
+        f"http://{host}:{port}/tools/tooly/_t_read_thing",
+        data=b"[1, 2, 3]",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        body = json.loads(exc.read().decode("utf-8"))
+    assert status == 400
+    assert "object" in body["error"]
+
+
+def test_invoke_tool_invalid_json_returns_400(tools_server):
+    """Malformed JSON body to the invoke endpoint returns 400 with
+    an error message about invalid JSON."""
+    import urllib.error
+    import urllib.request
+    host, port = tools_server.address
+    req = urllib.request.Request(
+        f"http://{host}:{port}/tools/tooly/_t_read_thing",
+        data=b"{not valid json",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        body = json.loads(exc.read().decode("utf-8"))
+    assert status == 400
+    assert "JSON" in body["error"] or "json" in body["error"]
+
+
+def test_invoke_tool_underlying_raises_returns_500_with_task_id():
+    """When the underlying tool raises, the server returns 500 with
+    {task_id, error} so the UI can correlate the failure."""
+    from langchain_core.tools import tool as _lc_tool
+
+    @_lc_tool
+    def _boom(reason: str = "kaboom") -> str:
+        """Always raises."""
+        raise RuntimeError(f"intentional: {reason}")
+
+    class _BoomAgent(AgentSpec):
+        name = "boomy"
+        domain = "boomy"
+        tools: Sequence[Any] = [_boom]
+        destructive_verbs: set[str] = set()
+
+        def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
+            raise NotImplementedError
+
+    srv = _make_server(agent=_BoomAgent())
+    srv.serve()
+    try:
+        status, body = _post(srv, "/tools/boomy/_boom", {"reason": "test"})
+        assert status == 500
+        assert "task_id" in body
+        assert body["task_id"].startswith("manual:")
+        assert "error" in body
+        assert "RuntimeError" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_stacks_terraform_returns_sorted_list_when_populated(tools_server, monkeypatch, tmp_path):
+    """When two .tf files exist under a stack, the endpoint returns
+    a sorted list of stack paths. Uses monkeypatch on _infra_roots to
+    point at a tmp_path with two stack dirs."""
+    # Build a fake infra/terraform tree: <tmp_path>/terraform/{stack-b,stack-a}/main.tf
+    tf_root = tmp_path / "terraform"
+    (tf_root / "stack-b").mkdir(parents=True)
+    (tf_root / "stack-a").mkdir(parents=True)
+    (tf_root / "stack-b" / "main.tf").write_text("# stack b\n")
+    (tf_root / "stack-a" / "main.tf").write_text("# stack a\n")
+
+    # Patch the server's _infra_roots to return our fake root.
+    monkeypatch.setattr(
+        tools_server, "_infra_roots",
+        lambda kind: [tf_root] if kind == "terraform" else [],
+    )
+    status, body = _get(tools_server, "/stacks/terraform")
+    assert status == 200
+    assert isinstance(body, list)
+    # Stacks reported relative to root.parent (i.e. tmp_path).
+    assert body == sorted(body), f"expected sorted, got {body}"
+    # Both stacks present.
+    names = [Path(p).name for p in body]
+    assert "stack-a" in names and "stack-b" in names
