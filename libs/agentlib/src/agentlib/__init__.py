@@ -25,6 +25,20 @@ from .approval_webhook import WebhookApprovalHook
 from .budget import BudgetExceededError, BudgetGuard, BudgetState
 from .bus import Bus, BusMessage, InMemoryBus, new_message
 from .bus_redis import RedisStreamsBus
+from .mcp import (
+    MCPClient,
+    MCPError,
+    MCPServerConfig,
+    MCPToolResult,
+    MockTransport,
+    StdioTransport,
+    parse_command_string,
+    register_mcp_tools,
+    to_langchain_tool,
+)
+from .mcp import (
+    Transport as MCPTransport,
+)
 from .memory import (
     EmbeddingMemoryStore,
     InMemoryMemoryStore,
@@ -138,6 +152,16 @@ __all__ = [
     "JsonlRollbackStore",
     "new_rollback_id",
     "plan_to_entry",
+    "MCPClient",
+    "MCPError",
+    "MCPServerConfig",
+    "MCPToolResult",
+    "MCPTransport",
+    "MockTransport",
+    "StdioTransport",
+    "to_langchain_tool",
+    "register_mcp_tools",
+    "parse_command_string",
     "Plan",
     "PlanStep",
     "PlanResult",
