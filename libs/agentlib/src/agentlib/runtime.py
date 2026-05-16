@@ -189,7 +189,6 @@ def _preview_diff(tool_name: str, args: dict[str, Any]) -> Optional[str]:
     preview computation throws — the approval still happens, just
     without the diff hint.
     """
-    import difflib
     from pathlib import Path
 
     try:
