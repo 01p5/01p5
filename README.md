@@ -33,9 +33,9 @@ Built for [CS 153 – Frontier Systems](https://www.classes.cs.chicago.edu/) as 
 | 4 agents (sysadmin / programmer / terraform / ansible) | each gated, audited, snapshot-instrumented for rollback, cost-tracked |
 | Dashboard (HTTP API + React SPA) | full intelligence-layer UI: memory chips, feedback buttons, rollback panel, telemetry footer |
 | CLI | `olympus "..."` dispatches via the same orchestrator |
-| Tests | **437 total** — 216 frontend (vitest) + 221 backend (pytest) + 23 E2E (Playwright). CI green. |
-| Live deploy | Proxmox → 4× Ubuntu VMs → kubeadm + Calico → Helm chart. *Note: the deployed instance predates the W7-8 intelligence layer; redeploy needed to surface the new endpoints.* |
-| Plan progress | W1–6 done. W7-8 (intelligence) **5 of 6 items shipped** (memory + retrieval, feedback, rollback, cross-agent integration tests, telemetry). W9-10 (MCP, demo, writeup) pending. |
+| Tests | **480 total** — 227 frontend (vitest) + 253 backend (pytest) + 23 E2E (Playwright). CI green. |
+| Live deploy | Proxmox → 4× Ubuntu VMs → kubeadm + Calico → Helm chart. *Note: the deployed instance predates the W7-8 + W9-10 work; redeploy needed to surface the new endpoints.* |
+| Plan progress | W1–8 done end-to-end. W9-10 **MCP shipped** (library + dashboard + UI + worked-example demo server). Remaining: alpha-tester outreach, polished demo, final writeup (non-code). |
 
 ## Quick start
 
@@ -262,6 +262,8 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 - [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md) — the `AgentSpec` contract every agent implements.
 - [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md) — why the bus looks the way it does (in-memory default, Redis Streams optional).
 - [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) — runbook for the live deployment, every endpoint, what's been exercised, known issues.
+- [`docs/MCP.md`](docs/MCP.md) — Model Context Protocol integration walkthrough + worked example.
+- [`infra/demo-mcp-server/`](infra/demo-mcp-server/) — pure-Python stdio MCP server for demos / smoke tests.
 - [`infra/k8s/README.md`](infra/k8s/README.md) — the Helm chart's deploy story.
 
 ## License

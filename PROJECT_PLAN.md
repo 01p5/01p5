@@ -122,14 +122,14 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 
 ### Weeks 9–10: Scale & Polish
 
-- [~] Documentation and onboarding experience — top-level [`README.md`](README.md) shipped (quick start + per-component guide + invariants); [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md), [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md), [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md) already exist. *Remaining:* short screencast / GIF walkthrough.
-- [ ] Incorporate alpha tester feedback
-- [ ] **MCP interface for the Orchestrator** — accept user-supplied tools (and eventually whole user-defined subagents) via the Model Context Protocol. Land in two passes: (1) `libs/agentlib/mcp.py` registers MCP-server tools onto an existing `AgentSpec`, with a per-server `destructive` allowlist so user-supplied tools still gate through `gate_tools`; (2) dashboard surface for adding/removing MCP servers at runtime. The "user-defined subagent" angle (a sixth `AgentSpec` slot in the orchestrator) deferred until pass (1) proves itself.
-- [ ] Additional/customizable agents (stretch — partly subsumed by MCP)
+- [x] Documentation and onboarding experience — top-level [`README.md`](README.md) (quick start + per-component guide + intelligence-layer walkthrough), [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md), [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md), [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md), and [`docs/MCP.md`](docs/MCP.md) (worked example with the demo server). *Remaining:* short screencast / GIF walkthrough for the final presentation.
+- [ ] Incorporate alpha tester feedback (not yet contacted)
+- [x] **MCP interface for the Orchestrator** — shipped end-to-end in two passes. Pass 1 (7526b6e): `libs/agentlib/mcp.py` with `MCPServerConfig`, abstract `Transport` Protocol, `StdioTransport` + `MockTransport`, `MCPClient` (JSON-RPC 2.0 handshake + `tools/list` + `tools/call`), `to_langchain_tool` adapter, `register_mcp_tools` convenience. Per-server destructive allowlist supplied by the integrator (never by the server). Pass 2 (76ab0e6): dashboard registry + `GET /mcp/servers` + `GET /mcp/servers/{name}/tools` endpoints + new "MCP" tab in the topnav showing every wired server with status, command, and lazy-loaded tool catalog (destructive tools flagged). Failing servers land as `status="error"` rather than crashing the dashboard. Worked example in [`docs/MCP.md`](docs/MCP.md) + [`infra/demo-mcp-server/`](infra/demo-mcp-server/).
+- [x] Additional/customizable agents — subsumed by MCP. Anyone with a Python script + stdio JSON-RPC can extend any of the four agents without touching Olympus core code. Demo server at [`infra/demo-mcp-server/server.py`](infra/demo-mcp-server/server.py) ships as a copy-paste starting point.
 - [ ] Polished demo for class presentation / users / investors
 - [ ] Final writeup
 
-**Deliverable:** Production-ready demo, documentation, presentation. Third-party tool authors can register MCP servers without touching Olympus core code.
+**Deliverable:** Production-ready demo, documentation, presentation. Third-party tool authors can register MCP servers without touching Olympus core code. **MCP shipped; remaining items are presentation work, not code.**
 
 ---
 
