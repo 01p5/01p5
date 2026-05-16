@@ -84,6 +84,8 @@ jobs:
           cache-dependency-path: agents/dashboard/frontend/package-lock.json
       - name: Install
         run: npm ci || npm install
+      - name: Unit tests (vitest)
+        run: npm run test:run
       - name: Type-check + build
         run: npm run build
       - name: Confirm SPA artifacts
