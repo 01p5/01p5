@@ -29,12 +29,13 @@ Built for [CS 153 – Frontier Systems](https://www.classes.cs.chicago.edu/) as 
 
 | Layer | State |
 |-------|-------|
-| `libs/agentlib` (SDK) | stable; 17 unit tests |
-| 4 agents (sysadmin / programmer / terraform / ansible) | each gated, audited, smoke-tested |
-| Dashboard (HTTP API + React SPA) | running on a 4-node k8s cluster |
+| `libs/agentlib` (SDK) | stable; memory, rollback, plan, bus, runtime — all unit-tested |
+| 4 agents (sysadmin / programmer / terraform / ansible) | each gated, audited, snapshot-instrumented for rollback, cost-tracked |
+| Dashboard (HTTP API + React SPA) | full intelligence-layer UI: memory chips, feedback buttons, rollback panel, telemetry footer |
 | CLI | `olympus "..."` dispatches via the same orchestrator |
-| Tests | **289 total** — 146 frontend (vitest) + 120 backend (pytest) + 23 E2E (Playwright). CI green. |
-| Live deploy | Proxmox → 4× Ubuntu VMs → kubeadm + Calico → Helm chart |
+| Tests | **437 total** — 216 frontend (vitest) + 221 backend (pytest) + 23 E2E (Playwright). CI green. |
+| Live deploy | Proxmox → 4× Ubuntu VMs → kubeadm + Calico → Helm chart. *Note: the deployed instance predates the W7-8 intelligence layer; redeploy needed to surface the new endpoints.* |
+| Plan progress | W1–6 done. W7-8 (intelligence) **5 of 6 items shipped** (memory + retrieval, feedback, rollback, cross-agent integration tests, telemetry). W9-10 (MCP, demo, writeup) pending. |
 
 ## Quick start
 
@@ -191,17 +192,63 @@ The multi-stage `Dockerfile` builds the SPA with Node 20 and bakes it into the P
 
 End state on the live system: Caddy on `10.0.10.30` proxies plain HTTP → cluster NodePort `30093`. See [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md).
 
+## The intelligence layer (W7-8)
+
+Four cooperating features that, together, turn Olympus from "five agents that run tools" into "a system that learns from prior runs and lets you undo what it did." All four are off by default (NullStore / NullRollback / NullMemoryStore), so an existing deployment opts in by passing the wired store through `AgentContext`.
+
+### Memory + retrieval (`libs/agentlib/memory.py`)
+
+On every settled task, the orchestrator writes a compact transcript (NL request + agent + summary + status + cost) to a `MemoryStore`. On the *next* task start (or the next plan step), it retrieves the top-K most-similar prior runs scoped to the routed agent, and prepends them to the agent's prompt as an explicit "treat as untrusted reference material" context block.
+
+Two backends ship with v1:
+
+- `JsonlMemoryStore` — append-only JSONL, Jaccard token similarity. Zero extra deps. Default for tests + CI.
+- `EmbeddingMemoryStore` — OpenAI `text-embedding-3-small` + numpy cosine. Persists vectors inline next to each entry. Default for production once `OPENAI_API_KEY` is set. Degrades to lexical ranking if the API is unreachable.
+
+Backend choice is env-driven: `OLYMPUS_MEMORY=disabled|embeddings|<default jsonl>`, path at `OLYMPUS_MEMORY_PATH`.
+
+### Feedback loop (`MemoryStore.annotate`)
+
+`MemoryStore.annotate(task_id, feedback, correction)` lets the user tag a past run as 👍 / 👎 / + free-text correction. Retrieval ranking is feedback-aware: `"bad"` entries are filtered out entirely (they stay in the store for audit but never resurface in prompts), `"good"` entries get a +0.15 score boost (enough to tip ties, small enough that a verified-but-irrelevant entry never beats an unverified-but-very-similar one). Corrections ride along into the retrieved prompt block so an agent sees `"User correction: …"` for similar future queries.
+
+Dashboard endpoint: `POST /memory/{task_id}/feedback` with body `{feedback, correction}`. UI: thumbs-up/down + ✎ correction expander under every settled chat turn (`FeedbackButtons` component).
+
+### Per-verb rollback (`libs/agentlib/rollback.py`)
+
+When a destructive tool fires successfully, the runtime captures *what would undo it* via the agent's `rollback_snapshots[tool_name](args)` callable. The captured `RollbackPlan` carries the inverse tool name + inverse args + human-readable description + pre-state snapshot, and is persisted to a `RollbackStore` (`Null` / `InMemory` / `Jsonl`).
+
+The Programmer agent declares snapshots for `write_file`, `edit_file`, and a new `delete_file` tool. Each picks the right inverse:
+
+| Forward | Inverse |
+|---------|---------|
+| `write_file` on existing path | `write_file` with prior bytes |
+| `write_file` on new path | `delete_file` |
+| `edit_file` | `write_file` with pre-edit bytes |
+| `delete_file` | `write_file` with the doomed bytes |
+
+The other agents (Sysadmin/Terraform/Ansible) inherit the infrastructure but haven't declared snapshots yet — opting in is a per-tool addition.
+
+Executing a rollback is itself a destructive operation: `POST /rollback/{id}/execute` routes the inverse through the same `gate_tools` machinery as any human-driven tool call, so the user re-approves the undo. The store's `mark_executed` is atomic (tmp-rename rewrite of the JSONL file). UI: `RollbackPanel` lists captured rollbacks in the right sidebar with an Undo button per row.
+
+### Telemetry (`/telemetry` + `CostChip` + `TelemetryFooter`)
+
+`StructuralAgent` accumulates per-invocation cost (USD + input/output tokens) on the instance itself (not the shared global), so concurrent tasks don't race. Each agent calls `cost_from_agent(agent, wall_seconds)` to fill in the `CostBreakdown` on its `AgentResult`. The dashboard surfaces it on `TaskRecord` and rolls it up via `GET /telemetry` (totals, by-agent, by-status, recent-10). The UI shows a per-turn cost chip next to the task-id and a one-row telemetry footer at the bottom of the layout.
+
+Live cluster note: the deployment at `http://10.0.10.30/` predates the intelligence layer — these endpoints will return SPA-fallback HTML until the dashboard image is rebuilt and re-rolled. The Helm chart already mounts the audit volume that memory + rollback persistence write to (`audit.persistence.enabled`).
+
 ## Testing
 
 Three layers, all run in CI except the live-cluster E2E (opt-in via `OLYMPUS_LIVE_E2E=1`):
 
 ```
-libs/agentlib                 17 unit tests   — SDK core
-agents/{4 agents}/tests       55 smoke tests  — gating, audit, approval semantics (LLM mocked)
-agents/dashboard/tests/server 22 unit tests   — HTTP routing, path-traversal defense, SPA fallback
-agents/dashboard/frontend     146 vitest      — every component, hook, page
-agents/dashboard/tests/e2e    23 Playwright   — real browser → real cluster
+libs/agentlib                129 unit tests  — SDK core (incl. memory, rollback, plan, runtime)
+agents/{4 agents}/tests       65 smoke tests — gating, audit, approval, snapshot semantics
+agents/dashboard/tests/server 44 unit tests  — HTTP routing + /memory + /rollback + /telemetry
+agents/dashboard/frontend    216 vitest      — every component, hook, page + UI integration
+agents/dashboard/tests/e2e    23 Playwright  — real browser → real cluster
 ```
+
+Backend total: **221 tests** in ~30s. Frontend: **216 tests** in ~3s. Combined: **437 tests** gating every push.
 
 The E2E suite spawns short-lived `e2e-target-<rand>` pods labelled `e2e-target=true` for the destructive flows; sweep any leaks with:
 

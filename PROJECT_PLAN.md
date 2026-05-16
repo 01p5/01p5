@@ -111,14 +111,14 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 
 ### Weeks 7–8: Testing, Hardening & Intelligence
 
-- [~] End-to-end integration tests — **single-agent** layer is solid: 146 vitest + 120 pytest + 23 Playwright (live cluster). *Remaining gap:* **cross-agent** plan tests (`Orchestrator.run_plan`: Programmer → Terraform → Sysadmin chained, with results threaded through `step_to_task`). Land as a new opt-in suite next to the dashboard E2E tests.
-- [ ] Operation telemetry analysis — measure against success metrics (see below). `agentlib._calculate_response_cost` already records per-call cost; the missing piece is surfacing the `agent_execution_context` accumulator through the dashboard task result and aggregating across tasks.
-- [ ] Agent memory: vector store of past run transcripts, retrieved at task start. Decision on storage (pgvector / Chroma / Qdrant) is the W7 open question below.
-- [ ] Error recovery and rollback capabilities — per-destructive-verb inverse operations (`tf_apply` ← `tf_destroy` against a saved plan; `delete_pod` ← recreate from cached manifest; `write_file` / `edit_file` ← restore from pre-write backup).
-- [ ] Feedback loop: post-run human annotations ("good"/"bad"/"correction") → retrieval ranking. Depends on agent memory.
+- [x] End-to-end integration tests — single-agent (146 vitest + 120 pytest + 23 Playwright) PLUS cross-agent plan tests (8 in `libs/agentlib/tests/test_plan_integration.py`, exercising writer → planner → checker through gate_tools + audit + rollback + memory). Closed in 0185a57.
+- [x] Operation telemetry analysis — per-task `CostBreakdown` populated by every agent via `cost_from_agent`; dashboard surfaces it on `TaskRecord` and aggregates via `GET /telemetry`; UI shows a per-turn cost chip + a live telemetry footer. Closed in 9801400.
+- [x] Agent memory: vector store of past run transcripts, retrieved at task start. Lexical (`JsonlMemoryStore`) for tests/CI, OpenAI embeddings (`EmbeddingMemoryStore`) for production. Orchestrator integrates retrieval + write-back on both `.run()` and `.run_plan()`. Closed in 4cfdbf0 + 0185a57.
+- [x] Error recovery and rollback capabilities — `RollbackPlan` + `RollbackStore` (Null/InMemory/Jsonl); runtime captures inverse-state before destructive calls; Programmer agent declares snapshots for write/edit/delete\_file (delete\_file added as the rollback inverse for "new-file write\_file"). Dashboard exposes `GET /rollback` + `POST /rollback/{id}/execute` (re-routes through `gate_tools` so the undo re-prompts approval). UI lists captured rollbacks with an Undo button. Closed in 9bbad49 + b005137.
+- [x] Feedback loop: 👍/👎/correction on memory entries. Backend: `MemoryStore.annotate(task_id, feedback, correction)` on all four backends. Retrieval drops "bad" entries entirely and boosts "good" entries by +0.15. Corrections ride into the prompt block on future retrievals. UI: `FeedbackButtons` under each settled chat turn. Closed in 8f9ceae + b005137.
 - [ ] Contact potential alpha test users for real-world deployments.
 
-**Deliverable:** System is stable enough for external users. Cost/performance is understood and optimized.
+**Deliverable:** System is stable enough for external users. Cost/performance is understood and optimized. **Five of six items shipped; alpha-tester outreach is the only remaining task and is not code work.**
 
 ### Weeks 9–10: Scale & Polish
 
@@ -172,7 +172,7 @@ Each question is tagged with the week it must be resolved by — slipping these 
 - [x] **(decided W2)** Agent-to-agent delegation: orchestrator-only in v1. Revisit after W6.
 - [x] **(decided W2)** Long-running ops (Terraform apply): sync-with-progress-events. No async job model in v1.
 - [x] **(decided W5)** Message queue for context bus: **Redis Streams** for v2; in-memory bus stays for tests/single-process dev. See [docs/BUS_DECISION.md](docs/BUS_DECISION.md).
-- [ ] **(decide by W4)** Web UI framework (Next.js / SvelteKit / plain React)?
+- [x] **(decided W4)** Web UI framework: plain React + TypeScript + Vite + Tailwind. Shipped at `agents/dashboard/frontend/`. Next.js considered but rejected — SSR adds no value for a single-user dashboard, and the SPA + standard-library HTTP server is simpler to operate.
 - [x] **(decided W4)** Terminal UI: textual. Mounted in `agents/olympus_cli/src/olympus_cli/tui.py`.
-- [ ] **(decide by W7)** Agent memory storage — vector DB choice (pgvector / Chroma / Qdrant)?
+- [x] **(decided W7)** Agent memory storage: neither pgvector / Chroma / Qdrant. Instead, a Protocol-driven `MemoryStore` with two backends — `JsonlMemoryStore` (lexical Jaccard over append-only JSONL, dep-free) and `EmbeddingMemoryStore` (OpenAI text-embedding-3-small + numpy cosine over the same on-disk format). External vector DB deferred until we outgrow ~10k entries. See `libs/agentlib/src/agentlib/memory.py`.
 - [ ] **(stretch, W9–10)** Auth/RBAC model for multi-user scenarios.
