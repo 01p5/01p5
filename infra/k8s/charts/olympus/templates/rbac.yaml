@@ -1,8 +1,7 @@
 {{- if .Values.rbac.create -}}
-# Role granting the Sysadmin agent the verbs declared in
-# agents/sysadmin/src/sysadmin/tools.py. Read-only by default; mutation
-# (delete pod) is opt-in via .Values.rbac.destructive — even then it is
-# additionally gated by the ApprovalHook at runtime.
+# Namespaced Role: pod/event/log read (and optional delete) within
+# the release namespace. The sysadmin agent's pod-facing tools all
+# scope to a single namespace argument, so this is the natural fit.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -10,7 +9,7 @@ metadata:
   labels: {{- include "olympus.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: ["pods", "pods/log", "events", "nodes"]
+    resources: ["pods", "pods/log", "events"]
     verbs:     ["get", "list", "watch"]
   {{- if .Values.rbac.destructive }}
   - apiGroups: [""]
@@ -30,4 +29,33 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "olympus.fullname" . }}-sysadmin
+---
+# ClusterRole for cluster-scoped resources the sysadmin agent reads.
+# `nodes` is cluster-scoped and cannot be authorized by a namespaced
+# Role at all — k8s rejects the binding. Keep this strictly read-only;
+# no destructive cluster verbs are ever needed for the dashboard's
+# current toolset.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "olympus.fullname" . }}-sysadmin-cluster
+  labels: {{- include "olympus.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs:     ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "olympus.fullname" . }}-sysadmin-cluster
+  labels: {{- include "olympus.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "olympus.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "olympus.fullname" . }}-sysadmin-cluster
 {{- end }}
