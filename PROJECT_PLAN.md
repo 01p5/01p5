@@ -68,15 +68,15 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 
 ## 10-Week Timeline
 
-### Weeks 1–2: Proposal & Proof of Concept *(current)*
+### Weeks 1–2: Proposal & Proof of Concept
 
 - [x] Write and submit project proposal
 - [x] Secure domain (0lympu5.com)
 - [x] Monorepo scaffolding (`libs/agentlib` — LangChain/LangGraph wrapper, multi-provider models, budget guard, streaming)
-- [ ] CI/CD + linting (ruff, pytest, GitHub Actions)
+- [x] CI/CD + linting — ruff + pytest + vitest in `.github/workflows/ci.yml`; 146 frontend + 120 backend run on every push
 - [x] **Agent interface contract** — `AgentSpec` document: tool schema, approval hook signature, context-bus message format, error semantics *(promoted: every later phase depends on it)* → [docs/AGENT_SPEC.md](docs/AGENT_SPEC.md) (draft v0.1)
-- [ ] Proof of concept: single agent (Sysadmin — read-only `kubectl` / log queries) executing a task end-to-end
-- [ ] Docker Compose dev environment (agent + in-memory bus stub)
+- [x] Proof of concept: single agent (Sysadmin — read-only `kubectl` / log queries) executing a task end-to-end — live since W4 against the PVE cluster, see [docs/LIVE_DEMO.md](docs/LIVE_DEMO.md)
+- [x] Docker Compose dev environment — `docker-compose.yml` at repo root; production deploy uses the same multi-stage Dockerfile
 - [x] Decide two open questions that shape the bus: orchestrator-only delegation in v1; long-running ops stream `progress` messages (see [AGENT_SPEC.md "Locked decisions"](docs/AGENT_SPEC.md))
 
 **Deliverable:** One agent can receive a natural language task, translate to tool calls, and execute with human approval. Agent interface contract is written and reviewed.
@@ -86,7 +86,7 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 - [x] Orchestrator: task decomposition and agent dispatch logic — `agentlib.Orchestrator` + `LLMRouter`/`ManualRouter`; production wiring in `agents/olympus_cli`
 - [x] Shared context bus — **in-memory v1** (hardening pushed to W5–6)
 - [x] Human-in-the-loop approval flow (CLI + webhook) — `ConsoleApprovalHook` + `WebhookApprovalHook` (stdlib HTTP)
-- [ ] **Minimal AWS deploy path** (one agent against real infra) — code path ready (`infra/aws-bootstrap` + `infra/sandbox-bucket` + Terraform agent), live AWS apply held until a sandbox account is in place (user's local creds point at company AWS)
+- [~] **Minimal AWS deploy path** (one agent against real infra) — **deprioritized (budget).** Code path is intact (`infra/aws-bootstrap` + `infra/sandbox-bucket` + Terraform agent against `infra/terraform/aws/`), but live AWS apply is held: the user's local creds point at company AWS and the sandbox-account spend isn't worth it given the live PVE deploy already satisfies the "one agent against real infra" deliverable. Re-enable later if a sponsored sandbox account appears.
 - [x] Terraform Agent — plan/apply/destroy with state awareness
 - [x] Ansible Agent — playbook execution, inventory management
 - [x] Programmer Agent — Dockerfile, Helm chart, script generation
@@ -95,7 +95,7 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 - [x] Terminal CLI interface (chose **textual**) — minimal app in `agents/olympus_cli/src/olympus_cli/tui.py`; W5-6 polishes
 - [x] Unit tests for each agent, security tests for guardrails — 60 tests across 6 packages, all green; live LLM/AWS paths gated behind opt-in env vars
 
-**Deliverable:** Four agents functional individually via CLI, one running against real AWS. Orchestrator can route tasks to the correct agent.
+**Deliverable:** Four agents functional individually via CLI, one running against real infrastructure (~~AWS~~ → PVE cluster, see W5–6). Orchestrator can route tasks to the correct agent.
 
 ### Weeks 5–6: Cross-Agent Workflows & Web UI
 
@@ -111,24 +111,25 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 
 ### Weeks 7–8: Testing, Hardening & Intelligence
 
-- [ ] End-to-end integration tests
-- [ ] Operation telemetry analysis — measure against success metrics (see below)
-- [ ] Agent memory: vector store of past run transcripts, retrieved at task start
-- [ ] Error recovery and rollback capabilities
-- [ ] Feedback loop: post-run human annotations ("good"/"bad"/"correction") → retrieval ranking
-- [ ] Contact potential alpha test users for real-world deployments
+- [~] End-to-end integration tests — **single-agent** layer is solid: 146 vitest + 120 pytest + 23 Playwright (live cluster). *Remaining gap:* **cross-agent** plan tests (`Orchestrator.run_plan`: Programmer → Terraform → Sysadmin chained, with results threaded through `step_to_task`). Land as a new opt-in suite next to the dashboard E2E tests.
+- [ ] Operation telemetry analysis — measure against success metrics (see below). `agentlib._calculate_response_cost` already records per-call cost; the missing piece is surfacing the `agent_execution_context` accumulator through the dashboard task result and aggregating across tasks.
+- [ ] Agent memory: vector store of past run transcripts, retrieved at task start. Decision on storage (pgvector / Chroma / Qdrant) is the W7 open question below.
+- [ ] Error recovery and rollback capabilities — per-destructive-verb inverse operations (`tf_apply` ← `tf_destroy` against a saved plan; `delete_pod` ← recreate from cached manifest; `write_file` / `edit_file` ← restore from pre-write backup).
+- [ ] Feedback loop: post-run human annotations ("good"/"bad"/"correction") → retrieval ranking. Depends on agent memory.
+- [ ] Contact potential alpha test users for real-world deployments.
 
 **Deliverable:** System is stable enough for external users. Cost/performance is understood and optimized.
 
 ### Weeks 9–10: Scale & Polish
 
-- [ ] Documentation and onboarding experience
+- [~] Documentation and onboarding experience — top-level [`README.md`](README.md) shipped (quick start + per-component guide + invariants); [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md), [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md), [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md) already exist. *Remaining:* short screencast / GIF walkthrough.
 - [ ] Incorporate alpha tester feedback
-- [ ] Additional/customizable agents (stretch)
+- [ ] **MCP interface for the Orchestrator** — accept user-supplied tools (and eventually whole user-defined subagents) via the Model Context Protocol. Land in two passes: (1) `libs/agentlib/mcp.py` registers MCP-server tools onto an existing `AgentSpec`, with a per-server `destructive` allowlist so user-supplied tools still gate through `gate_tools`; (2) dashboard surface for adding/removing MCP servers at runtime. The "user-defined subagent" angle (a sixth `AgentSpec` slot in the orchestrator) deferred until pass (1) proves itself.
+- [ ] Additional/customizable agents (stretch — partly subsumed by MCP)
 - [ ] Polished demo for class presentation / users / investors
 - [ ] Final writeup
 
-**Deliverable:** Production-ready demo, documentation, presentation.
+**Deliverable:** Production-ready demo, documentation, presentation. Third-party tool authors can register MCP servers without touching Olympus core code.
 
 ---
 
