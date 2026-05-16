@@ -132,10 +132,61 @@ def test_healthz(server):
     assert body == {"ok": True}
 
 
-def test_static_index_served(server):
-    status, body = _get(server, "/")
-    assert status == 200
-    assert "Olympus" in body
+def test_static_index_served(tmp_path):
+    """Build a server with a tmp static_dir + fake index.html so the
+    test doesn't depend on whether the Vite frontend has been built
+    locally / in CI. The behavior under test is "GET / serves the
+    index.html"."""
+    (tmp_path / "index.html").write_text(
+        "<!doctype html><title>Olympus dashboard</title>",
+    )
+    bus = InMemoryBus()
+    approval = QueueApprovalHook(approval_timeout_seconds=5.0)
+    ctx = AgentContext(approval=approval, audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[_ApprovalSeekingAgent()], ctx=ctx,
+        router=ManualRouter(default="stub"),
+        result_timeout_seconds=5.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=approval,
+        host="127.0.0.1", port=0, static_dir=tmp_path,
+    )
+    srv.serve()
+    try:
+        status, body = _get(srv, "/")
+        assert status == 200
+        assert "Olympus" in body
+    finally:
+        srv.shutdown()
+
+
+def test_spa_fallback_unknown_path_serves_index(tmp_path):
+    """Any unmatched GET should fall back to index.html so SPA routes
+    like /chat or /kubernetes work on hard refresh."""
+    (tmp_path / "index.html").write_text(
+        "<!doctype html><title>Olympus dashboard</title>",
+    )
+    bus = InMemoryBus()
+    approval = QueueApprovalHook(approval_timeout_seconds=5.0)
+    ctx = AgentContext(approval=approval, audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[_ApprovalSeekingAgent()], ctx=ctx,
+        router=ManualRouter(default="stub"),
+        result_timeout_seconds=5.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=approval,
+        host="127.0.0.1", port=0, static_dir=tmp_path,
+    )
+    srv.serve()
+    try:
+        for path in ("/chat", "/kubernetes", "/some/unknown/route"):
+            status, body = _get(srv, path)
+            assert status == 200, f"path {path} returned {status}"
+            assert "Olympus" in body
+    finally:
+        srv.shutdown()
 
 
 # ---- new: tool catalog + direct invocation ----
