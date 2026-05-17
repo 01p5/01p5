@@ -26,7 +26,7 @@ from agentlib import (
     gpt5_mini,
 )
 
-from .tools import ALL_TOOLS, DESTRUCTIVE_TOOLS
+from .tools import ALL_TOOLS, DESTRUCTIVE_TOOLS, ROLLBACK_SNAPSHOTS
 
 
 SYSTEM_PROMPT = """You are the Olympus Sysadmin agent. You operate a Kubernetes cluster.
@@ -35,6 +35,12 @@ You can:
   - Read pod, node, log, and event state with the provided tools.
   - Delete a pod (destructive — every call requires human approval, which
     will be requested automatically by the runtime).
+  - Apply a Kubernetes manifest from a YAML string (destructive). The
+    primary use of apply_manifest is as the rollback inverse of
+    delete_pod — the runtime captures the pod's manifest pre-delete
+    and routes it back through apply_manifest if the user undoes the
+    deletion. Direct use is allowed but rare; prefer pointing at
+    existing resources over hand-rolling manifests.
 
 You CANNOT:
   - Change cluster configuration, edit deployments, scale resources, or
@@ -70,6 +76,7 @@ class SysadminAgent(AgentSpec):
     domain = "Kubernetes runtime operations: pods, logs, events, controlled pod deletion"
     tools: Sequence[Any] = ALL_TOOLS
     destructive_verbs = {t.name for t in DESTRUCTIVE_TOOLS}
+    rollback_snapshots = ROLLBACK_SNAPSHOTS
     model = gpt5_mini
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:

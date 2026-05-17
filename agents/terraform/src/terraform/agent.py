@@ -30,7 +30,7 @@ from agentlib import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from .tools import ALL_TOOLS, DESTRUCTIVE_TOOLS
+from .tools import ALL_TOOLS, DESTRUCTIVE_TOOLS, ROLLBACK_SNAPSHOTS
 
 SYSTEM_PROMPT = """You are the Olympus Terraform agent. You manage cloud
 infrastructure-as-code via the local terraform CLI.
@@ -84,6 +84,7 @@ class TerraformAgent(AgentSpec):
     domain = "Cloud infrastructure-as-code via Terraform: plan/apply/destroy with state awareness"
     tools: Sequence[Any] = ALL_TOOLS
     destructive_verbs = {t.name for t in DESTRUCTIVE_TOOLS}
+    rollback_snapshots = ROLLBACK_SNAPSHOTS
     model = gpt5_mini
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
