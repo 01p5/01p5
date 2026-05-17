@@ -544,3 +544,425 @@ def test_mock_transport_send_after_close_raises():
     transport.close()
     with pytest.raises(MCPError):
         transport.send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+
+
+# ---------------------------------------------------------------------
+# HTTP transport (Streamable HTTP)
+# ---------------------------------------------------------------------
+
+import contextlib  # noqa: E402 — section-local imports
+import http.server  # noqa: E402
+import json as _json  # noqa: E402
+import socket  # noqa: E402
+import threading as _threading  # noqa: E402
+import urllib.error  # noqa: E402
+from typing import Optional  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from agentlib import HttpTransport, build_transport  # noqa: E402
+
+
+def _fake_urlopen_response(
+    body: bytes,
+    content_type: str = "application/json",
+    session_id: Optional[str] = None,
+    status: int = 200,
+):
+    """Context-managerable stub that mimics urlopen()'s return value."""
+
+    class _Headers:
+        def __init__(self, ct, sid):
+            self._h = {"Content-Type": ct}
+            if sid:
+                self._h["Mcp-Session-Id"] = sid
+
+        def get(self, key, default=None):
+            # Case-insensitive get to match real http.client behaviour.
+            for k, v in self._h.items():
+                if k.lower() == key.lower():
+                    return v
+            return default
+
+    class _Resp:
+        def __init__(self):
+            self.headers = _Headers(content_type, session_id)
+            self.status = status
+            self._body = body
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    return _Resp()
+
+
+def test_http_transport_rejects_empty_url():
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="non-empty url"):
+        HttpTransport(url="")
+
+
+def test_http_transport_send_posts_json_and_returns_parsed_response():
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=30.0):
+        captured["url"] = req.full_url
+        captured["method"] = req.get_method()
+        captured["body"] = req.data
+        captured["headers"] = dict(req.headers)
+        return _fake_urlopen_response(
+            _json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}).encode(),
+        )
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        transport = HttpTransport(url="http://example.com/mcp")
+        out = transport.send({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+
+    assert out == {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
+    assert captured["url"] == "http://example.com/mcp"
+    assert captured["method"] == "POST"
+    body = _json.loads(captured["body"].decode())
+    assert body["method"] == "ping"
+    # Default headers set Content-Type + the dual Accept header MCP needs.
+    assert captured["headers"]["Content-type"] == "application/json"
+    assert "application/json" in captured["headers"]["Accept"]
+    assert "text/event-stream" in captured["headers"]["Accept"]
+
+
+def test_http_transport_captures_and_echoes_session_id():
+    """Initialize-style response includes Mcp-Session-Id; subsequent
+    requests must echo it back."""
+    requests_seen: list[dict] = []
+
+    def fake_urlopen(req, timeout=30.0):
+        requests_seen.append(dict(req.headers))
+        if len(requests_seen) == 1:
+            # First call: server issues a session id.
+            return _fake_urlopen_response(
+                _json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}).encode(),
+                session_id="sess-abc-123",
+            )
+        return _fake_urlopen_response(
+            _json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"ok": True}}).encode(),
+        )
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        t = HttpTransport(url="http://example.com/mcp")
+        t.send({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        t.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+
+    # First request: no session header (we don't have one yet).
+    assert "Mcp-session-id" not in requests_seen[0] and "mcp-session-id" not in {
+        k.lower() for k in requests_seen[0]
+    }
+    # Second request: must echo the session id the server issued.
+    sid = requests_seen[1].get("Mcp-session-id") or requests_seen[1].get("mcp-session-id")
+    assert sid == "sess-abc-123"
+
+
+def test_http_transport_parses_sse_first_event():
+    """When the server responds with text/event-stream, the transport
+    must parse the first event's `data:` lines as JSON and return it."""
+    sse_body = (
+        "event: message\n"
+        'data: {"jsonrpc": "2.0", "id": 1, "result": {"streamed": true}}\n'
+        "\n"
+        "event: notification\n"
+        'data: {"jsonrpc": "2.0", "method": "notifications/progress"}\n'
+        "\n"
+    )
+
+    def fake_urlopen(req, timeout=30.0):
+        return _fake_urlopen_response(
+            sse_body.encode(), content_type="text/event-stream; charset=utf-8",
+        )
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        out = HttpTransport(url="http://example.com/mcp").send(
+            {"jsonrpc": "2.0", "id": 1, "method": "x"},
+        )
+    assert out == {"jsonrpc": "2.0", "id": 1, "result": {"streamed": True}}
+
+
+def test_http_transport_multiline_sse_data_concatenates():
+    """data: spread across multiple lines must be joined with \\n
+    before JSON-parsing — per the SSE spec."""
+    sse_body = (
+        'data: {"jsonrpc": "2.0",\n'
+        'data:  "id": 1,\n'
+        'data:  "result": {"k": "v"}}\n'
+        "\n"
+    )
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=lambda req, timeout=30.0: _fake_urlopen_response(
+            sse_body.encode(), content_type="text/event-stream",
+        ),
+    ):
+        out = HttpTransport(url="http://example.com/mcp").send({"id": 1})
+    assert out["result"]["k"] == "v"
+
+
+def test_http_transport_http_error_surfaces_as_mcp_error():
+    def fake_urlopen(req, timeout=30.0):
+        raise urllib.error.HTTPError(
+            url=req.full_url, code=503, msg="Service Unavailable",
+            hdrs=None, fp=None,
+        )
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        import pytest as _pytest
+        with _pytest.raises(MCPError, match="503"):
+            HttpTransport(url="http://example.com/mcp").send({"id": 1})
+
+
+def test_http_transport_url_error_surfaces_as_mcp_error():
+    def fake_urlopen(req, timeout=30.0):
+        raise urllib.error.URLError("nodename nor servname provided")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        import pytest as _pytest
+        with _pytest.raises(MCPError, match="unreachable"):
+            HttpTransport(url="http://example.com/mcp").send({"id": 1})
+
+
+def test_http_transport_non_json_body_surfaces_as_mcp_error():
+    def fake_urlopen(req, timeout=30.0):
+        return _fake_urlopen_response(b"<html>oops</html>", content_type="text/html")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        import pytest as _pytest
+        with _pytest.raises(MCPError, match="non-JSON"):
+            HttpTransport(url="http://example.com/mcp").send({"id": 1})
+
+
+def test_http_transport_notify_swallows_errors():
+    """Notifications are fire-and-forget per the spec — a transport
+    failure must NOT raise out of notify()."""
+    def fake_urlopen(req, timeout=30.0):
+        raise urllib.error.URLError("oops")
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        t = HttpTransport(url="http://example.com/mcp")
+        t.notify({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    # No assertion: just must not raise.
+
+
+def test_http_transport_custom_headers_merge_with_defaults():
+    captured = {}
+
+    def fake_urlopen(req, timeout=30.0):
+        captured.update(dict(req.headers))
+        return _fake_urlopen_response(
+            _json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}).encode(),
+        )
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        HttpTransport(
+            url="http://example.com/mcp",
+            headers={"Authorization": "Bearer token-xyz"},
+        ).send({"id": 1})
+
+    # Caller-supplied header lands on the request.
+    assert captured.get("Authorization") == "Bearer token-xyz"
+    # Defaults survive.
+    assert captured.get("Content-type") == "application/json"
+
+
+# ---------------------------------------------------------------------
+# build_transport — config-driven factory
+# ---------------------------------------------------------------------
+
+
+def test_build_transport_picks_http_when_url_set():
+    t = build_transport(MCPServerConfig(name="x", url="http://e/mcp"))
+    assert isinstance(t, HttpTransport)
+
+
+def test_build_transport_rejects_ambiguous_config():
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="both url and command"):
+        build_transport(MCPServerConfig(
+            name="x", url="http://e/mcp", command="echo",
+        ))
+
+
+def test_build_transport_rejects_empty_config():
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="neither url nor command"):
+        build_transport(MCPServerConfig(name="x"))
+
+
+def test_register_mcp_tools_picks_http_transport_when_url_set(tmp_path):
+    """register_mcp_tools, when no explicit client is passed, builds
+    one from build_transport — which picks HttpTransport for url-mode
+    configs. We don't actually start a server here; just verify the
+    transport selection by stubbing MCPClient construction."""
+    # Easier than spinning up a real server: verify build_transport's
+    # decision in isolation. The full register_mcp_tools path is
+    # covered by the existing client-injection tests.
+    cfg = MCPServerConfig(name="ext", url="http://e/mcp", destructive={"write"})
+    t = build_transport(cfg)
+    assert isinstance(t, HttpTransport)
+    assert t.url == "http://e/mcp"
+
+
+# ---------------------------------------------------------------------
+# End-to-end: loopback HTTP server speaking MCP
+# ---------------------------------------------------------------------
+
+
+def _free_port() -> int:
+    """Bind to an OS-chosen free port, then release it."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+@contextlib.contextmanager
+def _loopback_mcp_server(handler_fn):
+    """Run a real HTTP server in a thread that hands every POST to
+    ``handler_fn(request_body_dict) -> response_dict``. Yields the URL."""
+    port = _free_port()
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a, **kw):
+            pass  # quiet
+
+        def do_POST(self):  # noqa: N802
+            n = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(n) if n else b""
+            try:
+                req = _json.loads(body)
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                return
+            try:
+                resp = handler_fn(req)
+            except Exception as exc:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"{exc}".encode())
+                return
+            payload = _json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            if req.get("method") == "initialize":
+                self.send_header("Mcp-Session-Id", "loopback-session")
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = http.server.HTTPServer(("127.0.0.1", port), _H)
+    t = _threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_transport_against_real_loopback_server():
+    """Drive HttpTransport against an actual HTTP server bound to a
+    loopback port. Catches everything urlopen + http.server might
+    disagree about (Content-Length, request shape, response framing).
+    """
+    received: list[dict] = []
+
+    def handler(req):
+        received.append(dict(req))
+        method = req.get("method")
+        mid = req.get("id")
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": mid, "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "loopback", "version": "0.0.1"},
+            }}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": mid, "result": {"tools": [
+                {"name": "echo", "description": "echoes args",
+                 "inputSchema": {"type": "object"}},
+            ]}}
+        if method == "tools/call":
+            args = (req.get("params") or {}).get("arguments") or {}
+            return {"jsonrpc": "2.0", "id": mid, "result": {
+                "content": [{"type": "text", "text": _json.dumps(args)}],
+            }}
+        return {"jsonrpc": "2.0", "id": mid, "error": {
+            "code": -32601, "message": f"method not found: {method}",
+        }}
+
+    with _loopback_mcp_server(handler) as url:
+        cfg = MCPServerConfig(name="loop", url=url)
+        client = MCPClient(build_transport(cfg))
+        client.initialize()
+        tools = client.list_tools()
+        assert [t["name"] for t in tools] == ["echo"]
+        result = client.call_tool("echo", {"hello": "world"})
+        assert result.text == '{"hello": "world"}'
+
+    # Verify the server saw initialize + tools/list + tools/call.
+    methods = [r.get("method") for r in received]
+    assert "initialize" in methods
+    assert "tools/list" in methods
+    assert "tools/call" in methods
+
+
+def test_http_transport_loopback_session_id_propagates():
+    """Real-server end-to-end check that the session id from the
+    initialize response gets echoed on subsequent requests."""
+    seen_session_ids: list[Optional[str]] = []
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a, **kw):
+            pass
+
+        def do_POST(self):  # noqa: N802
+            seen_session_ids.append(self.headers.get("Mcp-Session-Id"))
+            n = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(n) if n else b""
+            req = _json.loads(body)
+            payload = _json.dumps({
+                "jsonrpc": "2.0", "id": req["id"], "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "loop", "version": "0"},
+                    "tools": [],
+                },
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            if req.get("method") == "initialize":
+                self.send_header("Mcp-Session-Id", "loop-sess-42")
+            self.end_headers()
+            self.wfile.write(payload)
+
+    port = _free_port()
+    server = http.server.HTTPServer(("127.0.0.1", port), _H)
+    t = _threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        url = f"http://127.0.0.1:{port}/mcp"
+        client = MCPClient(HttpTransport(url=url))
+        client.initialize()
+        client.list_tools()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # Three requests landed: initialize, initialized notification,
+    # tools/list. The notification + tools/list must echo the session
+    # id; the first (initialize) had no session yet.
+    assert seen_session_ids[0] is None
+    assert all(sid == "loop-sess-42" for sid in seen_session_ids[1:])

@@ -26,12 +26,14 @@ from .budget import BudgetExceededError, BudgetGuard, BudgetState
 from .bus import Bus, BusMessage, InMemoryBus, new_message
 from .bus_redis import RedisStreamsBus
 from .mcp import (
+    HttpTransport,
     MCPClient,
     MCPError,
     MCPServerConfig,
     MCPToolResult,
     MockTransport,
     StdioTransport,
+    build_transport,
     parse_command_string,
     register_mcp_tools,
     to_langchain_tool,
@@ -159,6 +161,8 @@ __all__ = [
     "MCPTransport",
     "MockTransport",
     "StdioTransport",
+    "HttpTransport",
+    "build_transport",
     "to_langchain_tool",
     "register_mcp_tools",
     "parse_command_string",

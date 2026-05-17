@@ -1179,12 +1179,13 @@ def _wire_mcp_servers(
 
     Each input dict: ``{name, target_agent, config, client?}``.
     ``config`` is an ``MCPServerConfig`` instance. If ``client`` is
-    None, a ``StdioTransport`` is built; pass an explicit client in
-    tests to use ``MockTransport`` instead.
+    None, the right transport is chosen by ``build_transport``
+    (HTTP if ``config.url`` is set, stdio otherwise); pass an
+    explicit client in tests to use ``MockTransport``.
 
     Failures are isolated: a misbehaving server lands as
     ``status="error"`` on the registry; other servers still register."""
-    from agentlib import MCPClient, StdioTransport, register_mcp_tools
+    from agentlib import MCPClient, build_transport, register_mcp_tools
 
     by_name = {a.name: a for a in agents}
     registry: list[dict[str, Any]] = []
@@ -1193,14 +1194,19 @@ def _wire_mcp_servers(
         target = entry.get("target_agent")
         config = entry["config"]
         client = entry.get("client")
+        # HTTP-transport configs surface their url; stdio configs
+        # surface the subprocess command. The UI uses this for the
+        # "$ ..." line under each server card.
+        if getattr(config, "url", ""):
+            summary = f"HTTP {config.url}"
+        elif getattr(config, "command", ""):
+            summary = f"{config.command} {' '.join(config.args)}".strip()
+        else:
+            summary = ""
         record: dict[str, Any] = {
             "name": name,
             "target_agent": target,
-            "command_summary": (
-                f"{config.command} {' '.join(config.args)}".strip()
-                if hasattr(config, "command")
-                else ""
-            ),
+            "command_summary": summary,
             "destructive": set(getattr(config, "destructive", set())),
             "status": "connected",
             "tools": [],
@@ -1213,7 +1219,7 @@ def _wire_mcp_servers(
             continue
         try:
             if client is None:
-                client = MCPClient(StdioTransport(config))
+                client = MCPClient(build_transport(config))
                 client.initialize()
             tools = client.list_tools()
             register_mcp_tools(by_name[target], config, client=client)

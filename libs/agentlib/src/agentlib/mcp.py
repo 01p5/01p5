@@ -65,21 +65,31 @@ CLIENT_INFO = {"name": "olympus-agentlib", "version": "0.1.0"}
 class MCPServerConfig:
     """How to reach an MCP server.
 
-    ``command`` + ``args`` together form a subprocess invocation —
-    e.g. ``command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]``.
-    Environment variables are merged into the subprocess's env.
+    Two transport modes — pick exactly one:
+
+    1. **stdio** (subprocess): set ``command`` + ``args`` (+ optional
+       ``env``, ``cwd``). E.g.
+       ``command="npx", args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]``.
+       Environment variables are merged into the subprocess's env.
+
+    2. **HTTP** (remote): set ``url`` (+ optional ``headers``). The
+       URL is the MCP server's Streamable-HTTP endpoint; ``headers``
+       commonly carries an ``Authorization`` bearer token.
 
     ``name`` is a human-readable label that ends up on every tool
     Olympus registers from this server (so a "read" tool from
-    server "github" becomes "github_read" — see
-    ``tool_prefix``-aware adapters in ``to_langchain_tool``).
+    server "github" becomes "github_read").
     """
 
     name: str
+    # stdio transport
     command: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     cwd: Optional[str] = None
+    # http transport
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
     # Per-server allowlist of tool names that must route through
     # ApprovalHook. The MCP spec doesn't carry a destructive flag,
     # so the integrator supplies one. Names are matched against the
@@ -235,6 +245,160 @@ class StdioTransport:
             self._proc.terminate()
         except Exception:
             pass
+
+
+class HttpTransport:
+    """JSON-RPC over HTTP (Streamable HTTP variant of the MCP spec).
+
+    One POST per request. Response body is either ``application/json``
+    (the common case) or ``text/event-stream`` (the server is going
+    to keep pushing notifications). For tools we only need the first
+    event, which the spec mandates be the request's response.
+
+    Sessions: the server may issue an ``Mcp-Session-Id`` header on
+    the response to ``initialize``. We capture it and echo it on
+    every subsequent request — that's how servers correlate ongoing
+    state with this client.
+
+    Notifications (no id, no response expected by the spec) are
+    POSTed with a short timeout and the response body discarded.
+
+    Stdlib-only (urllib.request). No new deps."""
+
+    def __init__(
+        self,
+        url: str,
+        headers: Optional[dict[str, str]] = None,
+        timeout: float = 30.0,
+    ):
+        if not url:
+            raise ValueError("HttpTransport requires a non-empty url")
+        self.url = url
+        # Build default headers but let caller override.
+        self._headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            # The MCP HTTP spec wants the client to advertise both —
+            # the server picks based on whether it wants to stream.
+            "Accept": "application/json, text/event-stream",
+        }
+        self._headers.update(headers or {})
+        self._timeout = timeout
+        self._session_id: Optional[str] = None
+        self._lock = threading.Lock()
+
+    def send(self, message: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
+        import urllib.error
+        import urllib.request
+
+        body = json.dumps(message).encode("utf-8")
+        headers = dict(self._headers)
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+
+        req = urllib.request.Request(
+            self.url, data=body, headers=headers, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                # Capture session id from any response that carries one
+                # (commonly the initialize response, but spec allows
+                # the server to issue/rotate at any time).
+                sid = resp.headers.get("Mcp-Session-Id")
+                if sid:
+                    with self._lock:
+                        self._session_id = sid
+                content_type = (resp.headers.get("Content-Type") or "").lower()
+                raw = resp.read()
+        except urllib.error.HTTPError as exc:
+            raise MCPError(
+                f"MCP HTTP {self.url!r} returned {exc.code} {exc.reason}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise MCPError(
+                f"MCP HTTP {self.url!r} unreachable: {exc.reason}"
+            ) from exc
+        except Exception as exc:
+            raise MCPError(
+                f"MCP HTTP {self.url!r} transport failure: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+        if "text/event-stream" in content_type:
+            return _parse_sse_first_message(raw.decode("utf-8"))
+        # application/json (or anything else we treat as JSON).
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise MCPError(
+                f"MCP HTTP {self.url!r} returned non-JSON body "
+                f"(content-type={content_type!r}): {exc}"
+            ) from exc
+
+    def notify(self, message: dict[str, Any]) -> None:
+        # Fire-and-forget. Spec says notifications get a 202 with no
+        # body; we don't care either way.
+        try:
+            self.send(message, timeout=5.0)
+        except MCPError:
+            # Notifications are best-effort. A failure here would
+            # spam the logs; the next real request will surface the
+            # connectivity issue.
+            pass
+
+    def close(self) -> None:
+        # No persistent connection state to release (urllib's
+        # default opener handles keep-alive transparently). The
+        # session id stays meaningful for a short window after
+        # close in case the caller re-opens; clearing it would be
+        # harmless but also pointless.
+        return None
+
+
+def _parse_sse_first_message(text: str) -> dict[str, Any]:
+    """Extract the first JSON-RPC message from an SSE body.
+
+    SSE events are blank-line-separated; each event has one or more
+    ``field: value`` lines. The MCP spec only emits ``data:`` lines
+    carrying the JSON. We accumulate the data lines for the first
+    event and parse them as one JSON object."""
+    data_lines: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            data_lines.append(line[len("data:"):].lstrip())
+            continue
+        if line.strip() == "" and data_lines:
+            break  # end of first event
+    if not data_lines:
+        raise MCPError("SSE body had no data lines")
+    try:
+        return json.loads("\n".join(data_lines))
+    except json.JSONDecodeError as exc:
+        raise MCPError(f"SSE first event JSON parse: {exc}") from exc
+
+
+def build_transport(config: MCPServerConfig) -> Transport:
+    """Pick a transport implementation based on the config.
+
+    Rules of precedence:
+      - ``url`` set       → HttpTransport
+      - ``command`` set   → StdioTransport
+      - neither           → ValueError
+      - both              → ValueError (ambiguous; pick one)"""
+    has_url = bool(config.url)
+    has_cmd = bool(config.command)
+    if has_url and has_cmd:
+        raise ValueError(
+            f"MCPServerConfig {config.name!r} has both url and command — "
+            "pick one transport"
+        )
+    if has_url:
+        return HttpTransport(config.url, headers=config.headers)
+    if has_cmd:
+        return StdioTransport(config)
+    raise ValueError(
+        f"MCPServerConfig {config.name!r} has neither url nor command — "
+        "transport is undefined"
+    )
 
 
 class MCPClient:
@@ -425,7 +589,7 @@ def register_mcp_tools(
     prefix = name_prefix if name_prefix is not None else config.name
     owned_client = False
     if client is None:
-        client = MCPClient(StdioTransport(config))
+        client = MCPClient(build_transport(config))
         client.initialize()
         owned_client = True
 
@@ -471,7 +635,9 @@ __all__ = [
     "MCPToolResult",
     "Transport",
     "StdioTransport",
+    "HttpTransport",
     "MockTransport",
+    "build_transport",
     "to_langchain_tool",
     "register_mcp_tools",
     "parse_command_string",

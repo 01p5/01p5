@@ -134,7 +134,9 @@ from agentlib import (
     MCPServerConfig,
     MCPClient,
     StdioTransport,
+    HttpTransport,
     MockTransport,
+    build_transport,
     register_mcp_tools,
     parse_command_string,
 )
@@ -142,18 +144,46 @@ from agentlib import (
 
 ### `MCPServerConfig`
 
-| Field         | Type            | What it's for                                                                |
-|---------------|-----------------|------------------------------------------------------------------------------|
-| `name`        | `str`           | Human label + tool-name prefix.                                              |
-| `command`     | `str`           | Subprocess command (e.g. `"python3"`, `"npx"`).                              |
-| `args`        | `list[str]`     | Subprocess args.                                                             |
-| `env`         | `dict[str,str]` | Merged into subprocess env.                                                  |
-| `cwd`         | `Optional[str]` | Subprocess working dir.                                                      |
-| `destructive` | `set[str]`      | Tool names that must go through ApprovalHook. Match the *unprefixed* name.   |
+Two transport modes — pick exactly one per server.
+
+| Field         | Type            | Mode  | What it's for                                                                |
+|---------------|-----------------|-------|------------------------------------------------------------------------------|
+| `name`        | `str`           | both  | Human label + tool-name prefix.                                              |
+| `command`     | `str`           | stdio | Subprocess command (e.g. `"python3"`, `"npx"`).                              |
+| `args`        | `list[str]`     | stdio | Subprocess args.                                                             |
+| `env`         | `dict[str,str]` | stdio | Merged into subprocess env.                                                  |
+| `cwd`         | `Optional[str]` | stdio | Subprocess working dir.                                                      |
+| `url`         | `str`           | http  | Streamable-HTTP endpoint URL.                                                |
+| `headers`     | `dict[str,str]` | http  | Extra headers per request (commonly an `Authorization` bearer token).        |
+| `destructive` | `set[str]`      | both  | Tool names that must go through ApprovalHook. Match the *unprefixed* name.   |
+
+Setting both `url` and `command` is rejected — the transport is
+ambiguous. Setting neither is rejected — there's no way to reach
+the server. `build_transport(config)` enforces these.
 
 `parse_command_string("npx -y @scope/server-fs /tmp")` returns
 `("npx", ["-y", "@scope/server-fs", "/tmp"])` if you'd rather hand
-a single CLI string.
+a single CLI string for stdio mode.
+
+### HTTP mode example
+
+```python
+cfg = MCPServerConfig(
+    name="github",
+    url="https://mcp.example.com/github",
+    headers={"Authorization": f"Bearer {os.environ['GITHUB_MCP_TOKEN']}"},
+    destructive={"create_issue", "delete_branch"},
+)
+srv = build_default_server(mcp_servers=[
+    {"name": "github", "target_agent": "programmer", "config": cfg},
+])
+```
+
+The `HttpTransport` captures the `Mcp-Session-Id` header from the
+`initialize` response and echoes it on every subsequent request,
+per the MCP Streamable-HTTP spec. Responses with
+`Content-Type: text/event-stream` are parsed for the first SSE
+event (the response to the request); deeper streaming is deferred.
 
 ### `register_mcp_tools(spec, config, client=None)`
 
@@ -161,8 +191,9 @@ Connect, list tools, wrap them as langchain `StructuredTool`s, append
 to `spec.tools`. Destructive names from `config.destructive` are
 lifted to `spec.destructive_verbs` with the prefix applied (so the
 runtime sees the same name register_mcp_tools added). Pass `client=`
-in tests to use `MockTransport`; in prod it builds a `StdioTransport`
-itself.
+in tests to use `MockTransport`; in prod it builds an `MCPClient`
+around `build_transport(config)` — which picks `HttpTransport` for
+url-mode configs and `StdioTransport` for command-mode configs.
 
 ### `MockTransport` (for tests)
 
@@ -216,8 +247,12 @@ party server is debuggable without losing output.
 
 ## What's not here yet
 
-- HTTP and SSE transports. Stdio + JSON-RPC is the protocol baseline;
-  the other transports layer on top of the same JSON-RPC envelope.
+- **Server→client SSE streams beyond the first event.** `HttpTransport`
+  parses the first SSE event (the response to the in-flight request,
+  per spec) but doesn't keep the stream open for follow-on
+  notifications. Adding that means a background reader thread and
+  a notification dispatch hook on `MCPClient` — straightforward but
+  out of scope for v1.
 - Resources (`resources/list`, `resources/read`). Tools are the
   immediate-value primitive; resources can come next.
 - Runtime add/remove of servers via the dashboard. Servers are
@@ -226,9 +261,12 @@ party server is debuggable without losing output.
 
 ## Tests
 
-- `libs/agentlib/tests/test_mcp.py` — 25 tests (envelope shape,
+- `libs/agentlib/tests/test_mcp.py` — 41 tests (envelope shape,
   handshake, tools/list, tools/call, adapter, register, gate_tools
-  round-trip, parse_command_string).
+  round-trip, parse_command_string, HTTP transport envelope +
+  session-id propagation + SSE first-event parse + error paths,
+  build_transport selection, two end-to-end checks against a real
+  loopback `http.server` to catch wire-protocol disagreements).
 - `agents/dashboard/tests/test_dashboard_server.py` — 7 tests for
   the `/mcp/servers` endpoints and the `_wire_mcp_servers` helper.
 - `agents/dashboard/frontend/src/pages/MCPPage.test.tsx` — 8 tests
