@@ -29,13 +29,13 @@ Built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford. P
 
 | Layer | State |
 |-------|-------|
-| `libs/agentlib` (SDK) | stable; memory, rollback, plan, bus, runtime — all unit-tested |
-| 4 agents (sysadmin / programmer / terraform / ansible) | each gated, audited, snapshot-instrumented for rollback, cost-tracked |
-| Dashboard (HTTP API + React SPA) | full intelligence-layer UI: memory chips, feedback buttons, rollback panel, telemetry footer |
+| `libs/agentlib` (SDK) | stable; memory, rollback, plan, bus, runtime, MCP (stdio + HTTP) — all unit-tested |
+| 4 agents (sysadmin / programmer / terraform / ansible) | each gated, audited, cost-tracked. **3 of 4 with rollback snapshots** (programmer: write/edit/delete_file; sysadmin: delete_pod ↔ apply_manifest; terraform: tf_apply ↔ tf_restore_state). |
+| Dashboard (HTTP API + React SPA) | full intelligence-layer UI: memory chips, feedback buttons, rollback panel, telemetry footer, MCP server tab |
 | CLI | `olympus "..."` dispatches via the same orchestrator |
-| Tests | **480 total** — 227 frontend (vitest) + 253 backend (pytest) + 23 E2E (Playwright). CI green. |
+| Tests | **540 total** — 230 frontend (vitest) + 287 backend (pytest) + 23 E2E (Playwright). CI green. |
 | Live deploy | Proxmox → 4× Ubuntu VMs → kubeadm + Calico → Helm chart. *Note: the deployed instance predates the W7-8 + W9-10 work; redeploy needed to surface the new endpoints.* |
-| Plan progress | W1–8 done end-to-end. W9-10 **MCP shipped** (library + dashboard + UI + worked-example demo server). Remaining: alpha-tester outreach, polished demo, final writeup (non-code). |
+| Plan progress | W1–8 done end-to-end. W9-10 **MCP shipped** (library + dashboard + UI + worked-example demo server + HTTP transport for remote servers). Remaining: alpha-tester outreach, polished demo, final writeup (non-code). |
 
 ## Quick start
 
@@ -217,16 +217,16 @@ Dashboard endpoint: `POST /memory/{task_id}/feedback` with body `{feedback, corr
 
 When a destructive tool fires successfully, the runtime captures *what would undo it* via the agent's `rollback_snapshots[tool_name](args)` callable. The captured `RollbackPlan` carries the inverse tool name + inverse args + human-readable description + pre-state snapshot, and is persisted to a `RollbackStore` (`Null` / `InMemory` / `Jsonl`).
 
-The Programmer agent declares snapshots for `write_file`, `edit_file`, and a new `delete_file` tool. Each picks the right inverse:
+Three agents currently declare snapshots; Ansible deliberately doesn't (a playbook *is* the operation — reverse semantics aren't a meaningful default).
 
-| Forward | Inverse |
-|---------|---------|
-| `write_file` on existing path | `write_file` with prior bytes |
-| `write_file` on new path | `delete_file` |
-| `edit_file` | `write_file` with pre-edit bytes |
-| `delete_file` | `write_file` with the doomed bytes |
-
-The other agents (Sysadmin/Terraform/Ansible) inherit the infrastructure but haven't declared snapshots yet — opting in is a per-tool addition.
+| Agent | Forward | Inverse |
+|-------|---------|---------|
+| Programmer | `write_file` on existing path | `write_file` with prior bytes |
+| Programmer | `write_file` on new path | `delete_file` |
+| Programmer | `edit_file` | `write_file` with pre-edit bytes |
+| Programmer | `delete_file` | `write_file` with the doomed bytes |
+| Sysadmin | `delete_pod` | `apply_manifest` with `kubectl get -o yaml` (scrubbed of server-managed fields) |
+| Terraform | `tf_apply` | `tf_restore_state`: `terraform state push <captured>` + `terraform apply` |
 
 Executing a rollback is itself a destructive operation: `POST /rollback/{id}/execute` routes the inverse through the same `gate_tools` machinery as any human-driven tool call, so the user re-approves the undo. The store's `mark_executed` is atomic (tmp-rename rewrite of the JSONL file). UI: `RollbackPanel` lists captured rollbacks in the right sidebar with an Undo button per row.
 
@@ -241,14 +241,14 @@ Live cluster note: the currently-running deployment predates the intelligence la
 Three layers, all run in CI except the live-cluster E2E (opt-in via `OLYMPUS_LIVE_E2E=1`):
 
 ```
-libs/agentlib                129 unit tests  — SDK core (incl. memory, rollback, plan, runtime)
-agents/{4 agents}/tests       65 smoke tests — gating, audit, approval, snapshot semantics
-agents/dashboard/tests/server 44 unit tests  — HTTP routing + /memory + /rollback + /telemetry
-agents/dashboard/frontend    216 vitest      — every component, hook, page + UI integration
+libs/agentlib                170 unit tests  — SDK core (incl. memory, rollback, plan, runtime, MCP stdio+HTTP)
+agents/{4 agents}/tests       72 smoke tests — gating, audit, approval, snapshot semantics
+agents/dashboard/tests/server 45 unit tests  — HTTP routing + /memory + /rollback + /telemetry + /mcp
+agents/dashboard/frontend    230 vitest      — every component, hook, page + UI integration
 agents/dashboard/tests/e2e    23 Playwright  — real browser → real cluster
 ```
 
-Backend total: **221 tests** in ~30s. Frontend: **216 tests** in ~3s. Combined: **437 tests** gating every push.
+Backend total: **287 tests** in ~33s. Frontend: **230 tests** in ~3s. Combined: **540 tests** gating every push.
 
 The E2E suite spawns short-lived `e2e-target-<rand>` pods labelled `e2e-target=true` for the destructive flows; sweep any leaks with:
 

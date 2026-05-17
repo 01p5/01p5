@@ -218,31 +218,39 @@ path needs a rollback inverse — without it, "undo a file creation"
 becomes "write an empty file with the same name," which leaks the
 file's existence and breaks anything watching the FS.
 
-### Why doesn't Sysadmin / Terraform / Ansible declare snapshots?
+### Snapshot coverage across the four agents
 
-The infrastructure is in place — the agents just haven't opted in
-yet. Adding one is a 20-line change:
+Three of four agents now declare snapshots; Ansible is deliberately
+left out.
 
-```python
-# In sysadmin/tools.py:
-def _snapshot_delete_pod(args):
-    spec = subprocess.run(
-        ["kubectl", "get", "pod", args["name"],
-         f"--namespace={args['namespace']}", "-o", "yaml"],
-        capture_output=True, text=True, timeout=10,
-    ).stdout
-    return RollbackPlan(
-        inverse_tool="apply_manifest",  # doesn't exist yet, would add
-        inverse_args={"yaml": spec, "namespace": args["namespace"]},
-        description=f"recreate pod {args['name']} from pre-delete spec",
-        snapshot={"yaml_bytes": len(spec)},
-    )
-```
+**Sysadmin** (`agents/sysadmin/`) — added in `ac275a5`:
 
-The blocker for Sysadmin specifically: it needs an `apply_manifest`
-tool to act as the inverse, which doesn't exist yet (and would
-itself be destructive). Land it whenever rolling back a delete
-becomes important.
+| Forward | Snapshot | Inverse |
+|---------|----------|---------|
+| `delete_pod` | `kubectl get pod -o yaml` (scrubbed via `_scrub_server_fields`: drops `status`, `metadata.{uid, resourceVersion, managedFields, ownerReferences, creationTimestamp, ...}`) | `apply_manifest(yaml=..., namespace=...)` which pipes the cleaned manifest to `kubectl apply -f -` |
+
+The `apply_manifest` tool was added specifically as the inverse and
+is itself destructive — a misused apply could create or replace
+arbitrary resources, so it routes through ApprovalHook too.
+
+**Terraform** (`agents/terraform/`) — added in `ac275a5`:
+
+| Forward | Snapshot | Inverse |
+|---------|----------|---------|
+| `tf_apply` | `terraform state pull` into JSON string | `tf_restore_state(working_dir, state_json)`: `terraform state push -` (stdin) → check exit → if OK, `terraform apply` to reconcile |
+
+Atomicity guarantee: if `state push` fails, the subsequent `apply`
+does NOT fire — the user sees `"STATE PUSH FAILED ... Cloud
+resources NOT touched"` and can recover manually. On a first-apply
+case (no prior state to pull), the snapshot fn returns a flagged
+no-op plan so the UI shows the entry as non-executable.
+
+**Ansible** — intentionally absent. A playbook *is* the operation;
+reverse semantics ("undo this play") aren't a meaningful default —
+the closest analogue would be re-running with `state: absent` flags,
+which only some modules support and which the user is in the best
+position to decide on. The infrastructure is in place if anyone
+wants to opt in per-tool later.
 
 ### Atomicity
 
@@ -360,7 +368,7 @@ The four pieces aren't just collocated — they reinforce each other:
 
 - Cross-agent retrieval (Sysadmin task seeing Programmer history).
 - Cost-aware retrieval ranking (prefer cheap-prior-runs on ties).
-- Sysadmin / Terraform / Ansible rollback snapshots.
+- Ansible rollback snapshots (deliberately deferred — see above).
 - Rollback "executed" status reflected on the originating task's
   bubble (currently only visible in the right-sidebar panel).
 - Embedding store + Redis bus combo (each works alone; never tested

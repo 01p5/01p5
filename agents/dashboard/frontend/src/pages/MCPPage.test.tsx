@@ -142,3 +142,48 @@ describe("MCPPage", () => {
     expect(screen.getByText(/show 1 tool$/i)).toBeInTheDocument();
   });
 });
+
+
+describe("MCPPage — transport prefix", () => {
+  it("stdio servers render with a $ shell-prompt prefix", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([
+      SERVER({ command: "python3 server.py" }),
+    ]);
+    const { container } = render(<MCPPage />);
+    await waitFor(() =>
+      expect(container.querySelector('[data-transport="stdio"]')).not.toBeNull(),
+    );
+    const row = container.querySelector('[data-transport="stdio"]')!;
+    expect(row.textContent).toMatch(/\$\s*python3 server\.py/);
+  });
+
+  it("HTTP servers render with a → endpoint-pointer prefix", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([
+      SERVER({
+        name: "github",
+        command: "HTTP https://mcp.example.com/github",
+      }),
+    ]);
+    const { container } = render(<MCPPage />);
+    await waitFor(() =>
+      expect(container.querySelector('[data-transport="http"]')).not.toBeNull(),
+    );
+    const row = container.querySelector('[data-transport="http"]')!;
+    // The `→` prefix replaces the shell `$` for HTTP — a URL with a
+    // `$` prompt would be misleading visual grammar.
+    expect(row.textContent).toMatch(/→\s*HTTP https:\/\/mcp\.example\.com\/github/);
+    expect(row.textContent).not.toMatch(/\$\s*HTTP/);
+  });
+
+  it("server with no command renders without the prefix row entirely", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([
+      SERVER({ command: null }),
+    ]);
+    const { container } = render(<MCPPage />);
+    await waitFor(() =>
+      expect(container.querySelectorAll(".mcp-server-card").length).toBe(1),
+    );
+    // Neither stdio nor http transport row present.
+    expect(container.querySelector('[data-transport]')).toBeNull();
+  });
+});

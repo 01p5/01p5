@@ -127,8 +127,16 @@ export function ServerCard({ server }: CardProps): JSX.Element {
         </span>
       </div>
       {server.command && (
-        <div className="px-4 py-2 border-b border-border-subtle/60 text-[11px] font-mono text-text-secondary truncate">
-          <span className="text-text-muted">$</span> {server.command}
+        <div
+          className="px-4 py-2 border-b border-border-subtle/60 text-[11px] font-mono text-text-secondary truncate"
+          data-transport={server.command.startsWith("HTTP ") ? "http" : "stdio"}
+        >
+          {/* `$` reads as a shell prompt for stdio; `→` reads as an
+              endpoint pointer for HTTP. Both keep the row scannable. */}
+          <span className="text-text-muted">
+            {server.command.startsWith("HTTP ") ? "→" : "$"}
+          </span>{" "}
+          {server.command}
         </div>
       )}
       {server.error && (
