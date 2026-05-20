@@ -7,7 +7,7 @@ rather than jumping around.
 
 Designed to run end-to-end in **~15 minutes** against a fresh local
 clone — no live cluster required (the live deploy at
-`http://10.0.10.30/` predates W7-8 and isn't re-rolled).
+`http://10.0.3.30/` predates W7-8 and isn't re-rolled).
 
 ## Setup (1 min)
 
@@ -266,7 +266,7 @@ the 15-minute slot.
 
 ## What's NOT in the demo
 
-- Live cluster (10.0.10.30) — the deploy predates W7-8.
+- Live cluster (10.0.3.30) — the deploy predates W7-8.
 - Terraform / Ansible live verb (no rollback snapshots declared yet
   on those agents).
 - HTTP-transport MCP server.

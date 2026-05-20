@@ -7,7 +7,7 @@ in the task input, watching the events stream, clicking the approval
 buttons — rather than the JSON API the other test files cover.
 
 Opt-in: set ``OLYMPUS_LIVE_E2E=1`` and (optionally)
-``OLYMPUS_DASHBOARD_URL`` (defaults to http://10.0.10.30/).
+``OLYMPUS_DASHBOARD_URL`` (defaults to http://10.0.3.30/).
 
 Skipped in CI by default. Run locally on the dev VM (or any host with
 Playwright + Chromium installed):
@@ -40,7 +40,7 @@ if os.environ.get("OLYMPUS_LIVE_E2E") != "1":
 
 from playwright.sync_api import Browser, Page, expect, sync_playwright  # noqa: E402
 
-DASHBOARD_URL = os.environ.get("OLYMPUS_DASHBOARD_URL", "http://10.0.10.30/")
+DASHBOARD_URL = os.environ.get("OLYMPUS_DASHBOARD_URL", "http://10.0.3.30/")
 NAMESPACE = os.environ.get("OLYMPUS_E2E_NAMESPACE", "default")
 KUBECTL_TIMEOUT = 20
 

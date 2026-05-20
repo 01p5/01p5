@@ -8,57 +8,57 @@ exercised against it, and what remains rough.
 
 | Layer | Location | Notes |
 |-------|----------|-------|
-| PVE host | `root@10.0.10.249` | Throwaway intranet box. SSH key auth. |
-| Cluster nodes | `10.0.10.20` (master) + `.21/.22/.23` (workers) | All Ubuntu 22.04, kubeadm v1.30.14, Calico CNI. SSH as `k8s` with `infra/terraform/deployment/k8s.pem`. |
-| Dev workstation VM | `unics@10.0.10.30` (`olympus-dev`) | 8 vCPU / 16 GB / 120 GB. Mirror of the original dev box; full toolchain installed; `~/.kube/config` is the cluster admin.conf. |
-| Dashboard (cluster) | `http://<any-node>:30093` (NodePort) | E.g. `http://10.0.10.20:30093/healthz`. |
-| Dashboard (proxied) | `http://10.0.10.30/` | Caddy on the dev VM front-ends the NodePort — no port to remember. |
+| PVE host | `root@10.0.3.5` | Throwaway intranet box. SSH key auth. |
+| Cluster nodes | `10.0.3.20` (master) + `.21/.22/.23` (workers) | All Ubuntu 22.04, kubeadm v1.30.14, Calico CNI. SSH as `k8s` with `infra/terraform/deployment/k8s.pem`. |
+| Dev workstation VM | `unics@10.0.3.30` (`olympus-dev`) | 8 vCPU / 16 GB / 120 GB. Mirror of the original dev box; full toolchain installed; `~/.kube/config` is the cluster admin.conf. |
+| Dashboard (cluster) | `http://<any-node>:30093` (NodePort) | E.g. `http://10.0.3.20:30093/healthz`. |
+| Dashboard (proxied) | `http://10.0.3.30/` | Caddy on the dev VM front-ends the NodePort — no port to remember. |
 
 ## Driving the live system
 
 ```bash
 # Health
-curl http://10.0.10.30/healthz                 # → {"ok": true}
+curl http://10.0.3.30/healthz                 # → {"ok": true}
 
 # Submit a task
-curl -s -X POST http://10.0.10.30/tasks \
+curl -s -X POST http://10.0.3.30/tasks \
      -H 'Content-Type: application/json' \
      -d '{"natural_language": "list pods in default namespace"}'
 # → {"task_id": "..."}
 
 # Poll
-curl -s http://10.0.10.30/tasks/<task_id> | jq
+curl -s http://10.0.3.30/tasks/<task_id> | jq
 
 # Watch the live event stream (SSE)
-curl -N http://10.0.10.30/events
+curl -N http://10.0.3.30/events
 
 # Pending approvals
-curl -s http://10.0.10.30/approvals | jq
+curl -s http://10.0.3.30/approvals | jq
 
 # Resolve an approval
-curl -s -X POST http://10.0.10.30/approvals/<approval_id> \
+curl -s -X POST http://10.0.3.30/approvals/<approval_id> \
      -H 'Content-Type: application/json' \
      -d '{"approved": true,  "reason": "ok"}'
 
 # Audit log (JSONL)
-curl -s http://10.0.10.30/audit
+curl -s http://10.0.3.30/audit
 
 # Catalog every tool every agent exposes
-curl -s http://10.0.10.30/tools | jq
+curl -s http://10.0.3.30/tools | jq
 
 # Invoke a tool directly (no LLM in the loop). Destructive tools still
 # surface as approval cards in the right sidebar.
-curl -s -X POST http://10.0.10.30/tools/sysadmin/get_pods \
+curl -s -X POST http://10.0.3.30/tools/sysadmin/get_pods \
      -H 'Content-Type: application/json' \
      -d '{"namespace": "default"}' | jq
 
 # Enumerate the terraform stacks + ansible playbooks the container has
 # (the UI uses these to pre-fill working_dir / playbook dropdowns)
-curl -s http://10.0.10.30/stacks/terraform | jq
-curl -s http://10.0.10.30/stacks/ansible   | jq
+curl -s http://10.0.3.30/stacks/terraform | jq
+curl -s http://10.0.3.30/stacks/ansible   | jq
 ```
 
-The browser UI at `http://10.0.10.30/` has two tabs:
+The browser UI at `http://10.0.3.30/` has two tabs:
 - **💬 Chat** — three-column app: live bus events on the left,
   conversation in the middle (one bubble pair per task, status streams
   from "picking an agent…" → "running on X agent…" → final structured
@@ -71,7 +71,7 @@ The browser UI at `http://10.0.10.30/` has two tabs:
   detected stacks/playbooks shipped in the container at
   `/opt/olympus/infra/terraform/*` and `/opt/olympus/infra/ansible/*.yml`).
 
-The browser UI at `http://10.0.10.30/` shows live events, the
+The browser UI at `http://10.0.3.30/` shows live events, the
 approval queue, and the audit log — all auto-refreshing.
 
 ## What's been exercised against the live system
@@ -87,7 +87,7 @@ Every check below ran end-to-end against the real cluster. ✅ = passed.
 | 5 | 5 concurrent tasks | ✅ All 5 finished in ~21s wall clock. No race conditions. Each task_id mapped to its own result. |
 | 6 | Audit log integrity | ✅ Every destructive verb has `approved=True/False` (never `None`). JSONL parses cleanly. Timestamps not strictly monotonic under concurrency — see Known Issues. |
 | 7 | Crash recovery | ✅ Force-killed the pod mid-task; new pod up + `/healthz` ok in **~4s**. In-flight tasks are lost (in-memory bus + emptyDir). |
-| 8 | External access | ✅ Caddy on the dev VM proxies `http://10.0.10.30/` → cluster NodePort. |
+| 8 | External access | ✅ Caddy on the dev VM proxies `http://10.0.3.30/` → cluster NodePort. |
 | 9 | Browser E2E suite (5 tests via headless Chromium) | ✅ All 5 pass in ~46s — see below. |
 | 10 | Direct tool invocation via `/tools` + UI Tools tab | ✅ Every agent's tool catalogued at `GET /tools`; `POST /tools/{agent}/{tool}` runs through the same `gate_tools` so destructive ops still queue an approval card. UI exposes a form per tool. |
 | 11 | Chat-centric UI redesign | ✅ 3-column layout: live bus on the left, streaming chat in the center, approval queue + audit on the right. SSE filtered by `task_id` so each turn streams as the orchestrator → agent → result events arrive. |
