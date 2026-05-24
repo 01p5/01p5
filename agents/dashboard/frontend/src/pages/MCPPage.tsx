@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Plug, AlertCircle, ChevronRight, ShieldAlert, Plus, X, Trash2 } from "lucide-react";
+import { Plug, AlertCircle, ChevronRight, ShieldAlert, Plus, X, Trash2, RefreshCw } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
+import { Button } from "../components/Button";
 import { usePolling } from "../hooks/usePolling";
 import type { AddMCPServerRequest, MCPServerSummary, MCPToolDescriptor } from "../types";
 
@@ -26,31 +27,36 @@ export function MCPPage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary overflow-hidden">
-      <div className="px-6 py-4 border-b border-border-subtle bg-dark-secondary/40">
-        <div className="flex items-center gap-3">
-          <Plug size={18} className="text-accent-blue" strokeWidth={2.25} />
-          <h1 className="font-display text-lg font-semibold text-text-primary">
+      <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40">
+        <div className="flex items-baseline gap-3">
+          <Plug size={14} className="text-accent-blue self-center" strokeWidth={2.25} />
+          <h1 className="font-display text-base font-semibold text-text-primary">
             MCP servers
           </h1>
           <span className="text-[11px] font-mono text-text-muted">
             {servers.length} wired · third-party tool providers
           </span>
-          <button
-            onClick={() => setShowAddForm((v) => !v)}
-            className="ml-auto inline-flex items-center gap-1 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-green hover:text-accent-green-bright px-2 py-1 border border-accent-green/40 hover:border-accent-green/70 rounded transition-colors"
-            aria-expanded={showAddForm}
-          >
-            {showAddForm ? <X size={11} /> : <Plus size={11} />}
-            {showAddForm ? "cancel" : "add server"}
-          </button>
-          <button
-            onClick={refresh}
-            className="text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-blue px-2 py-1 border border-border-subtle hover:border-accent-blue/40 rounded transition-colors"
-          >
-            refresh
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant={showAddForm ? "secondary" : "primary"}
+              size="sm"
+              icon={showAddForm ? <X size={12} /> : <Plus size={12} />}
+              onClick={() => setShowAddForm((v) => !v)}
+              aria-expanded={showAddForm}
+            >
+              {showAddForm ? "cancel" : "add server"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<RefreshCw size={12} />}
+              onClick={refresh}
+            >
+              refresh
+            </Button>
+          </div>
         </div>
-        <p className="text-[12px] font-mono text-text-muted mt-2">
+        <p className="text-[11px] font-mono text-text-muted mt-1.5">
           Each server's tools register onto a target agent with a prefix.
           Destructive verbs go through the same approval queue as
           native tools — flagged at registration time, not by the server.
@@ -443,20 +449,23 @@ function AddServerForm({ onAdded, onCancel }: AddFormProps): JSX.Element {
       )}
 
       <div className="flex items-center gap-2 pt-1">
-        <button
+        <Button
           type="submit"
-          disabled={submitting}
-          className="add-mcp-submit text-[11px] font-mono uppercase tracking-[1.5px] text-dark-primary bg-accent-green hover:bg-accent-green-bright disabled:opacity-40 px-3 py-1 rounded transition-colors"
+          variant="primary"
+          size="sm"
+          loading={submitting}
+          className="add-mcp-submit"
         >
           {submitting ? "connecting…" : "register"}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={onCancel}
-          className="text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-text-primary px-3 py-1 border border-border-subtle hover:border-border-strong rounded transition-colors"
         >
           cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
