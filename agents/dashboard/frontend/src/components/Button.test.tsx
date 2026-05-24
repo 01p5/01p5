@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { RefreshCw } from "lucide-react";
 import { Button } from "./Button";
 
 describe("Button", () => {
@@ -71,5 +72,36 @@ describe("Button", () => {
     render(<Button loading onClick={handler}>Wait</Button>);
     await userEvent.click(screen.getByRole("button"));
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  // Icon normalization — Button is the single source of truth for icon
+  // metrics. A lucide icon at 12px effectively vanishes on dark
+  // backgrounds, so Button overrides whatever size/strokeWidth the
+  // caller passed.
+  it("normalizes icon size + strokeWidth for sm buttons (16/2.25)", () => {
+    render(<Button size="sm" icon={<RefreshCw size={9} strokeWidth={1} />}>r</Button>);
+    const svg = screen.getByRole("button").querySelector("svg");
+    expect(svg?.getAttribute("width")).toBe("16");
+    expect(svg?.getAttribute("height")).toBe("16");
+    expect(svg?.getAttribute("stroke-width")).toBe("2.25");
+  });
+
+  it("normalizes icon size + strokeWidth for md buttons (18/2.25)", () => {
+    render(<Button size="md" icon={<RefreshCw size={9} strokeWidth={1} />}>r</Button>);
+    const svg = screen.getByRole("button").querySelector("svg");
+    expect(svg?.getAttribute("width")).toBe("18");
+    expect(svg?.getAttribute("height")).toBe("18");
+    expect(svg?.getAttribute("stroke-width")).toBe("2.25");
+  });
+
+  it("loading spinner inherits the normalized icon size for the button", () => {
+    render(<Button size="sm" loading>w</Button>);
+    const svg = screen.getByRole("button").querySelector("svg.animate-spin");
+    expect(svg?.getAttribute("width")).toBe("16");
+  });
+
+  it("leaves a non-lucide icon node untouched (no React element → no clone)", () => {
+    render(<Button icon={"★"}>star</Button>);
+    expect(screen.getByRole("button").textContent).toContain("★");
   });
 });

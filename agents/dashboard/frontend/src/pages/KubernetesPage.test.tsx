@@ -136,6 +136,105 @@ describe("KubernetesPage — pods table", () => {
   });
 });
 
+describe("KubernetesPage — pod row actions", () => {
+  it("clicking 'logs' → fetches get_logs and opens a modal with the output", async () => {
+    const invokeSpy = vi
+      .spyOn(api, "invokeTool")
+      .mockImplementation(async (_a: string, tool: string) => ({
+        task_id: "t", agent: "sysadmin", tool,
+        result: tool === "get_pods" ? PODS_OUTPUT : "2026-01-01 [INFO] hello from logs",
+      }));
+    render(<KubernetesPage />);
+    await waitFor(() => screen.getByText("olympus-abc-123"));
+
+    const logsButtons = screen.getAllByRole("button", { name: /logs/i });
+    await act(async () => { await userEvent.click(logsButtons[0]); });
+
+    expect(invokeSpy).toHaveBeenCalledWith("sysadmin", "get_logs", {
+      pod: "olympus-abc-123", namespace: "default", tail_lines: 200,
+    });
+    await waitFor(() => expect(screen.getByText(/hello from logs/)).toBeInTheDocument());
+  });
+
+  it("logs fetch failure → modal still opens with the error string", async () => {
+    vi.spyOn(api, "invokeTool").mockImplementation(async (_a: string, tool: string) => {
+      if (tool === "get_pods") return { task_id: "t", agent: "sysadmin", tool, result: PODS_OUTPUT };
+      throw new Error("no such pod");
+    });
+    render(<KubernetesPage />);
+    await waitFor(() => screen.getByText("olympus-abc-123"));
+
+    await act(async () => {
+      await userEvent.click(screen.getAllByRole("button", { name: /logs/i })[0]);
+    });
+    await waitFor(() => expect(screen.getByText(/no such pod/)).toBeInTheDocument());
+  });
+
+  it("clicking 'describe' → fetches describe_pod and opens a modal", async () => {
+    const invokeSpy = vi
+      .spyOn(api, "invokeTool")
+      .mockImplementation(async (_a: string, tool: string) => ({
+        task_id: "t", agent: "sysadmin", tool,
+        result: tool === "get_pods" ? PODS_OUTPUT : "Name: olympus-abc-123\nStatus: Running",
+      }));
+    render(<KubernetesPage />);
+    await waitFor(() => screen.getByText("olympus-abc-123"));
+
+    await act(async () => {
+      await userEvent.click(screen.getAllByRole("button", { name: /describe/i })[0]);
+    });
+
+    expect(invokeSpy).toHaveBeenCalledWith("sysadmin", "describe_pod", {
+      name: "olympus-abc-123", namespace: "default",
+    });
+    await waitFor(() => expect(screen.getByText(/Status: Running/)).toBeInTheDocument());
+  });
+
+  it("delete failure → alert() with the error message", async () => {
+    vi.spyOn(api, "invokeTool").mockImplementation(async (_a: string, tool: string) => {
+      if (tool === "get_pods") return { task_id: "t", agent: "sysadmin", tool, result: PODS_OUTPUT };
+      throw new Error("denied");
+    });
+    window.confirm = vi.fn().mockReturnValue(true);
+    const alertSpy = window.alert as ReturnType<typeof vi.fn>;
+    render(<KubernetesPage />);
+    await waitFor(() => screen.getByText("olympus-abc-123"));
+
+    await act(async () => {
+      await userEvent.click(screen.getAllByRole("button", { name: /delete/i })[0]);
+    });
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith(expect.stringMatching(/delete_pod failed: denied/)));
+  });
+});
+
+describe("KubernetesPage — nodes / events error paths", () => {
+  it("nodes fetch failure surfaces the error message", async () => {
+    vi.spyOn(api, "invokeTool").mockImplementation(async (_a: string, tool: string) => {
+      if (tool === "get_pods") return { task_id: "t", agent: "sysadmin", tool, result: PODS_OUTPUT };
+      if (tool === "get_nodes") throw new Error("503 down");
+      return { task_id: "t", agent: "sysadmin", tool, result: "" };
+    });
+    render(<KubernetesPage />);
+    await waitFor(() => screen.getByText("olympus-abc-123"));
+
+    await userEvent.click(screen.getByRole("button", { name: /^\s*Nodes\s*$/i }));
+    await waitFor(() => expect(screen.getByText(/error: 503 down/i)).toBeInTheDocument());
+  });
+
+  it("events fetch failure surfaces the error message", async () => {
+    vi.spyOn(api, "invokeTool").mockImplementation(async (_a: string, tool: string) => {
+      if (tool === "get_pods") return { task_id: "t", agent: "sysadmin", tool, result: PODS_OUTPUT };
+      if (tool === "get_events") throw new Error("events fetch crashed");
+      return { task_id: "t", agent: "sysadmin", tool, result: "" };
+    });
+    render(<KubernetesPage />);
+    await waitFor(() => screen.getByText("olympus-abc-123"));
+
+    await userEvent.click(screen.getByRole("button", { name: /^\s*Events\s*$/i }));
+    await waitFor(() => expect(screen.getByText(/error: events fetch crashed/i)).toBeInTheDocument());
+  });
+});
+
 describe("KubernetesPage — tab strip", () => {
   it("clicking Nodes switches the rendered table", async () => {
     vi.spyOn(api, "invokeTool").mockImplementation(async (_agent: string, tool: string) => {

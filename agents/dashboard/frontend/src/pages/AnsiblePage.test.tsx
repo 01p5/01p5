@@ -93,6 +93,50 @@ describe("AnsiblePage", () => {
     expect(runCall).toBeUndefined();
   });
 
+  it("clicking 'list inventory' → POSTs ansible/list_inventory", async () => {
+    vi.spyOn(api, "ansiblePlaybooks").mockResolvedValue(PBS);
+    const invokeSpy = vi.spyOn(api, "invokeTool").mockResolvedValue({
+      task_id: "t", agent: "ansible", tool: "list_inventory", result: "master ansible_host=...",
+    });
+
+    render(<AnsiblePage />);
+    await waitFor(() => screen.getByText("site.yml"));
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /list inventory/i }));
+    });
+
+    expect(invokeSpy).toHaveBeenCalledWith("ansible", "list_inventory", {
+      inventory: DEFAULT_INV,
+    });
+    await waitFor(() => expect(screen.getAllByText(/master ansible_host/i).length).toBeGreaterThan(0));
+  });
+
+  it("list inventory failure → 'Inventory error' modal", async () => {
+    vi.spyOn(api, "ansiblePlaybooks").mockResolvedValue(PBS);
+    vi.spyOn(api, "invokeTool").mockRejectedValue(new Error("no inv"));
+
+    render(<AnsiblePage />);
+    await waitFor(() => screen.getByText("site.yml"));
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /list inventory/i }));
+    });
+    await waitFor(() => expect(screen.getByText(/no inv/)).toBeInTheDocument());
+  });
+
+  it("check failure → 'check failed' modal with rejection message", async () => {
+    vi.spyOn(api, "ansiblePlaybooks").mockResolvedValue(PBS);
+    vi.spyOn(api, "invokeTool").mockRejectedValue(new Error("syntax: bad indent"));
+
+    render(<AnsiblePage />);
+    await waitFor(() => screen.getByText("site.yml"));
+
+    const checkButtons = screen.getAllByRole("button", { name: /check/i });
+    await act(async () => { await userEvent.click(checkButtons[0]); });
+
+    await waitFor(() => expect(screen.getByText(/syntax: bad indent/)).toBeInTheDocument());
+  });
+
   it("includes 'limit' when user fills the field", async () => {
     vi.spyOn(api, "ansiblePlaybooks").mockResolvedValue(PBS);
     const invokeSpy = vi.spyOn(api, "invokeTool").mockResolvedValue({

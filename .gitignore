@@ -20,3 +20,4 @@ infra/terraform/deployment/
 agents/dashboard/frontend/node_modules
 agents/dashboard/static/dist
 agents/dashboard/frontend/tsconfig.tsbuildinfo
+agents/dashboard/frontend/coverage
