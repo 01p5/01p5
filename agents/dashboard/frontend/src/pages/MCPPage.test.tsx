@@ -285,8 +285,7 @@ describe("MCPPage — add server form", () => {
 
     await act(async () => {
       await userEvent.type(inputByPlaceholder("github"), "fs");
-      await userEvent.clear(inputByPlaceholder("programmer"));
-      await userEvent.type(inputByPlaceholder("programmer"), "programmer");
+      // target_agent is a <select> defaulting to "programmer" — leave as-is
       await userEvent.type(inputByPlaceholder("python3"), "python3");
       await userEvent.type(
         inputByPlaceholder("-m mymodule --flag value"),
@@ -309,6 +308,33 @@ describe("MCPPage — add server form", () => {
     expect(req.command).toBe("python3");
     expect(req.args).toEqual(["-m", "mymod", "--flag", "two words"]);
     expect(req.destructive).toEqual(["write_file", "delete_branch"]);
+  });
+
+  it("target agent is a dropdown of the four production agents", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(
+      SERVER({ name: "ks", target_agent: "sysadmin" }),
+    );
+    render(<MCPPage />);
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /add server/i }));
+    });
+
+    const form = screen.getByTestId("add-mcp-form");
+    const select = within(form).getByRole("combobox") as HTMLSelectElement;
+    const options = Array.from(select.options).map((o) => o.value);
+    expect(options).toEqual(["programmer", "sysadmin", "terraform", "ansible"]);
+    expect(select.value).toBe("programmer");
+
+    await act(async () => {
+      await userEvent.selectOptions(select, "sysadmin");
+      await userEvent.type(within(form).getByPlaceholderText("github"), "ks");
+      await userEvent.type(within(form).getByPlaceholderText("python3"), "echo");
+    });
+    await act(async () => {
+      await userEvent.click(within(form).getByRole("button", { name: /register/i }));
+    });
+    expect(addSpy.mock.calls[0]![0].target_agent).toBe("sysadmin");
   });
 
   it("switching to http hides stdio fields and parses headers", async () => {

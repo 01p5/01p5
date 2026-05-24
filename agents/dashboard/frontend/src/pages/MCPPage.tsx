@@ -305,6 +305,11 @@ function ToolRow({ tool, isDestructive, prefix }: ToolRowProps): JSX.Element {
 }
 
 
+/** The four production agents an MCP server can graft tools onto.
+ *  Mirrors olympus_cli.registry.default_agents(); kept in sync by
+ *  hand since the dashboard doesn't expose an /agents endpoint. */
+const AVAILABLE_AGENTS = ["programmer", "sysadmin", "terraform", "ansible"] as const;
+
 /** Inline add-server form. Picks transport mode then renders the
  *  right field set. Submits via api.addMcpServer; on success calls
  *  onAdded so the parent can refresh + collapse. */
@@ -382,7 +387,19 @@ function AddServerForm({ onAdded, onCancel }: AddFormProps): JSX.Element {
       </div>
       <div className="grid grid-cols-2 gap-3 text-[12px] font-mono">
         <Field label="name (used as tool prefix)" value={name} onChange={setName} placeholder="github" required />
-        <Field label="target agent" value={targetAgent} onChange={setTargetAgent} placeholder="programmer" required />
+        <label className="block text-[11px] font-mono text-text-muted">
+          target agent<span className="text-accent-red">*</span>
+          <select
+            value={targetAgent}
+            onChange={(e) => setTargetAgent(e.target.value)}
+            required
+            className="mt-0.5 w-full bg-dark-panel border border-border-subtle rounded px-2 py-1 text-[12px] font-mono text-text-primary focus:outline-none focus:border-accent-blue/60"
+          >
+            {AVAILABLE_AGENTS.map((a) => (
+              <option key={a} value={a}>{a}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="text-[11px] font-mono text-text-secondary flex items-center gap-3 pt-1">
