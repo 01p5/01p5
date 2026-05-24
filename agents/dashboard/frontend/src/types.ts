@@ -78,6 +78,24 @@ export interface MCPServerCatalog {
   tools: MCPToolDescriptor[];
 }
 
+/** Shape for POST /mcp/servers. The integrator supplies one of the
+ *  two transport blocks plus a per-server destructive allowlist. */
+export interface AddMCPServerRequest {
+  name: string;
+  target_agent: string;
+  transport: "stdio" | "http";
+  // stdio
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string | null;
+  // http
+  url?: string;
+  headers?: Record<string, string>;
+  // both
+  destructive?: string[];
+}
+
 export interface BusEvent {
   msg_id: string;
   task_id: string;

@@ -147,6 +147,7 @@ class DashboardServer:
 
         self._tasks: dict[str, TaskRecord] = {}
         self._tasks_lock = threading.Lock()
+        self._mcp_lock = threading.Lock()
 
         # Subscribe an internal sink to mark tasks as completed when the
         # orchestrator's "result" message lands on the bus.
@@ -330,11 +331,20 @@ class DashboardServer:
                 if self.path.startswith("/rollback/") and self.path.endswith("/execute"):
                     inner = self.path[len("/rollback/"):-len("/execute")]
                     return outer._handle_execute_rollback(self, inner)
+                if self.path == "/mcp/servers":
+                    return outer._handle_add_mcp_server(self)
                 if self.path.startswith("/tools/"):
                     rest = self.path[len("/tools/"):]
                     if "/" in rest:
                         agent_name, _, tool_name = rest.partition("/")
                         return outer._handle_invoke_tool(self, agent_name, tool_name)
+                self.send_response(404)
+                self.end_headers()
+
+            def do_DELETE(self):  # noqa: N802
+                if self.path.startswith("/mcp/servers/"):
+                    name = self.path[len("/mcp/servers/"):]
+                    return outer._handle_delete_mcp_server(self, name)
                 self.send_response(404)
                 self.end_headers()
 
@@ -841,27 +851,138 @@ class DashboardServer:
             "recent": recent_payload,
         })
 
+    @staticmethod
+    def _mcp_summary_dict(s: dict[str, Any]) -> dict[str, Any]:
+        """Strip an internal registry record down to the JSON shape
+        the UI consumes. Drops the live client + raw MCPServerConfig."""
+        return {
+            "name": s["name"],
+            "target_agent": s.get("target_agent"),
+            "command": s.get("command_summary"),
+            "tool_count": len(s.get("tools", [])),
+            "tools": [t["name"] for t in s.get("tools", [])],
+            "destructive": sorted(s.get("destructive", [])),
+            "status": s.get("status", "connected"),
+            "error": s.get("error"),
+        }
+
     def _handle_list_mcp_servers(self, req: BaseHTTPRequestHandler) -> None:
         """List MCP servers wired into the dashboard at startup.
 
-        Returns ``{"servers": [<server-record>, ...]}`` where each
-        record carries the human-relevant fields (name, target agent,
-        tool count + names, destructive set, command summary) but NOT
-        the raw client/transport (no need to leak that to the UI)."""
-        servers = [
-            {
-                "name": s["name"],
-                "target_agent": s.get("target_agent"),
-                "command": s.get("command_summary"),
-                "tool_count": len(s.get("tools", [])),
-                "tools": [t["name"] for t in s.get("tools", [])],
-                "destructive": sorted(s.get("destructive", [])),
-                "status": s.get("status", "connected"),
-                "error": s.get("error"),
-            }
-            for s in self.mcp_servers
-        ]
+        Returns ``{"servers": [<server-summary>, ...]}`` — no raw
+        client/transport leaked to the wire."""
+        with self._mcp_lock:
+            servers = [self._mcp_summary_dict(s) for s in self.mcp_servers]
         self._send_json(req, 200, {"servers": servers})
+
+    def _handle_add_mcp_server(self, req: BaseHTTPRequestHandler) -> None:
+        """Register a new MCP server at runtime.
+
+        SECURITY NOTE: ``command`` + ``args`` are executed as a
+        subprocess on the dashboard host. Anyone with POST access
+        to this endpoint can run arbitrary code on the host. The
+        dashboard's threat model is single-user / intranet; multi-
+        tenant deployments need auth (out of scope for v1).
+
+        Body shape:
+          {
+            "name": "github",
+            "target_agent": "programmer",
+            "transport": "stdio" | "http",
+            // stdio:
+            "command": "npx",  "args": ["..."],  "env": {...},  "cwd": "..."?,
+            // http:
+            "url": "https://...",  "headers": {...},
+            // both:
+            "destructive": ["tool_name", ...]
+          }
+
+        Returns the new server's summary dict, or 4xx with an error
+        message. Duplicate names return 409. Failed registration is
+        added to the registry with ``status="error"`` and returned
+        with a 200 so the UI can render the error card."""
+        from agentlib import MCPServerConfig
+
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        if not isinstance(body, dict):
+            return self._send_json(req, 400, {"error": "body must be an object"})
+
+        name = body.get("name")
+        target = body.get("target_agent")
+        transport = (body.get("transport") or "stdio").lower()
+        if not name or not isinstance(name, str):
+            return self._send_json(req, 400, {"error": "missing 'name'"})
+        if not target or not isinstance(target, str):
+            return self._send_json(req, 400, {"error": "missing 'target_agent'"})
+        if transport not in ("stdio", "http"):
+            return self._send_json(req, 400, {
+                "error": "transport must be 'stdio' or 'http'",
+            })
+        if transport == "stdio" and not body.get("command"):
+            return self._send_json(req, 400, {
+                "error": "stdio transport requires 'command'",
+            })
+        if transport == "http" and not body.get("url"):
+            return self._send_json(req, 400, {
+                "error": "http transport requires 'url'",
+            })
+
+        with self._mcp_lock:
+            if any(s["name"] == name for s in self.mcp_servers):
+                return self._send_json(req, 409, {
+                    "error": f"server {name!r} already registered",
+                })
+
+            config = MCPServerConfig(
+                name=name,
+                command=body.get("command", "") if transport == "stdio" else "",
+                args=list(body.get("args") or []) if transport == "stdio" else [],
+                env=dict(body.get("env") or {}) if transport == "stdio" else {},
+                cwd=body.get("cwd") if transport == "stdio" else None,
+                url=body.get("url", "") if transport == "http" else "",
+                headers=dict(body.get("headers") or {}) if transport == "http" else {},
+                destructive=set(body.get("destructive") or []),
+            )
+            by_name = {a.name: a for a in self.orchestrator.agents.values()}
+            record = _register_one_mcp_server(
+                {"name": name, "target_agent": target, "config": config},
+                by_name,
+            )
+            self.mcp_servers.append(record)
+        return self._send_json(req, 200, self._mcp_summary_dict(record))
+
+    def _handle_delete_mcp_server(
+        self, req: BaseHTTPRequestHandler, name: str
+    ) -> None:
+        """Disconnect a previously-registered MCP server.
+
+        Strips the server's prefixed tools off the target agent's
+        ``tools`` + ``destructive_verbs``, closes the transport
+        (best-effort), and removes the registry entry. Future tasks
+        on that agent see the smaller tool set.
+
+        Returns ``{"removed": true, "name": ...}`` or 404 if no
+        such server is registered."""
+        from urllib.parse import unquote
+
+        name = unquote(name)
+        by_name = {a.name: a for a in self.orchestrator.agents.values()}
+        with self._mcp_lock:
+            target_idx = next(
+                (i for i, s in enumerate(self.mcp_servers) if s["name"] == name),
+                None,
+            )
+            if target_idx is None:
+                return self._send_json(req, 404, {
+                    "error": f"no MCP server named {name!r}",
+                })
+            record = self.mcp_servers[target_idx]
+            _unregister_one_mcp_server(record, by_name)
+            self.mcp_servers.pop(target_idx)
+        return self._send_json(req, 200, {"removed": True, "name": name})
 
     def _handle_list_mcp_tools(
         self, req: BaseHTTPRequestHandler, server_name: str
@@ -1171,62 +1292,107 @@ def build_default_server(
     )
 
 
+def _mcp_command_summary(config: Any) -> str:
+    """One-line human summary for the server card. HTTP and stdio
+    transports format differently so the UI can pick the right
+    prefix glyph."""
+    if getattr(config, "url", ""):
+        return f"HTTP {config.url}"
+    if getattr(config, "command", ""):
+        return f"{config.command} {' '.join(config.args)}".strip()
+    return ""
+
+
+def _register_one_mcp_server(
+    entry: dict[str, Any], by_name: dict[str, Any],
+) -> dict[str, Any]:
+    """Register a single MCP server's tools onto its target agent
+    and return one registry-record dict.
+
+    ``entry``: ``{name, target_agent, config, client?}``. ``config``
+    is an ``MCPServerConfig`` instance. If ``client`` is None, the
+    right transport is built by ``build_transport``; pass an explicit
+    client in tests to use ``MockTransport``.
+
+    Failures are caught and turned into ``status="error"`` records —
+    the caller decides whether to surface them or roll back."""
+    from agentlib import MCPClient, build_transport, register_mcp_tools
+
+    name = entry["name"]
+    target = entry.get("target_agent")
+    config = entry["config"]
+    client = entry.get("client")
+    record: dict[str, Any] = {
+        "name": name,
+        "target_agent": target,
+        "command_summary": _mcp_command_summary(config),
+        "destructive": set(getattr(config, "destructive", set())),
+        "status": "connected",
+        "tools": [],
+        "error": None,
+        # The live client is kept inside the record so unregister can
+        # close the transport. NOT exposed by the JSON wire format.
+        "_client": None,
+        "_config": config,
+    }
+    if target not in by_name:
+        record["status"] = "error"
+        record["error"] = f"unknown target_agent {target!r}"
+        return record
+    try:
+        if client is None:
+            client = MCPClient(build_transport(config))
+            client.initialize()
+        tools = client.list_tools()
+        register_mcp_tools(by_name[target], config, client=client)
+        record["tools"] = tools
+        record["_client"] = client
+    except Exception as exc:
+        logger.warning("MCP server %r registration failed: %s", name, exc)
+        record["status"] = "error"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+    return record
+
+
+def _unregister_one_mcp_server(
+    record: dict[str, Any], by_name: dict[str, Any],
+) -> None:
+    """Remove a server's prefixed tools from its target agent's tool
+    list and destructive_verbs, then close the transport.
+
+    Safe to call on error-state records (they have no tools or
+    client). Best-effort on transport.close() — a hang there
+    shouldn't block the operator from disconnecting."""
+    name = record["name"]
+    target = record.get("target_agent")
+    config = record.get("_config")
+    prefix = name  # register_mcp_tools used name as prefix by default
+
+    if target in by_name and config is not None:
+        agent = by_name[target]
+        # Drop the server's prefixed tools.
+        agent.tools = [
+            t for t in agent.tools
+            if not t.name.startswith(f"{prefix}_")
+        ]
+        # Drop the server's prefixed destructive verbs.
+        agent.destructive_verbs = {
+            v for v in agent.destructive_verbs
+            if not v.startswith(f"{prefix}_")
+        }
+
+    client = record.get("_client")
+    if client is not None:
+        try:
+            client.close()
+        except Exception as exc:
+            logger.warning("MCP %r close failed: %s", name, exc)
+
+
 def _wire_mcp_servers(
     agents: list[Any], configs: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Register each MCP server's tools onto its target agent and
-    return a registry dicts list for ``DashboardServer.mcp_servers``.
-
-    Each input dict: ``{name, target_agent, config, client?}``.
-    ``config`` is an ``MCPServerConfig`` instance. If ``client`` is
-    None, the right transport is chosen by ``build_transport``
-    (HTTP if ``config.url`` is set, stdio otherwise); pass an
-    explicit client in tests to use ``MockTransport``.
-
-    Failures are isolated: a misbehaving server lands as
-    ``status="error"`` on the registry; other servers still register."""
-    from agentlib import MCPClient, build_transport, register_mcp_tools
-
+    """Register every MCP server at dashboard startup. Per-server
+    failures are isolated — other servers still register."""
     by_name = {a.name: a for a in agents}
-    registry: list[dict[str, Any]] = []
-    for entry in configs:
-        name = entry["name"]
-        target = entry.get("target_agent")
-        config = entry["config"]
-        client = entry.get("client")
-        # HTTP-transport configs surface their url; stdio configs
-        # surface the subprocess command. The UI uses this for the
-        # "$ ..." line under each server card.
-        if getattr(config, "url", ""):
-            summary = f"HTTP {config.url}"
-        elif getattr(config, "command", ""):
-            summary = f"{config.command} {' '.join(config.args)}".strip()
-        else:
-            summary = ""
-        record: dict[str, Any] = {
-            "name": name,
-            "target_agent": target,
-            "command_summary": summary,
-            "destructive": set(getattr(config, "destructive", set())),
-            "status": "connected",
-            "tools": [],
-            "error": None,
-        }
-        if target not in by_name:
-            record["status"] = "error"
-            record["error"] = f"unknown target_agent {target!r}"
-            registry.append(record)
-            continue
-        try:
-            if client is None:
-                client = MCPClient(build_transport(config))
-                client.initialize()
-            tools = client.list_tools()
-            register_mcp_tools(by_name[target], config, client=client)
-            record["tools"] = tools
-        except Exception as exc:
-            logger.warning("MCP server %r registration failed: %s", name, exc)
-            record["status"] = "error"
-            record["error"] = f"{type(exc).__name__}: {exc}"
-        registry.append(record)
-    return registry
+    return [_register_one_mcp_server(entry, by_name) for entry in configs]

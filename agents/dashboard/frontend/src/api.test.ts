@@ -329,3 +329,40 @@ describe("api.getMcpServerTools", () => {
     expect(url).toBe("/mcp/servers/a%2Fb/tools");
   });
 });
+
+describe("api.addMcpServer", () => {
+  it("POSTs the request body to /mcp/servers and returns the summary", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      json: { name: "ext", target_agent: "programmer", command: "x",
+              tool_count: 0, tools: [], destructive: [],
+              status: "connected", error: null },
+    }));
+    const out = await api.addMcpServer({
+      name: "ext", target_agent: "programmer",
+      transport: "stdio", command: "x", args: ["-y"], destructive: ["w"],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/mcp/servers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          name: "ext", target_agent: "programmer",
+          transport: "stdio", command: "x", args: ["-y"], destructive: ["w"],
+        }),
+      }),
+    );
+    expect(out.name).toBe("ext");
+  });
+});
+
+describe("api.deleteMcpServer", () => {
+  it("DELETEs /mcp/servers/{name} and URL-encodes special chars", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      json: { removed: true, name: "a/b" },
+    }));
+    await api.deleteMcpServer("a/b");
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/mcp/servers/a%2Fb");
+    expect((init as RequestInit).method).toBe("DELETE");
+  });
+});

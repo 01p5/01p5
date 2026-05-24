@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MCPPage } from "./MCPPage";
 import { api } from "../api";
@@ -185,5 +185,199 @@ describe("MCPPage — transport prefix", () => {
     );
     // Neither stdio nor http transport row present.
     expect(container.querySelector('[data-transport]')).toBeNull();
+  });
+});
+
+
+describe("MCPPage — disconnect server", () => {
+  it("disconnect button posts DELETE and refreshes the list", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([
+      SERVER({ name: "ext", tool_count: 0, tools: [] }),
+    ]);
+    const delSpy = vi.spyOn(api, "deleteMcpServer").mockResolvedValue({
+      removed: true, name: "ext",
+    });
+    vi.stubGlobal("confirm", () => true);
+
+    render(<MCPPage />);
+    await waitFor(() => screen.getByText("ext"));
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /disconnect ext/i }));
+    });
+
+    expect(delSpy).toHaveBeenCalledWith("ext");
+  });
+
+  it("cancelled confirm dialog does NOT call delete", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([SERVER({ name: "ext" })]);
+    const delSpy = vi.spyOn(api, "deleteMcpServer").mockResolvedValue({
+      removed: true, name: "ext",
+    });
+    vi.stubGlobal("confirm", () => false);
+
+    render(<MCPPage />);
+    await waitFor(() => screen.getByText("ext"));
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /disconnect ext/i }));
+    });
+
+    expect(delSpy).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failure inline when delete fails", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([SERVER({ name: "ext" })]);
+    vi.spyOn(api, "deleteMcpServer").mockRejectedValue(new Error("503 down"));
+    vi.stubGlobal("confirm", () => true);
+
+    render(<MCPPage />);
+    await waitFor(() => screen.getByText("ext"));
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /disconnect ext/i }));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText(/disconnect failed: 503 down/i)).toBeInTheDocument(),
+    );
+  });
+});
+
+
+describe("MCPPage — add server form", () => {
+  it("Add server button toggles the form", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    render(<MCPPage />);
+    expect(screen.queryByTestId("add-mcp-form")).toBeNull();
+
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /add server/i }));
+    });
+    expect(screen.getByTestId("add-mcp-form")).toBeInTheDocument();
+
+    // Click the form's own cancel button (the header toggle also says
+    // "cancel" while expanded, so we have to scope to the form).
+    const form = screen.getByTestId("add-mcp-form");
+    await act(async () => {
+      await userEvent.click(within(form).getByRole("button", { name: /cancel/i }));
+    });
+    expect(screen.queryByTestId("add-mcp-form")).toBeNull();
+  });
+
+  it("submit posts a stdio request with parsed args + destructive set", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(
+      SERVER({ name: "fs", target_agent: "programmer" }),
+    );
+
+    render(<MCPPage />);
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /add server/i }));
+    });
+
+    const form = screen.getByTestId("add-mcp-form");
+    // The Field component nests the label text + asterisk + input
+    // inside a single <label>. Reaching inputs by placeholder is
+    // more robust than by label text.
+    const inputByPlaceholder = (ph: string): HTMLInputElement =>
+      within(form).getByPlaceholderText(ph) as HTMLInputElement;
+
+    await act(async () => {
+      await userEvent.type(inputByPlaceholder("github"), "fs");
+      await userEvent.clear(inputByPlaceholder("programmer"));
+      await userEvent.type(inputByPlaceholder("programmer"), "programmer");
+      await userEvent.type(inputByPlaceholder("python3"), "python3");
+      await userEvent.type(
+        inputByPlaceholder("-m mymodule --flag value"),
+        '-m mymod --flag "two words"',
+      );
+      await userEvent.type(
+        inputByPlaceholder("write_file, delete_branch"),
+        "write_file, delete_branch",
+      );
+    });
+    await act(async () => {
+      await userEvent.click(within(form).getByRole("button", { name: /register/i }));
+    });
+
+    expect(addSpy).toHaveBeenCalledTimes(1);
+    const req = addSpy.mock.calls[0]![0];
+    expect(req.name).toBe("fs");
+    expect(req.target_agent).toBe("programmer");
+    expect(req.transport).toBe("stdio");
+    expect(req.command).toBe("python3");
+    expect(req.args).toEqual(["-m", "mymod", "--flag", "two words"]);
+    expect(req.destructive).toEqual(["write_file", "delete_branch"]);
+  });
+
+  it("switching to http hides stdio fields and parses headers", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(
+      SERVER({ name: "remote" }),
+    );
+
+    render(<MCPPage />);
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /add server/i }));
+    });
+    const form = screen.getByTestId("add-mcp-form");
+    await act(async () => {
+      await userEvent.click(within(form).getByLabelText(/http \(remote\)/i));
+    });
+    expect(form.querySelector('[data-transport-fields="stdio"]')).toBeNull();
+    expect(form.querySelector('[data-transport-fields="http"]')).not.toBeNull();
+
+    const phInput = (ph: string): HTMLInputElement =>
+      within(form).getByPlaceholderText(ph) as HTMLInputElement;
+    const phArea = (ph: string): HTMLTextAreaElement =>
+      within(form).getByPlaceholderText(ph) as HTMLTextAreaElement;
+
+    await act(async () => {
+      await userEvent.type(phInput("github"), "remote");
+      await userEvent.type(
+        phInput("https://mcp.example.com/server"),
+        "https://mcp.example.com/x",
+      );
+      await userEvent.type(
+        phArea("Authorization: Bearer ..."),
+        "Authorization: Bearer abc{enter}X-Other: yes",
+      );
+    });
+    await act(async () => {
+      await userEvent.click(within(form).getByRole("button", { name: /register/i }));
+    });
+
+    expect(addSpy).toHaveBeenCalledTimes(1);
+    const req = addSpy.mock.calls[0]![0];
+    expect(req.transport).toBe("http");
+    expect(req.url).toBe("https://mcp.example.com/x");
+    expect(req.headers).toEqual({ Authorization: "Bearer abc", "X-Other": "yes" });
+    expect(req.command).toBeUndefined();
+  });
+
+  it("surfaces backend errors inline without collapsing the form", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    vi.spyOn(api, "addMcpServer").mockRejectedValue(
+      new Error("409 Conflict: already registered"),
+    );
+
+    render(<MCPPage />);
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: /add server/i }));
+    });
+    const form = screen.getByTestId("add-mcp-form");
+    await act(async () => {
+      await userEvent.type(within(form).getByPlaceholderText("github"), "dup");
+      await userEvent.type(within(form).getByPlaceholderText("python3"), "echo");
+    });
+    await act(async () => {
+      await userEvent.click(within(form).getByRole("button", { name: /register/i }));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText(/409 Conflict/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("add-mcp-form")).toBeInTheDocument();
   });
 });

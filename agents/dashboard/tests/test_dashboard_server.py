@@ -1479,3 +1479,275 @@ def test_wire_mcp_servers_unknown_target_agent_marks_error():
     }])
     assert registry[0]["status"] == "error"
     assert "ghost" in registry[0]["error"]
+
+
+# ---------------------------------------------------------------------
+# POST /mcp/servers + DELETE /mcp/servers/{name} (runtime add/remove)
+# ---------------------------------------------------------------------
+
+
+def _delete(server, path: str, timeout: float = 2.0) -> tuple[int, dict]:
+    host, port = server.address
+    req = urllib.request.Request(
+        f"http://{host}:{port}{path}", method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return resp.status, json.loads(body) if body else {}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(body)
+        except json.JSONDecodeError:
+            return exc.code, {"raw": body}
+
+
+# A tiny stand-in agent we can register MCP tools onto without
+# pulling in the full programmer/sysadmin stack.
+class _BareAgent(AgentSpec):
+    name = "bare"
+    domain = "for-mcp-tests"
+    tools: Sequence[Any] = []
+    destructive_verbs: set[str] = set()
+
+    def handle(self, task, ctx):  # pragma: no cover — not invoked
+        raise NotImplementedError
+
+
+def _server_with_bare_agent() -> DashboardServer:
+    bus = InMemoryBus()
+    ctx = AgentContext(approval=AlwaysApprove(), audit=InMemoryAuditLogger())
+    orch = Orchestrator(
+        bus=bus, agents=[_BareAgent()], ctx=ctx,
+        router=ManualRouter(default="bare"),
+        result_timeout_seconds=2.0,
+    )
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
+        host="127.0.0.1", port=0,
+    )
+    srv.serve()
+    return srv
+
+
+def test_post_mcp_servers_400_when_body_missing_required_fields():
+    srv = _server_with_bare_agent()
+    try:
+        # Missing name
+        status, body = _post(srv, "/mcp/servers", {"target_agent": "bare", "command": "x"})
+        assert status == 400 and "name" in body["error"]
+        # Missing target_agent
+        status, body = _post(srv, "/mcp/servers", {"name": "x", "command": "x"})
+        assert status == 400 and "target_agent" in body["error"]
+        # Missing command (stdio default)
+        status, body = _post(srv, "/mcp/servers", {"name": "x", "target_agent": "bare"})
+        assert status == 400 and "command" in body["error"]
+        # Invalid transport
+        status, body = _post(srv, "/mcp/servers", {
+            "name": "x", "target_agent": "bare", "transport": "ftp",
+        })
+        assert status == 400 and "transport" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_post_mcp_servers_400_when_http_url_missing():
+    srv = _server_with_bare_agent()
+    try:
+        status, body = _post(srv, "/mcp/servers", {
+            "name": "x", "target_agent": "bare", "transport": "http",
+        })
+        assert status == 400 and "url" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_post_mcp_servers_409_on_duplicate_name():
+    """Pre-seed the registry, then POST with the same name."""
+    srv = _server_with_bare_agent()
+    srv.mcp_servers.append({
+        "name": "dup", "target_agent": "bare", "command_summary": "",
+        "destructive": set(), "status": "connected", "tools": [],
+        "error": None, "_client": None, "_config": None,
+    })
+    try:
+        status, body = _post(srv, "/mcp/servers", {
+            "name": "dup", "target_agent": "bare",
+            "command": "python3", "args": ["-c", "x"],
+        })
+        assert status == 409
+        assert "already registered" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_post_mcp_servers_failed_registration_returns_200_with_error_card():
+    """A bad command (e.g. nonexistent binary) lands as an error
+    record on the registry — the UI renders the failure card so the
+    user can see what went wrong. NOT 5xx, because the dashboard
+    itself is fine."""
+    srv = _server_with_bare_agent()
+    try:
+        status, body = _post(srv, "/mcp/servers", {
+            "name": "ghost", "target_agent": "bare",
+            "command": "/nonexistent/binary-does-not-exist",
+        })
+        assert status == 200
+        assert body["status"] == "error"
+        assert body["error"]  # not None
+        # And the registry now has one entry.
+        assert len(srv.mcp_servers) == 1
+    finally:
+        srv.shutdown()
+
+
+def test_post_mcp_servers_404_when_target_agent_unknown():
+    srv = _server_with_bare_agent()
+    try:
+        status, body = _post(srv, "/mcp/servers", {
+            "name": "x", "target_agent": "ghost-agent",
+            "command": "echo", "args": ["hi"],
+        })
+        # Registers with status=error rather than 404 — the failure
+        # surfaces on the registry card so the user can fix it.
+        assert status == 200
+        assert body["status"] == "error"
+        assert "ghost-agent" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_delete_mcp_server_unknown_name_returns_404():
+    srv = _server_with_bare_agent()
+    try:
+        status, body = _delete(srv, "/mcp/servers/never-existed")
+        assert status == 404
+        assert "never-existed" in body["error"]
+    finally:
+        srv.shutdown()
+
+
+def test_delete_mcp_server_strips_tools_from_agent_and_closes_client():
+    """The full happy path: register via _register_one_mcp_server with
+    a MockTransport, verify the agent grew tools, DELETE, verify the
+    tools are gone AND the mock transport was close()'d."""
+    from agentlib import MCPClient, MCPServerConfig
+    from dashboard.server import _register_one_mcp_server
+
+    # Build an in-process MCP server that hands out 2 tools.
+    def handler(req):
+        m = req.get("method")
+        mid = req.get("id")
+        if m == "initialize":
+            return {"jsonrpc": "2.0", "id": mid, "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fake", "version": "0"},
+            }}
+        if m == "tools/list":
+            return {"jsonrpc": "2.0", "id": mid, "result": {"tools": [
+                {"name": "read", "description": "r", "inputSchema": {"type": "object"}},
+                {"name": "write", "description": "w", "inputSchema": {"type": "object"}},
+            ]}}
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "no"}}
+
+    transport = MockTransport(handler)
+    client = MCPClient(transport)
+    client.initialize()
+
+    srv = _server_with_bare_agent()
+    bare = srv.orchestrator.agents["bare"]
+    by_name = {"bare": bare}
+    record = _register_one_mcp_server(
+        {
+            "name": "ext", "target_agent": "bare",
+            "config": MCPServerConfig(name="ext", destructive={"write"}),
+            "client": client,
+        }, by_name,
+    )
+    srv.mcp_servers.append(record)
+    # Sanity: tools landed on the agent.
+    assert {t.name for t in bare.tools} == {"ext_read", "ext_write"}
+    assert "ext_write" in bare.destructive_verbs
+
+    try:
+        status, body = _delete(srv, "/mcp/servers/ext")
+        assert status == 200
+        assert body == {"removed": True, "name": "ext"}
+        # Tools + destructive verbs stripped.
+        assert bare.tools == []
+        assert bare.destructive_verbs == set()
+        # MockTransport was closed.
+        assert transport._closed is True
+        # Registry is empty again.
+        assert len(srv.mcp_servers) == 0
+    finally:
+        srv.shutdown()
+
+
+def test_delete_mcp_server_keeps_other_servers_tools():
+    """Two servers registered → delete one → only that server's tools
+    are stripped; the other server's tools survive."""
+    from agentlib import MCPClient, MCPServerConfig
+    from dashboard.server import _register_one_mcp_server
+
+    def handler(req):
+        m = req.get("method")
+        mid = req.get("id")
+        if m == "initialize":
+            return {"jsonrpc": "2.0", "id": mid, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {},
+                "serverInfo": {"name": "f", "version": "0"},
+            }}
+        if m == "tools/list":
+            return {"jsonrpc": "2.0", "id": mid, "result": {"tools": [
+                {"name": "x", "description": "x", "inputSchema": {"type": "object"}},
+            ]}}
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -1, "message": "?"}}
+
+    srv = _server_with_bare_agent()
+    bare = srv.orchestrator.agents["bare"]
+    by_name = {"bare": bare}
+
+    for name in ("alpha", "beta"):
+        c = MCPClient(MockTransport(handler))
+        c.initialize()
+        rec = _register_one_mcp_server(
+            {"name": name, "target_agent": "bare",
+             "config": MCPServerConfig(name=name), "client": c},
+            by_name,
+        )
+        srv.mcp_servers.append(rec)
+    # Both tools landed.
+    assert {t.name for t in bare.tools} == {"alpha_x", "beta_x"}
+
+    try:
+        status, _ = _delete(srv, "/mcp/servers/alpha")
+        assert status == 200
+        # Only beta's tool survives.
+        assert {t.name for t in bare.tools} == {"beta_x"}
+        # And only beta is left in the registry.
+        assert [s["name"] for s in srv.mcp_servers] == ["beta"]
+    finally:
+        srv.shutdown()
+
+
+def test_delete_mcp_server_handles_error_state_record_gracefully():
+    """If a server was registered but its initialize failed (status=
+    error, _client=None), DELETE should still succeed and just remove
+    the registry entry. No tools to strip, no client to close."""
+    srv = _server_with_bare_agent()
+    srv.mcp_servers.append({
+        "name": "flaky", "target_agent": "bare", "command_summary": "",
+        "destructive": set(), "status": "error",
+        "tools": [], "error": "ECONNREFUSED",
+        "_client": None, "_config": None,
+    })
+    try:
+        status, body = _delete(srv, "/mcp/servers/flaky")
+        assert status == 200
+        assert body["removed"] is True
+        assert srv.mcp_servers == []
+    finally:
+        srv.shutdown()

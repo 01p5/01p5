@@ -3,6 +3,7 @@
 // serves the SPA + API on the same origin in prod.
 
 import type {
+  AddMCPServerRequest,
   AuditRecord,
   HealthResponse,
   MCPServerCatalog,
@@ -40,6 +41,10 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
       body: JSON.stringify(body),
     }),
   );
+}
+
+async function deleteJson<T>(url: string): Promise<T> {
+  return jsonOrThrow<T>(await fetch(url, { method: "DELETE" }));
 }
 
 export const api = {
@@ -142,4 +147,15 @@ export const api = {
   },
   getMcpServerTools: (name: string): Promise<MCPServerCatalog> =>
     getJson(`/mcp/servers/${encodeURIComponent(name)}/tools`),
+
+  /** Register a new MCP server at runtime. The backend immediately
+   *  attempts to connect + list its tools; failures land as a server
+   *  card with status="error" rather than a thrown exception. */
+  addMcpServer: (req: AddMCPServerRequest): Promise<MCPServerSummary> =>
+    postJson("/mcp/servers", req),
+
+  /** Disconnect a registered MCP server: strips its tools off the
+   *  target agent + closes the transport. 404 if no such server. */
+  deleteMcpServer: (name: string): Promise<{ removed: true; name: string }> =>
+    deleteJson(`/mcp/servers/${encodeURIComponent(name)}`),
 };
