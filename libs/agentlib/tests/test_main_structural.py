@@ -9,14 +9,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 from pydantic import BaseModel
 
 from agentlib.main import (
     StructuralAgent,
-    new_context,
-    sum_costs,
     get_cost_for_type,
+    new_context,
 )
 
 

@@ -11,8 +11,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # Lazy import — streaming.py pulls in langchain.agents at import time.
 # If langchain is missing the test layer would crash; the langchain.tools
 # dependency is in CI install already, so we can import unconditionally.
@@ -27,8 +25,8 @@ def _make_streaming_agent(model: str = "openai:gpt-5-mini") -> StreamingAgent:
     whose .agent is a stub the test will further configure."""
     with patch("agentlib.streaming.init_chat_model"), \
          patch("agentlib.streaming.create_agent") as ca:
-        # create_agent(...).with_config(...) chain → both return a stub.
-        stub_agent = MagicMock()
+        # create_agent(...).with_config(...) chain → return a stub the
+        # test can further configure (.stream / .invoke return values).
         configured = MagicMock()
         configured.with_config = MagicMock(return_value=configured)
         ca.return_value.with_config.return_value = configured
