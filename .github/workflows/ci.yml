@@ -34,40 +34,48 @@ jobs:
         # We deliberately do NOT install the full pinned dependency set
         # (langchain 1.x, litellm, anthropic, etc.) — the unit tests cover
         # the pure-python core (spec, runtime, bus, orchestrator, budget)
-        # and only need langchain.tools + pydantic.
+        # and only need langchain.tools + pydantic. textual is required
+        # by the TUI tests in olympus_cli; pytest-cov gates the 80%
+        # coverage thresholds below.
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest pydantic 'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0' fakeredis
+          pip install ruff pytest pytest-cov pydantic 'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0' fakeredis textual
 
       - name: Lint (ruff)
         run: ruff check src tests
 
-      - name: Test agentlib core (pytest)
-        run: pytest -v
+      # Each suite enforces ≥80% coverage on its own src/ tree via
+      # --cov-fail-under. The threshold matches the team policy: any
+      # package falling below 80% fails CI. To lift the bar, write
+      # tests; to drop it (e.g. for a brand-new package not yet
+      # rounded out), update the matching --cov-fail-under here.
 
-      - name: Test sysadmin agent (pytest)
+      - name: Test agentlib core (pytest + 80% coverage gate)
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
+
+      - name: Test sysadmin agent (pytest + 80% coverage gate)
         working-directory: agents/sysadmin
-        run: pytest -v
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
-      - name: Test programmer agent (pytest)
+      - name: Test programmer agent (pytest + 80% coverage gate)
         working-directory: agents/programmer
-        run: pytest -v
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
-      - name: Test terraform agent (pytest)
+      - name: Test terraform agent (pytest + 80% coverage gate)
         working-directory: agents/terraform
-        run: pytest -v
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
-      - name: Test ansible agent (pytest)
+      - name: Test ansible agent (pytest + 80% coverage gate)
         working-directory: agents/ansible
-        run: pytest -v
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
-      - name: Test orchestrator CLI wiring (pytest)
+      - name: Test orchestrator CLI wiring (pytest + 80% coverage gate)
         working-directory: agents/olympus_cli
-        run: pytest -v
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
-      - name: Test dashboard backend (pytest)
+      - name: Test dashboard backend (pytest + 80% coverage gate)
         working-directory: agents/dashboard
-        run: pytest -v
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -84,8 +92,12 @@ jobs:
           cache-dependency-path: agents/dashboard/frontend/package-lock.json
       - name: Install
         run: npm ci || npm install
-      - name: Unit tests (vitest)
-        run: npm run test:run
+      - name: Unit tests + 80% coverage gate (vitest)
+        # `test:coverage` runs vitest with the v8 coverage provider; the
+        # thresholds in vitest.config.ts (statements/lines/functions/
+        # branches all at 80%) turn this into a hard CI gate. A drop
+        # below 80% on any metric fails the job.
+        run: npm run test:coverage
       - name: Type-check + build
         run: npm run build
       - name: Confirm SPA artifacts
