@@ -60,7 +60,7 @@ class LLMRouter:
 
     def route(self, task: TaskMessage) -> str:
         from .main import StructuralAgent
-        from .models import gpt5_mini
+        from .models import gpt55
 
         catalog = "\n".join(
             f"  - {name}: {desc}" for name, desc in self.agent_descriptions.items()
@@ -80,7 +80,7 @@ class LLMRouter:
             task_id=f"router:{task.task_id}",
             system_prompt="You route DevOps tasks to the right specialist agent. Be decisive.",
             response_class=_RouteDecision,
-            model=self.model or gpt5_mini,
+            model=self.model or gpt55,
             agent_type="orchestrator-router",
         )
         try:

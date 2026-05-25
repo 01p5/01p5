@@ -6,6 +6,7 @@ claude37 = "anthropic:claude-3-7-sonnet-latest"
 claude4 = "anthropic/claude-sonnet-4-0"
 gpt51 = "openai:gpt-5.1"
 gpt52 = "openai:gpt-5.2"
+gpt55 = "openai:gpt-5.5-2026-04-23"
 gpt5 = "openai:gpt-5"
 gpt5_mini = "openai:gpt-5-mini"
 gpt4_1 = "gpt-4.1"
@@ -26,6 +27,12 @@ model_costs = {
         "input": 1.75,
         "cached_input": 0.175,
         "output": 14,
+        "web_search": 0.01,
+    },
+    gpt55: {
+        "input": 5,
+        "cached_input": 0.5,
+        "output": 30,
         "web_search": 0.01,
     },
     gpt5: {
