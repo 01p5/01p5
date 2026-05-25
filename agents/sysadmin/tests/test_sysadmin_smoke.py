@@ -42,11 +42,13 @@ def test_sysadmin_declares_destructive_verbs_correctly():
     spec = SysadminAgent()
     # delete_pod is the user-facing mutation; apply_manifest is its
     # rollback inverse and is destructive too (a misused apply could
-    # create or replace anything).
-    assert spec.destructive_verbs == {"delete_pod", "apply_manifest"}
+    # create or replace anything). shell_exec runs arbitrary bash, so
+    # destructive by construction even when the command is read-only.
+    assert spec.destructive_verbs == {"delete_pod", "apply_manifest", "shell_exec"}
     declared = {t.name for t in spec.tools}
     assert "delete_pod" in declared
     assert "apply_manifest" in declared
+    assert "shell_exec" in declared
     assert "get_pods" in declared
     # delete_pod has a registered rollback snapshot.
     assert "delete_pod" in spec.rollback_snapshots
@@ -140,6 +142,93 @@ def test_delete_pod_approval_call_carries_no_diff_preview():
 
     assert "diff" in seen, "ApprovalHook.request must be called with a diff kwarg"
     assert seen["diff"] is None
+
+
+def test_shell_exec_blocked_when_human_rejects():
+    """shell_exec is destructive — reject path must not run bash."""
+    spec = SysadminAgent()
+    ctx, audit = _ctx(approval=AlwaysReject())
+    gated = gate_tools(spec, ctx, task_id="shell-1")
+    by_name = {t.name: t for t in gated}
+
+    with patch("sysadmin.tools.subprocess.run") as run_mock:
+        result = by_name["shell_exec"].invoke({"command": "df -h", "timeout_sec": 5})
+
+    assert "REJECTED" in result
+    run_mock.assert_not_called()
+    assert audit.records[-1]["approved"] is False
+
+
+def test_shell_exec_runs_after_approval_and_returns_stdout():
+    spec = SysadminAgent()
+    ctx, audit = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="shell-2")
+    by_name = {t.name: t for t in gated}
+
+    def fake_run(cmd, **kwargs):
+        # bash -c 'df -h /'  — emulate normal exit + payload.
+        assert cmd[0] == "bash" and cmd[1] == "-c"
+        return subprocess.CompletedProcess(
+            cmd, returncode=0, stdout="Filesystem  Size  Used  Avail  Use%\n/dev/vda1  20G  14G  6G  70%\n",
+            stderr="",
+        )
+
+    with patch("sysadmin.tools.subprocess.run", side_effect=fake_run):
+        out = by_name["shell_exec"].invoke({"command": "df -h /", "timeout_sec": 5})
+
+    assert "EXIT=0" in out
+    assert "/dev/vda1" in out
+    # Two audit entries: the approval decision + the actual call.
+    tools = [r["tool"] for r in audit.records]
+    assert tools == ["shell_exec", "shell_exec"]
+    assert audit.records[0]["approved"] is True
+
+
+def test_shell_exec_surfaces_nonzero_exit_and_stderr():
+    spec = SysadminAgent()
+    ctx, _ = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="shell-3")
+    by_name = {t.name: t for t in gated}
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd, returncode=2, stdout="", stderr="bash: no such file\n",
+        )
+
+    with patch("sysadmin.tools.subprocess.run", side_effect=fake_run):
+        out = by_name["shell_exec"].invoke({"command": "cat /nope", "timeout_sec": 5})
+
+    assert "EXIT=2" in out
+    assert "no such file" in out
+
+
+def test_shell_exec_timeout_returns_clear_error():
+    spec = SysadminAgent()
+    ctx, _ = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="shell-4")
+    by_name = {t.name: t for t in gated}
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)
+
+    with patch("sysadmin.tools.subprocess.run", side_effect=fake_run):
+        out = by_name["shell_exec"].invoke({"command": "sleep 999", "timeout_sec": 1})
+
+    assert "timeout" in out.lower()
+
+
+def test_shell_exec_rejects_empty_command():
+    """An empty command shouldn't even reach approval — caught at the tool."""
+    spec = SysadminAgent()
+    ctx, _ = _ctx(approval=AlwaysApprove())
+    gated = gate_tools(spec, ctx, task_id="shell-5")
+    by_name = {t.name: t for t in gated}
+
+    with patch("sysadmin.tools.subprocess.run") as run_mock:
+        out = by_name["shell_exec"].invoke({"command": "   ", "timeout_sec": 5})
+
+    assert "ERROR" in out and "empty" in out.lower()
+    run_mock.assert_not_called()
 
 
 _LIVE_REQUIRED = ("OLYMPUS_LIVE_LLM", "OLYMPUS_LIVE_KUBECTL")

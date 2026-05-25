@@ -237,8 +237,43 @@ def _scrub_server_fields(pod_yaml: str) -> str:
     return "".join(out)
 
 
+@tool
+def shell_exec(command: str, timeout_sec: int = 30) -> str:
+    """Execute an arbitrary shell command inside the dashboard pod.
+
+    DESTRUCTIVE — every call is gated by the approval queue. Use only
+    when no typed tool covers the case: kubectl --raw queries, jq
+    filters over kubectl JSON, `kubectl debug node/...` for host
+    introspection, etc. Prefer typed tools (get_pods, describe_pod,
+    apply_manifest) when they fit — they're auditable in a structured
+    way that arbitrary shell isn't.
+
+    Runs via ``bash -c`` with a hard timeout. Returns combined exit
+    code, stdout, and stderr so the LLM can recover from failures.
+    The pod runs as the sysadmin ServiceAccount — anything blocked
+    by the SA's RBAC stays blocked, no privilege bypass.
+    """
+    if not command or not command.strip():
+        return "ERROR: empty command"
+    try:
+        proc = subprocess.run(
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=max(1, int(timeout_sec)),
+        )
+    except subprocess.TimeoutExpired:
+        return f"ERROR: shell timeout after {timeout_sec}s for command: {command!r}"
+    except FileNotFoundError:
+        return "ERROR: bash not found on PATH"
+    out = f"EXIT={proc.returncode}\nSTDOUT:\n{proc.stdout}"
+    if proc.stderr:
+        out += f"\nSTDERR:\n{proc.stderr}"
+    return out
+
+
 READ_ONLY_TOOLS = [get_pods, describe_pod, get_logs, get_events, get_nodes]
-DESTRUCTIVE_TOOLS = [delete_pod, apply_manifest]
+DESTRUCTIVE_TOOLS = [delete_pod, apply_manifest, shell_exec]
 ALL_TOOLS = READ_ONLY_TOOLS + DESTRUCTIVE_TOOLS
 
 ROLLBACK_SNAPSHOTS = {
