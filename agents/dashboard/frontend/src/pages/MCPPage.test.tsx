@@ -245,6 +245,82 @@ describe("MCPPage — disconnect server", () => {
 });
 
 
+describe("MCPPage — NetDB card", () => {
+  it("renders the NetDB connect card when no netdb server is wired", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    render(<MCPPage />);
+    await waitFor(() => screen.getByTestId("netdb-card"));
+    expect(screen.getByText(/NetDB integration/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/10\.0\.3\.5/)).toBeInTheDocument();
+  });
+
+  it("hides the NetDB card once a server named 'netdb' is wired", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([
+      SERVER({ name: "netdb", target_agent: "sysadmin", tool_count: 32 }),
+    ]);
+    render(<MCPPage />);
+    await waitFor(() => screen.getByText("netdb"));
+    expect(screen.queryByTestId("netdb-card")).toBeNull();
+  });
+
+  it("connect normalizes a bare IP into http://<ip>:8080/mcp and POSTs the right shape", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(
+      SERVER({ name: "netdb", target_agent: "sysadmin", tool_count: 32 }),
+    );
+
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("netdb-card"));
+    await act(async () => {
+      await userEvent.type(within(card).getByRole("textbox", { name: /netdb host/i }), "10.0.3.5");
+      await userEvent.click(within(card).getByRole("button", { name: /connect/i }));
+    });
+
+    expect(addSpy).toHaveBeenCalledTimes(1);
+    const req = addSpy.mock.calls[0]![0];
+    expect(req.name).toBe("netdb");
+    expect(req.target_agent).toBe("sysadmin");
+    expect(req.transport).toBe("http");
+    expect(req.url).toBe("http://10.0.3.5:8080/mcp");
+    // Destructive tools list is the union of all netdb mutating verbs.
+    expect(req.destructive).toContain("create_host");
+    expect(req.destructive).toContain("delete_zone");
+  });
+
+  it("accepts an explicit URL with port + path verbatim", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(
+      SERVER({ name: "netdb" }),
+    );
+
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("netdb-card"));
+    await act(async () => {
+      await userEvent.type(within(card).getByRole("textbox", { name: /netdb host/i }), "http://netdb.example.com:9999/mcp");
+      await userEvent.click(within(card).getByRole("button", { name: /connect/i }));
+    });
+
+    expect(addSpy.mock.calls[0]![0].url).toBe("http://netdb.example.com:9999/mcp");
+  });
+
+  it("surfaces backend errors inline without re-submitting", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    vi.spyOn(api, "addMcpServer").mockRejectedValue(new Error("ECONNREFUSED"));
+
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("netdb-card"));
+    await act(async () => {
+      await userEvent.type(within(card).getByRole("textbox", { name: /netdb host/i }), "10.0.3.99");
+      await userEvent.click(within(card).getByRole("button", { name: /connect/i }));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText(/connect failed: ECONNREFUSED/i)).toBeInTheDocument(),
+    );
+  });
+});
+
+
 describe("MCPPage — add server form", () => {
   it("Add server button toggles the form", async () => {
     vi.spyOn(api, "listMcpServers").mockResolvedValue([]);

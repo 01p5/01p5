@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plug, AlertCircle, ChevronRight, ShieldAlert, Plus, X, Trash2, RefreshCw } from "lucide-react";
+import { Plug, AlertCircle, ChevronRight, ShieldAlert, Plus, X, Trash2, RefreshCw, Network } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { Button } from "../components/Button";
@@ -63,6 +63,9 @@ export function MCPPage(): JSX.Element {
         </p>
       </div>
       <div className="flex-1 overflow-auto px-6 py-5 space-y-4">
+        {!servers.some((s) => s.name === "netdb") && (
+          <NetDBCard onConnected={refresh} />
+        )}
         {showAddForm && (
           <AddServerForm
             onAdded={() => { setShowAddForm(false); refresh(); }}
@@ -309,6 +312,144 @@ function ToolRow({ tool, isDestructive, prefix }: ToolRowProps): JSX.Element {
  *  Mirrors olympus_cli.registry.default_agents(); kept in sync by
  *  hand since the dashboard doesn't expose an /agents endpoint. */
 const AVAILABLE_AGENTS = ["programmer", "sysadmin", "terraform", "ansible"] as const;
+
+
+/** Dedicated NetDB integration card. Sits at the top of the MCP page
+ *  when there's no `netdb` server wired yet. Asks for one input (the
+ *  netdb host IP) and submits an HTTP-transport MCP-server registration
+ *  with the known endpoint shape. The backend's add-server flow already
+ *  attempts an initialize + tools/list, so a successful POST means the
+ *  netdb MCP endpoint answered correctly — that IS the "test connection"
+ *  step. */
+interface NetDBCardProps {
+  onConnected: () => void;
+}
+
+function NetDBCard({ onConnected }: NetDBCardProps): JSX.Element {
+  const [host, setHost] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  const onConnect = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    setError(null);
+    setOkMsg(null);
+    const trimmed = host.trim();
+    if (!trimmed) { setError("host required"); return; }
+
+    // Accept either "10.0.3.5" or "10.0.3.5:8080" or a full URL.
+    // Anything that doesn't already include :// gets http:// prepended;
+    // anything that doesn't include a port gets :8080.
+    let url = trimmed;
+    if (!/^https?:\/\//i.test(url)) url = "http://" + url;
+    try {
+      const u = new URL(url);
+      if (!u.port) u.port = "8080";
+      if (u.pathname === "/" || u.pathname === "") u.pathname = "/mcp";
+      url = u.toString();
+    } catch {
+      setError("not a valid host or URL");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const summary = await api.addMcpServer({
+        name: "netdb",
+        target_agent: "sysadmin",
+        transport: "http",
+        url,
+        // Destructive verbs land on the netdb side as [DESTRUCTIVE]-prefixed
+        // descriptions; the Olympus runtime separately allowlists these so
+        // every mutation goes through the approval queue.
+        destructive: [
+          "create_host", "update_host", "delete_host",
+          "create_nic", "delete_nic",
+          "create_ip", "delete_ip",
+          "create_subnet", "update_subnet", "delete_subnet",
+          "link_subnet_zone", "unlink_subnet_zone",
+          "create_zone", "delete_zone",
+          "link_zone_provider", "unlink_zone_provider",
+          "create_provider", "delete_provider",
+          "create_manual_dns", "delete_dns_record",
+          "dns_sync_now", "kea_sync_now", "kea_poll_leases",
+        ],
+      });
+      setOkMsg(
+        `Connected. Discovered ${summary.tool_count} tool${summary.tool_count === 1 ? "" : "s"}; ` +
+        `routed onto the ${summary.target_agent ?? "sysadmin"} agent.`,
+      );
+      setHost("");
+      onConnected();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={(e) => void onConnect(e)}
+      data-testid="netdb-card"
+      className="netdb-card rounded-md border border-accent-blue/40 bg-dark-secondary/60 p-4 space-y-3"
+    >
+      <div className="flex items-center gap-2">
+        <Network size={14} className="text-accent-blue" strokeWidth={2.25} />
+        <h3 className="font-display text-sm font-semibold text-text-primary">
+          NetDB integration
+        </h3>
+        <span className="ml-auto text-[10px] font-mono uppercase tracking-[1.5px] text-text-muted">
+          host + nic + dns + dhcp via one connect
+        </span>
+      </div>
+      <p className="text-[11px] font-mono text-text-muted">
+        Point this at a running netdb instance and Olympus will graft
+        its 32 read/write tools (hosts, NICs, IPs, subnets, zones, DNS,
+        DHCP) onto the sysadmin agent. Destructive tools route through
+        the same approval queue as everything else.
+      </p>
+
+      <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+        <label className="block text-[11px] font-mono text-text-muted">
+          netdb host<span className="text-accent-red">*</span>
+          <input
+            type="text"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            placeholder="10.0.3.5  /  netdb.example.com  /  http://host:8080/mcp"
+            required
+            disabled={submitting}
+            className="netdb-host-input mt-0.5 w-full bg-dark-panel border border-border-subtle rounded px-2 py-1 text-[12px] font-mono text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-blue/60 disabled:opacity-50"
+          />
+        </label>
+        <Button
+          type="submit"
+          variant="primary"
+          size="sm"
+          icon={<Plug size={14} />}
+          loading={submitting}
+          className="netdb-connect-btn"
+        >
+          {submitting ? "connecting…" : "connect"}
+        </Button>
+      </div>
+
+      {okMsg && (
+        <div className="text-[11px] font-mono text-accent-green">
+          {okMsg}
+        </div>
+      )}
+      {error && (
+        <div className="flex items-start gap-1.5 text-[11px] font-mono text-accent-red">
+          <AlertCircle size={11} className="mt-0.5 shrink-0" />
+          <span>connect failed: {error}</span>
+        </div>
+      )}
+    </form>
+  );
+}
 
 /** Inline add-server form. Picks transport mode then renders the
  *  right field set. Submits via api.addMcpServer; on success calls
