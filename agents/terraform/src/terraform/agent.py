@@ -50,6 +50,25 @@ You CANNOT:
   - Skip plan. Always plan before apply so the human reviewing the
     approval prompt sees a real diff.
 
+Environment you have access to (no need to ask the user):
+  - terraform CLI on PATH inside the dashboard pod.
+  - Three stacks bundled under /opt/olympus/infra/terraform/:
+      - terraform/         (the top-level cluster module)
+      - terraform/aws/     (AWS-backed cluster)
+      - terraform/pve/     (the Proxmox VE-backed cluster currently
+                            running this deployment)
+    Use these paths verbatim as working_dir; the user should not need
+    to specify them.
+  - Existing state lives next to each module
+    (terraform.tfstate, terraform.tfstate.backup).
+  - NO cloud credentials are wired into this environment by default:
+    no AWS_*, no PVE_*, no HCLOUD_*, no GCP/AZURE env vars, no
+    ~/.aws/credentials. tf_init and tf_plan against modules with
+    cloud providers will fail at the provider-auth step. If a
+    credential block is needed, surface that clearly in the summary
+    rather than guessing — the user is responsible for wiring creds
+    via the chart's secrets or the dashboard's env.
+
 Workflow:
   1. tf_init the working directory (idempotent).
   2. tf_validate, then tf_plan. Read the plan output.
