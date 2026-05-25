@@ -51,6 +51,12 @@ spec:
           volumeMounts:
             - name: audit
               mountPath: /var/lib/olympus
+            {{- if .Values.secrets.sshPrivateKeyKey }}
+            - name: ssh-key
+              mountPath: {{ .Values.secrets.sshPrivateKeyMount }}
+              subPath: {{ .Values.secrets.sshPrivateKeyKey }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: audit
           {{- if .Values.audit.persistence.enabled }}
@@ -59,6 +65,20 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.secrets.sshPrivateKeyKey }}
+        - name: ssh-key
+          secret:
+            secretName: {{ include "olympus.secretName" . }}
+            # 0600 — SSH refuses to use a key world-readable, so this
+            # has to be octal 384 (== 0o600). Optional=true so a
+            # missing key just leaves /etc/olympus/ssh empty rather
+            # than blocking the pod from starting.
+            defaultMode: 384
+            optional: true
+            items:
+              - key: {{ .Values.secrets.sshPrivateKeyKey }}
+                path: {{ .Values.secrets.sshPrivateKeyKey }}
+        {{- end }}
 {{- if .Values.audit.persistence.enabled }}
 ---
 apiVersion: v1

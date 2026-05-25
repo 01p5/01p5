@@ -74,7 +74,15 @@ class LLMRouter:
             "Helm values, compose blocks, scripts), route to the "
             "programmer agent — it owns generation + write_file. The "
             "terraform / ansible / sysadmin agents only EXECUTE existing "
-            "stacks / playbooks / kubectl commands; they cannot author."
+            "stacks / playbooks / kubectl commands; they cannot author.\n"
+            "\n"
+            "For HOST-LEVEL introspection on the cluster nodes themselves "
+            "— free disk space, uptime, memory usage, file existence, "
+            "package versions, anything that needs an SSH command on a "
+            "node — route to ANSIBLE. It has the inventory and SSH key "
+            "wired in. The sysadmin agent only sees the cluster through "
+            "kubectl (pod/node objects, events, logs) — it can't query "
+            "actual filesystem state on nodes."
         )
         agent = StructuralAgent(
             task_id=f"router:{task.task_id}",

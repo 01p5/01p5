@@ -22,10 +22,17 @@ dashboard:
 # Pull provider keys from a Secret named ``{{ release }}-secrets`` in
 # the same namespace. Create the Secret out-of-band; the chart never
 # templates raw keys.
+#
+# `sshPrivateKeyKey` is optional — when set AND the named key exists in
+# the secret, the deployment mounts it at /etc/olympus/ssh/<filename>
+# (mode 0600) so the Ansible agent can SSH into cluster nodes via the
+# bundled inventory. Set to "" to skip mounting.
 secrets:
   secretName: ""        # "" → defaults to "{{ release }}-secrets"
   anthropicApiKeyKey: anthropic_api_key
   openaiApiKeyKey:    openai_api_key
+  sshPrivateKeyKey:   ssh_k8s_pem
+  sshPrivateKeyMount: /etc/olympus/ssh/k8s.pem
 
 # Persistent audit log volume. emptyDir by default for the smoke deploy;
 # a real cluster should swap in a PVC.
