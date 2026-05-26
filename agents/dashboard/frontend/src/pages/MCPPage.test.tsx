@@ -321,6 +321,131 @@ describe("MCPPage — NetDB card", () => {
 });
 
 
+describe("MCPPage — HPC integration card", () => {
+  it("renders when neither gpu-mcp nor slurm-mcp are wired", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("hpc-card"));
+    expect(within(card).getByText(/HPC integration/i)).toBeInTheDocument();
+    expect(within(card).getByText(/gpu-mcp pending/i)).toBeInTheDocument();
+    expect(within(card).getByText(/slurm-mcp pending/i)).toBeInTheDocument();
+  });
+
+  it("hides itself once both HPC MCPs are connected", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([
+      SERVER({ name: "gpu-mcp", target_agent: "hpc", status: "connected" }),
+      SERVER({ name: "slurm-mcp", target_agent: "hpc", status: "connected" }),
+    ]);
+    render(<MCPPage />);
+    await waitFor(() => screen.getAllByText("gpu-mcp"));
+    expect(screen.queryByTestId("hpc-card")).toBeNull();
+  });
+
+  it("connect button posts BOTH stdio servers targeting the hpc agent", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(
+      SERVER({ name: "gpu-mcp", target_agent: "hpc", tool_count: 10 }),
+    );
+
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("hpc-card"));
+    await act(async () => {
+      await userEvent.click(within(card).getByRole("button", { name: /connect both/i }));
+    });
+
+    // Two POSTs, one per server, both target_agent=hpc, both stdio.
+    expect(addSpy).toHaveBeenCalledTimes(2);
+    const calls = addSpy.mock.calls.map((c) => c[0]);
+    const names = calls.map((c) => c.name).sort();
+    expect(names).toEqual(["gpu-mcp", "slurm-mcp"]);
+    expect(calls.every((c) => c.target_agent === "hpc")).toBe(true);
+    expect(calls.every((c) => c.transport === "stdio")).toBe(true);
+    // gpu-mcp ships no destructive tools; slurm-mcp's destructive set
+    // is allowlisted explicitly so the Olympus approval queue gates
+    // jobs_cancel etc. even if the server forgot to label them.
+    const slurmCall = calls.find((c) => c.name === "slurm-mcp")!;
+    expect(slurmCall.destructive).toContain("jobs_cancel");
+    expect(slurmCall.destructive).toContain("jobs_hold");
+  });
+
+  it("advanced section lets the user override binary names", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(SERVER({ name: "gpu-mcp" }));
+
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("hpc-card"));
+    await act(async () => {
+      await userEvent.click(within(card).getByRole("button", { name: /show advanced/i }));
+    });
+    const gpuInput = card.querySelector(".hpc-gpu-cmd") as HTMLInputElement;
+    await act(async () => {
+      await userEvent.clear(gpuInput);
+      await userEvent.type(gpuInput, "/opt/local/bin/gpu-mcp");
+      await userEvent.click(within(card).getByRole("button", { name: /connect both/i }));
+    });
+
+    const gpuCall = addSpy.mock.calls.map((c) => c[0]).find((c) => c.name === "gpu-mcp")!;
+    expect(gpuCall.command).toBe("/opt/local/bin/gpu-mcp");
+  });
+
+  it("skips an already-connected MCP and reports it instead of double-registering", async () => {
+    // gpu-mcp is already up — slurm-mcp isn't. The card stays
+    // visible (because both must be connected to hide it) and the
+    // submit path skips the live one rather than POSTing a dup.
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([
+      SERVER({ name: "gpu-mcp", target_agent: "hpc", status: "connected", tool_count: 10 }),
+    ]);
+    const addSpy = vi.spyOn(api, "addMcpServer").mockResolvedValue(
+      SERVER({ name: "slurm-mcp", target_agent: "hpc", tool_count: 18 }),
+    );
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("hpc-card"));
+    await act(async () => {
+      await userEvent.click(within(card).getByRole("button", { name: /connect both/i }));
+    });
+    // Only slurm-mcp gets registered; gpu-mcp is acknowledged as
+    // already connected without a re-POST.
+    expect(addSpy).toHaveBeenCalledTimes(1);
+    expect(addSpy.mock.calls[0]![0].name).toBe("slurm-mcp");
+    expect(within(card).getByText(/gpu-mcp: already connected/i)).toBeInTheDocument();
+  });
+
+  it("toggling the advanced section twice closes it again", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("hpc-card"));
+    // Initially the binary inputs aren't visible.
+    expect(card.querySelector(".hpc-gpu-cmd")).toBeNull();
+    await act(async () => {
+      await userEvent.click(within(card).getByRole("button", { name: /show advanced/i }));
+    });
+    expect(card.querySelector(".hpc-gpu-cmd")).not.toBeNull();
+    // The label flips to "hide advanced" once open; click closes it.
+    await act(async () => {
+      await userEvent.click(within(card).getByRole("button", { name: /hide advanced/i }));
+    });
+    expect(card.querySelector(".hpc-gpu-cmd")).toBeNull();
+  });
+
+  it("partial failure surfaces per-server: gpu ok, slurm error", async () => {
+    vi.spyOn(api, "listMcpServers").mockResolvedValue([]);
+    vi.spyOn(api, "addMcpServer").mockImplementation(async (req) => {
+      if (req.name === "slurm-mcp") throw new Error("ENOENT: slurm-mcp not on PATH");
+      return SERVER({ name: req.name, tool_count: 10 });
+    });
+    render(<MCPPage />);
+    const card = await waitFor(() => screen.getByTestId("hpc-card"));
+    await act(async () => {
+      await userEvent.click(within(card).getByRole("button", { name: /connect both/i }));
+    });
+    await waitFor(() =>
+      expect(within(card).getByText(/gpu-mcp: connected/i)).toBeInTheDocument(),
+    );
+    expect(within(card).getByText(/slurm-mcp: ENOENT: slurm-mcp not on PATH/i)).toBeInTheDocument();
+  });
+});
+
+
 describe("MCPPage — add server form", () => {
   it("Add server button toggles the form", async () => {
     vi.spyOn(api, "listMcpServers").mockResolvedValue([]);

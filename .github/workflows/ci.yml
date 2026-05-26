@@ -69,6 +69,10 @@ jobs:
         working-directory: agents/ansible
         run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
+      - name: Test hpc agent (pytest + 80% coverage gate)
+        working-directory: agents/hpc
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
+
       - name: Test orchestrator CLI wiring (pytest + 80% coverage gate)
         working-directory: agents/olympus_cli
         run: pytest -v --cov=src --cov-report=term --cov-fail-under=80

@@ -125,9 +125,15 @@ class Orchestrator:
         self.bus = bus
         self.agents = {a.name: a for a in agents}
         self.ctx = ctx
-        self.router = router or LLMRouter(
-            {a.name: a.domain for a in agents}
-        )
+        # Start with the catalog filtered against an empty prerequisite
+        # set — agents with no prereqs are still in, anything that
+        # depends on an MCP server is held out until the dashboard
+        # calls refresh_active_agents() with the connected names.
+        initial_catalog = {
+            a.name: a.domain for a in agents
+            if not getattr(a, "prerequisites", None)
+        }
+        self.router = router or LLMRouter(initial_catalog)
         self._result_timeout = result_timeout_seconds
         self.memory: MemoryStore = memory or NullMemoryStore()
         self._memory_k = memory_k
@@ -140,6 +146,28 @@ class Orchestrator:
             # the right handler.
             self.bus.subscribe(name, self._make_agent_handler(agent))
         self.bus.subscribe("orchestrator", self._on_orchestrator_msg)
+
+    def refresh_active_agents(self, fulfilled_prereqs: set[str]) -> None:
+        """Refilter the router's agent catalog against a set of
+        currently-met prerequisites (e.g. the names of connected MCP
+        servers). Idempotent — call it whenever the prerequisite set
+        changes (typically after an MCP server is added or removed).
+
+        Agents whose ``prerequisites`` are a subset of ``fulfilled_prereqs``
+        appear in the router's candidate list; the rest are silently
+        held out. Doesn't touch bus subscriptions — handle() still runs
+        if a message is delivered directly to the agent's name, this
+        is purely about router pickup."""
+        active = {
+            a.name: a.domain for a in self.agents.values()
+            if getattr(a, "prerequisites", set()) <= fulfilled_prereqs
+        }
+        # Static-dict router: just mutate. Future routers can override
+        # this by implementing their own .agent_descriptions surface.
+        descriptions = getattr(self.router, "agent_descriptions", None)
+        if isinstance(descriptions, dict):
+            descriptions.clear()
+            descriptions.update(active)
 
     def _make_agent_handler(self, agent: AgentSpec):
         def handler(msg: BusMessage) -> None:

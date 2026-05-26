@@ -11,6 +11,7 @@ for p in (
     _ROOT / "agents" / "programmer" / "src",
     _ROOT / "agents" / "terraform" / "src",
     _ROOT / "agents" / "ansible" / "src",
+    _ROOT / "agents" / "hpc" / "src",
     _HERE / "src",
 ):
     if str(p) not in sys.path:

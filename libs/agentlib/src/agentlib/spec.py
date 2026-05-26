@@ -135,6 +135,13 @@ class AgentSpec(ABC):
     destructive_verbs: set[str] = set()
     rollback_snapshots: dict[str, Callable[[dict], Any]] = {}
     model: str = ""
+    # Names of MCP servers (by ``MCPServerConfig.name``) the agent needs
+    # before it can usefully participate in routing. Empty set = always
+    # available. The orchestrator filters the router's catalog at
+    # runtime via ``refresh_active_agents``; an agent whose prereqs
+    # aren't met is silently excluded from candidate-agent lists, so
+    # the router never picks it.
+    prerequisites: set[str] = set()
 
     @abstractmethod
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult: ...

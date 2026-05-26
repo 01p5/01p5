@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "olympus-hpc"
+version = "0.1.0"
+description = "Olympus HPC agent — wraps gpu-mcp + slurm-mcp; routable only when both are connected."
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "agentlib",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+olympus-hpc = "hpc.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

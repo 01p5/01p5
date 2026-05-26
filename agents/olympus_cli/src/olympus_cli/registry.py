@@ -39,15 +39,22 @@ def default_agents() -> list[AgentSpec]:
     paying the import cost.
     """
     from ansible_agent.agent import AnsibleAgent
+    from hpc.agent import HPCAgent
     from programmer.agent import ProgrammerAgent
     from sysadmin.agent import SysadminAgent
     from terraform.agent import TerraformAgent
 
+    # HPCAgent ships in this list unconditionally; its `prerequisites`
+    # ({"gpu-mcp", "slurm-mcp"}) cause the orchestrator's router to
+    # keep it out of candidate lists until BOTH MCP servers are
+    # connected. See agentlib.spec.AgentSpec.prerequisites and
+    # Orchestrator.refresh_active_agents.
     return [
         SysadminAgent(),
         ProgrammerAgent(),
         TerraformAgent(),
         AnsibleAgent(),
+        HPCAgent(),
     ]
 
 

@@ -10,6 +10,7 @@ _PATHS = [
     _ROOT / "agents" / "programmer" / "src",
     _ROOT / "agents" / "terraform" / "src",
     _ROOT / "agents" / "ansible" / "src",
+    _ROOT / "agents" / "hpc" / "src",
     _HERE / "src",
 ]
 for p in _PATHS:

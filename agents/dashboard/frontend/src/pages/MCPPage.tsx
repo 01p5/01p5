@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plug, AlertCircle, ChevronRight, ShieldAlert, Plus, X, Trash2, RefreshCw, Network } from "lucide-react";
+import { Plug, AlertCircle, ChevronRight, ShieldAlert, Plus, X, Trash2, RefreshCw, Network, Cpu } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { Button } from "../components/Button";
@@ -66,6 +66,7 @@ export function MCPPage(): JSX.Element {
         {!servers.some((s) => s.name === "netdb") && (
           <NetDBCard onConnected={refresh} />
         )}
+        <HPCIntegrationCard servers={servers} onConnected={refresh} />
         {showAddForm && (
           <AddServerForm
             onAdded={() => { setShowAddForm(false); refresh(); }}
@@ -447,6 +448,181 @@ function NetDBCard({ onConnected }: NetDBCardProps): JSX.Element {
           <span>connect failed: {error}</span>
         </div>
       )}
+    </form>
+  );
+}
+
+
+/** HPC integration card — wires gpu-mcp + slurm-mcp in one button
+ *  click. Both are stdio MCP servers (subprocesses launched by the
+ *  Olympus runtime) so we only need their binary names; the user can
+ *  override if they're not on PATH. Both register onto the HPC
+ *  agent — and the orchestrator's router only enables that agent
+ *  once both prerequisites are met, so partial wiring is fine but
+ *  partial routing isn't.
+ *
+ *  Hides itself once both servers are already connected. Shows
+ *  per-server status so the user can tell which one failed if any. */
+interface HPCCardProps {
+  servers: MCPServerSummary[];
+  onConnected: () => void;
+}
+
+interface HPCAttemptResult {
+  ok: boolean;
+  message: string;
+}
+
+function HPCIntegrationCard({ servers, onConnected }: HPCCardProps): JSX.Element | null {
+  const gpuConnected = servers.some((s) => s.name === "gpu-mcp" && s.status === "connected");
+  const slurmConnected = servers.some((s) => s.name === "slurm-mcp" && s.status === "connected");
+  if (gpuConnected && slurmConnected) return null;
+
+  const [gpuCmd, setGpuCmd] = useState("gpu-mcp");
+  const [slurmCmd, setSlurmCmd] = useState("slurm-mcp");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [results, setResults] = useState<Record<string, HPCAttemptResult>>({});
+
+  const onConnect = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    setSubmitting(true);
+    const next: Record<string, HPCAttemptResult> = {};
+    // Define each server explicitly so a failure of one doesn't block
+    // the other — partial-success state is legible and the user can
+    // retry the failing one without nuking the working one.
+    const SPEC = [
+      {
+        name: "gpu-mcp",
+        command: gpuCmd.trim() || "gpu-mcp",
+        destructive: [] as string[],
+      },
+      {
+        name: "slurm-mcp",
+        command: slurmCmd.trim() || "slurm-mcp",
+        destructive: ["jobs_cancel", "jobs_hold", "jobs_release", "jobs_requeue"],
+      },
+    ];
+
+    for (const s of SPEC) {
+      if (servers.some((x) => x.name === s.name && x.status === "connected")) {
+        // Already up — skip and report.
+        next[s.name] = { ok: true, message: "already connected" };
+        continue;
+      }
+      try {
+        const summary = await api.addMcpServer({
+          name: s.name,
+          target_agent: "hpc",
+          transport: "stdio",
+          command: s.command,
+          args: [],
+          destructive: s.destructive,
+        });
+        next[s.name] = {
+          ok: true,
+          message: `connected — ${summary.tool_count} tool${summary.tool_count === 1 ? "" : "s"} grafted onto hpc`,
+        };
+      } catch (err) {
+        next[s.name] = { ok: false, message: (err as Error).message };
+      }
+    }
+    setResults(next);
+    setSubmitting(false);
+    onConnected();
+  };
+
+  return (
+    <form
+      onSubmit={(e) => void onConnect(e)}
+      data-testid="hpc-card"
+      className="hpc-card rounded-md border border-accent-blue/40 bg-dark-secondary/60 p-4 space-y-3"
+    >
+      <div className="flex items-center gap-2">
+        <Cpu size={14} className="text-accent-blue" strokeWidth={2.25} />
+        <h3 className="font-display text-sm font-semibold text-text-primary">
+          HPC integration
+        </h3>
+        <span className="ml-auto text-[10px] font-mono uppercase tracking-[1.5px] text-text-muted">
+          gpu-mcp + slurm-mcp → enables hpc agent
+        </span>
+      </div>
+      <p className="text-[11px] font-mono text-text-muted">
+        Click connect to spawn both stdio MCP servers and graft their
+        tools onto the <code className="text-text-primary">hpc</code> agent.
+        The router only picks HPC once both are connected — so partial
+        connects keep HPC dormant. Binaries need to be on PATH in the
+        dashboard pod (or override below).
+      </p>
+
+      <div className="flex items-center gap-2 text-[11px] font-mono">
+        <span className={gpuConnected ? "text-accent-green" : "text-text-muted"}>
+          ● gpu-mcp {gpuConnected ? "connected" : "pending"}
+        </span>
+        <span className={slurmConnected ? "text-accent-green" : "text-text-muted"}>
+          ● slurm-mcp {slurmConnected ? "connected" : "pending"}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button
+          type="submit"
+          variant="primary"
+          size="sm"
+          icon={<Plug size={14} />}
+          loading={submitting}
+          className="hpc-connect-btn"
+        >
+          {submitting ? "connecting…" : "connect both"}
+        </Button>
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((v) => !v)}
+          className="text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-text-primary transition-colors"
+        >
+          {advancedOpen ? "hide" : "show"} advanced
+        </button>
+      </div>
+
+      {advancedOpen && (
+        <div className="grid grid-cols-2 gap-3 text-[12px] font-mono pt-1">
+          <label className="block text-[11px] font-mono text-text-muted">
+            gpu-mcp binary
+            <input
+              type="text"
+              value={gpuCmd}
+              onChange={(e) => setGpuCmd(e.target.value)}
+              placeholder="gpu-mcp"
+              disabled={submitting}
+              className="hpc-gpu-cmd mt-0.5 w-full bg-dark-panel border border-border-subtle rounded px-2 py-1 text-[12px] font-mono text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-blue/60"
+            />
+          </label>
+          <label className="block text-[11px] font-mono text-text-muted">
+            slurm-mcp binary
+            <input
+              type="text"
+              value={slurmCmd}
+              onChange={(e) => setSlurmCmd(e.target.value)}
+              placeholder="slurm-mcp"
+              disabled={submitting}
+              className="hpc-slurm-cmd mt-0.5 w-full bg-dark-panel border border-border-subtle rounded px-2 py-1 text-[12px] font-mono text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-blue/60"
+            />
+          </label>
+        </div>
+      )}
+
+      {Object.entries(results).map(([name, r]) => (
+        <div
+          key={name}
+          className={clsx(
+            "text-[11px] font-mono flex items-start gap-1.5",
+            r.ok ? "text-accent-green" : "text-accent-red",
+          )}
+        >
+          {!r.ok && <AlertCircle size={11} className="mt-0.5 shrink-0" />}
+          <span>{name}: {r.message}</span>
+        </div>
+      ))}
     </form>
   );
 }

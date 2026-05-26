@@ -32,10 +32,12 @@ class _EchoAgent(AgentSpec):
     tools: Sequence[Any] = []
     destructive_verbs: set[str] = set()
 
-    def __init__(self, name: str, domain: str = "test domain"):
+    def __init__(self, name: str, domain: str = "test domain", prerequisites: set[str] | None = None):
         self.name = name
         self.domain = domain
         self.received: list[TaskMessage] = []
+        if prerequisites is not None:
+            self.prerequisites = prerequisites
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
         self.received.append(task)
@@ -310,3 +312,45 @@ def test_jsonl_memory_round_trips_through_orchestrator(tmp_path):
     t2_prompt = agent_b.received[0].natural_language
     assert "check pod web logs" in t2_prompt
     assert "untrusted" in t2_prompt.lower()
+
+
+# ---- prerequisites / refresh_active_agents ----
+
+def test_agent_with_unmet_prerequisites_starts_excluded_from_router_catalog():
+    """The Orchestrator's default router excludes agents that declare
+    prerequisites until refresh_active_agents() is called with those
+    names. Plain agents (no prereqs) are always included from the
+    start."""
+    bus = InMemoryBus()
+    plain = _EchoAgent("plain")
+    conditional = _EchoAgent("hpc", prerequisites={"gpu-mcp", "slurm-mcp"})
+    orch = Orchestrator(bus=bus, agents=[plain, conditional], ctx=_ctx())
+    # The router's catalog should contain "plain" but NOT "hpc".
+    assert "plain" in orch.router.agent_descriptions
+    assert "hpc" not in orch.router.agent_descriptions
+
+
+def test_refresh_active_agents_adds_agent_once_both_prereqs_connected():
+    bus = InMemoryBus()
+    plain = _EchoAgent("plain")
+    hpc = _EchoAgent("hpc", prerequisites={"gpu-mcp", "slurm-mcp"})
+    orch = Orchestrator(bus=bus, agents=[plain, hpc], ctx=_ctx())
+    # Partial — only one of the two prereqs is met.
+    orch.refresh_active_agents({"gpu-mcp"})
+    assert "hpc" not in orch.router.agent_descriptions
+    # Both — now HPC enters the catalog.
+    orch.refresh_active_agents({"gpu-mcp", "slurm-mcp"})
+    assert "hpc" in orch.router.agent_descriptions
+    assert orch.router.agent_descriptions["hpc"] == hpc.domain
+
+
+def test_refresh_active_agents_removes_agent_when_prereq_disconnects():
+    bus = InMemoryBus()
+    hpc = _EchoAgent("hpc", prerequisites={"gpu-mcp", "slurm-mcp"})
+    orch = Orchestrator(bus=bus, agents=[hpc], ctx=_ctx())
+    orch.refresh_active_agents({"gpu-mcp", "slurm-mcp"})
+    assert "hpc" in orch.router.agent_descriptions
+    # User disconnects gpu-mcp via the dashboard's DELETE /mcp/servers
+    # path; the resulting refresh empties the catalog of HPC.
+    orch.refresh_active_agents({"slurm-mcp"})
+    assert "hpc" not in orch.router.agent_descriptions

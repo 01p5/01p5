@@ -25,10 +25,18 @@ def _ctx():
     return AgentContext(approval=AlwaysApprove(), audit=InMemoryAuditLogger())
 
 
-def test_default_agents_constructs_four_production_agents():
+def test_default_agents_constructs_five_production_agents():
+    """4 always-on + 1 conditional (HPC, gated on gpu-mcp + slurm-mcp)."""
     agents = default_agents()
     names = {a.name for a in agents}
-    assert names == {"sysadmin", "programmer", "terraform", "ansible"}
+    assert names == {"sysadmin", "programmer", "terraform", "ansible", "hpc"}
+
+
+def test_default_agents_hpc_carries_mcp_prerequisites():
+    hpc = next(a for a in default_agents() if a.name == "hpc")
+    assert hpc.prerequisites == {"gpu-mcp", "slurm-mcp"}
+    # And ships no native tools — its surface is grafted from the MCPs.
+    assert list(hpc.tools) == []
 
 
 def test_manual_router_returns_a_router_with_keyword_table():

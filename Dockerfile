@@ -81,6 +81,7 @@ RUN pip install --no-cache-dir --no-deps -e ./libs/agentlib \
  && pip install --no-cache-dir --no-deps -e ./agents/programmer \
  && pip install --no-cache-dir --no-deps -e ./agents/terraform \
  && pip install --no-cache-dir --no-deps -e ./agents/ansible \
+ && pip install --no-cache-dir --no-deps -e ./agents/hpc \
  && pip install --no-cache-dir --no-deps -e ./agents/olympus_cli \
  && pip install --no-cache-dir --no-deps -e ./agents/dashboard
 

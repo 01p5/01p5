@@ -158,6 +158,26 @@ class DashboardServer:
         self._host = host
         self._port = port
 
+        # Filter the router's catalog against whichever MCP servers
+        # were wired at construction time (build_default_server
+        # mcp_servers=). Conditional agents like HPC stay out of
+        # candidate lists until their prerequisites are met.
+        self._refresh_active_agents()
+
+    def _refresh_active_agents(self) -> None:
+        """Refresh the orchestrator's router catalog with the current
+        set of connected MCP server names. Called from __init__ and
+        from every MCP add/remove path."""
+        if self.orchestrator is None:
+            return
+        connected = {s.get("name") for s in self.mcp_servers if s.get("name")}
+        try:
+            self.orchestrator.refresh_active_agents(connected)
+        except AttributeError:
+            # Older orchestrator without the method — silently no-op
+            # so the dashboard can keep running.
+            pass
+
     # ---- internal sinks ----
 
     def _on_orchestrator_msg(self, msg: BusMessage) -> None:
@@ -952,6 +972,7 @@ class DashboardServer:
                 by_name,
             )
             self.mcp_servers.append(record)
+            self._refresh_active_agents()
         return self._send_json(req, 200, self._mcp_summary_dict(record))
 
     def _handle_delete_mcp_server(
@@ -982,6 +1003,7 @@ class DashboardServer:
             record = self.mcp_servers[target_idx]
             _unregister_one_mcp_server(record, by_name)
             self.mcp_servers.pop(target_idx)
+            self._refresh_active_agents()
         return self._send_json(req, 200, {"removed": True, "name": name})
 
     def _handle_list_mcp_tools(
