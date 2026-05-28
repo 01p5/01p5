@@ -211,6 +211,7 @@ _BUS_KIND_TO_TICKET: dict[str, TicketKind] = {
     "progress": "agent_message",
     "approval_request": "approval_request",
     "approval_decision": "approval_decision",
+    "mcp_event": "mcp_event",
 }
 
 

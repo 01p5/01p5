@@ -50,6 +50,7 @@ from typing import Any, Callable, Optional, Protocol, Sequence
 
 from langchain_core.tools import StructuredTool
 
+from .bus import Bus, new_message
 from .spec import AgentSpec
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,11 @@ class Transport(Protocol):
     def notify(self, message: dict[str, Any]) -> None:
         """Send a JSON-RPC notification (no id, no response expected)."""
     def close(self) -> None: ...
+    def poll_notifications(self) -> list[dict[str, Any]]:
+        """Return any server-pushed notifications received since the last
+        poll (and clear them). Optional — transports that don't support
+        server push return an empty list. ``MCPSignalReader`` drains this."""
+        return []
 
 
 class MockTransport:
@@ -127,6 +133,8 @@ class MockTransport:
         self.handler = handler
         self.sent: list[dict[str, Any]] = []
         self.notifications: list[dict[str, Any]] = []
+        # Server-pushed notifications waiting to be drained by a reader.
+        self._inbound: list[dict[str, Any]] = []
         self._closed = False
 
     def send(self, message: dict[str, Any], timeout: float = 30.0) -> dict[str, Any]:
@@ -139,6 +147,14 @@ class MockTransport:
         if self._closed:
             raise MCPError("transport closed")
         self.notifications.append(dict(message))
+
+    def push_server_notification(self, message: dict[str, Any]) -> None:
+        """Test hook: simulate a server-initiated push (notifications/*)."""
+        self._inbound.append(dict(message))
+
+    def poll_notifications(self) -> list[dict[str, Any]]:
+        drained, self._inbound = self._inbound, []
+        return drained
 
     def close(self) -> None:
         self._closed = True
@@ -499,6 +515,82 @@ class MCPClient:
             )
 
 
+class MCPSignalReader:
+    """Surface MCP server-push notifications onto the Olympus bus.
+
+    Phase 4 (async signals). An MCP server can push ``notifications/*``
+    (resource changes, progress, log lines) outside the request/response
+    flow. This reader drains a transport's ``poll_notifications()`` and
+    republishes each as an ``mcp_event`` BusMessage (sender = the server
+    name, recipient ``"*"``) — so pushed events become visible in the
+    live event stream and audited in the bus log, and (when they carry a
+    ticket) project into a ticket transcript.
+
+    v1 scope: make pushed events visible + audited. Actively routing a
+    pushed event to a live agent needs long-lived agents and is future
+    work. Transports that don't support server push (today's stdio/HTTP)
+    return no notifications, so a reader over them is a harmless no-op
+    until that framing lands; ``MockTransport`` supports it for tests.
+    """
+
+    def __init__(
+        self,
+        transport: "Transport",
+        bus: "Bus",
+        server_name: str,
+        poll_interval: float = 1.0,
+    ):
+        self.transport = transport
+        self.bus = bus
+        self.server_name = server_name
+        self.poll_interval = poll_interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def poll_once(self) -> int:
+        """Drain pending notifications once; publish each as an mcp_event.
+        Returns the number published. Safe to call directly (tests do)."""
+        poll = getattr(self.transport, "poll_notifications", None)
+        if poll is None:
+            return 0
+        published = 0
+        for note in poll() or []:
+            self.bus.publish(
+                new_message(
+                    task_id=self.server_name,
+                    sender=self.server_name,
+                    recipient="*",
+                    kind="mcp_event",
+                    payload=note,
+                )
+            )
+            published += 1
+        return published
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._loop, name=f"mcp-signals:{self.server_name}", daemon=True
+        )
+        self._thread.start()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self.poll_once()
+            except Exception as exc:  # a flaky server must not kill the reader
+                logger.warning("mcp signal reader %s: %s", self.server_name, exc)
+            self._stop.wait(self.poll_interval)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+
+
 @dataclass
 class MCPToolResult:
     """Parsed tool-call result. ``text`` is the concatenated content
@@ -633,6 +725,7 @@ __all__ = [
     "MCPClient",
     "MCPError",
     "MCPToolResult",
+    "MCPSignalReader",
     "Transport",
     "StdioTransport",
     "HttpTransport",

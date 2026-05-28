@@ -25,6 +25,7 @@ BusKind = Literal[
     "log",
     "approval_request",
     "approval_decision",
+    "mcp_event",
 ]
 
 
