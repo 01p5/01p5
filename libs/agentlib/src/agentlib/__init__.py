@@ -102,6 +102,17 @@ from .spec import (
     TaskMessage,
     cost_from_agent,
 )
+from .ticket import (
+    AgentResolver,
+    InMemoryTicketStore,
+    JsonlTicketStore,
+    TicketEvent,
+    TicketKind,
+    TicketStore,
+    event_from_bus,
+    make_ask_agent_tool,
+    ticket_bus_sink,
+)
 
 __all__ = [
     "StructuralAgent",
@@ -136,6 +147,15 @@ __all__ = [
     "InMemoryBus",
     "RedisStreamsBus",
     "new_message",
+    "TicketEvent",
+    "TicketKind",
+    "TicketStore",
+    "InMemoryTicketStore",
+    "JsonlTicketStore",
+    "AgentResolver",
+    "event_from_bus",
+    "ticket_bus_sink",
+    "make_ask_agent_tool",
     "Orchestrator",
     "Router",
     "ManualRouter",

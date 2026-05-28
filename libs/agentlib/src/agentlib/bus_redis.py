@@ -86,6 +86,7 @@ def _encode(msg: BusMessage) -> dict[str, str]:
                 "timestamp": msg.timestamp,
                 "payload": _to_jsonable(msg.payload),
                 "causation_id": msg.causation_id,
+                "ticket_id": msg.ticket_id,
             }
         )
     }
@@ -106,6 +107,7 @@ def _decode(fields: dict[bytes | str, bytes | str]) -> BusMessage:
         timestamp=obj["timestamp"],
         payload=obj.get("payload"),
         causation_id=obj.get("causation_id"),
+        ticket_id=obj.get("ticket_id"),
     )
 
 

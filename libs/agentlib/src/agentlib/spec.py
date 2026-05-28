@@ -25,6 +25,9 @@ class TaskMessage:
     constraints: dict[str, Any] = field(default_factory=dict)
     parent_task_id: Optional[str] = None
     history_ref: Optional[str] = None
+    # Group-chat ticket this task is part of. ``None`` => standalone task;
+    # consumers fall back to ``task_id`` so the router path is unchanged.
+    ticket_id: Optional[str] = None
 
 
 @dataclass
@@ -113,6 +116,14 @@ class AgentContext:
     secrets: Optional[Any] = None  # vault client; not implemented in v0
     cancel_token: Optional[Any] = None
     rollback: Optional[Any] = None  # RollbackStore | None
+    # Group-chat ticket transcript. When present, the runtime records a
+    # ``tool_call`` TicketEvent for every gated tool call. Optional so the
+    # plain router path keeps working with no transcript wiring.
+    ticket_store: Optional[Any] = None  # ticket.TicketStore | None
+    # Resolver used to build the ``ask_agent`` tool. When present, the
+    # runtime injects ``ask_agent`` into the agent's gated toolset so it can
+    # ask sibling participants directed questions.
+    agent_resolver: Optional[Any] = None  # ticket.AgentResolver | None
 
 
 class AgentSpec(ABC):

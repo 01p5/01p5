@@ -114,11 +114,17 @@ class StructuralAgent:
         agent_id: str = "default",
         budget_guard: Optional[BudgetGuard] = None,
         telemetry_task_ids: list[str] | None = None,
+        ticket_id: Optional[str] = None,
     ):
         if checkpointer is None:
             checkpointer = InMemorySaver()
         self.task_id = task_id
         self.agent_id = agent_id
+        # When part of a group-chat ticket, key the checkpoint thread on the
+        # ticket (not the per-task id) so the same (ticket, agent) context can
+        # be re-invoked — e.g. when answering an ``ask_agent`` question or on a
+        # follow-up dispatch within the ticket. Falls back to task_id.
+        self.ticket_id = ticket_id
         self.telemetry_task_ids = telemetry_task_ids or [task_id]
         self.system_prompt = system_prompt
         self.response_class = response_class
@@ -197,7 +203,8 @@ class StructuralAgent:
         ).with_config({"recursion_limit": self.recursion_limit})
 
     def _get_checkpoint_config(self) -> dict:
-        return {"configurable": {"thread_id": f"{self.task_id}:{self.agent_type}:{self.agent_id}"}}
+        scope = self.ticket_id or self.task_id
+        return {"configurable": {"thread_id": f"{scope}:{self.agent_type}:{self.agent_id}"}}
 
     def _dump_invocation_conversation(self) -> list[dict]:
         checkpoint_data: list[BaseMessage] = (

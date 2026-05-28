@@ -40,6 +40,7 @@ def gate_tools(
     spec: AgentSpec,
     ctx: AgentContext,
     task_id: str,
+    ticket_id: Optional[str] = None,
 ) -> list[BaseTool]:
     """Wrap every tool in ``spec.tools`` so the runtime can:
 
@@ -47,9 +48,17 @@ def gate_tools(
       already filters, but we don't trust the framework alone).
     - Intercept calls to destructive tools and route through ``ctx.approval``.
     - Append every call (approved, rejected, or non-destructive) to the audit log.
-    """
+    - Record a ``tool_call`` event on the ticket transcript (when
+      ``ctx.ticket_store`` is set).
+
+    When ``ctx.agent_resolver`` is set, the read-only ``ask_agent`` tool is
+    appended so the agent can ask sibling participants directed questions.
+    ``ticket_id`` falls back to ``task_id`` for standalone tasks."""
     declared = {_tool_name(t) for t in spec.tools}
     wrapped: list[BaseTool] = []
+
+    effective_ticket_id = ticket_id or task_id
+    ticket_store = getattr(ctx, "ticket_store", None)
 
     for tool in spec.tools:
         base = tool if isinstance(tool, BaseTool) else _as_structured(tool)
@@ -58,7 +67,22 @@ def gate_tools(
                 f"tool {base.name!r} is not in {spec.name}.tools — "
                 "this is a programming error in the agent definition"
             )
-        wrapped.append(_wrap_one(base, spec, ctx, task_id))
+        wrapped.append(
+            _wrap_one(base, spec, ctx, task_id, effective_ticket_id, ticket_store)
+        )
+
+    resolver = getattr(ctx, "agent_resolver", None)
+    if resolver is not None:
+        from .ticket import make_ask_agent_tool
+
+        wrapped.append(
+            make_ask_agent_tool(
+                asker=spec.name,
+                resolver=resolver,
+                ticket_id=effective_ticket_id,
+                ticket_store=ticket_store,
+            )
+        )
     return wrapped
 
 
@@ -71,6 +95,8 @@ def _wrap_one(
     spec: AgentSpec,
     ctx: AgentContext,
     task_id: str,
+    ticket_id: Optional[str] = None,
+    ticket_store: Optional[Any] = None,
 ) -> BaseTool:
     is_destructive = inner.name in spec.destructive_verbs
     audit = ctx.audit
@@ -81,6 +107,34 @@ def _wrap_one(
         if is_destructive and getattr(spec, "rollback_snapshots", None)
         else None
     )
+
+    def emit_tool_call(args: dict[str, Any], result: Any, approved: Optional[bool]) -> None:
+        """Mirror the audit record onto the ticket transcript. Best-effort —
+        a transcript hiccup must never break a tool call."""
+        if ticket_store is None:
+            return
+        try:
+            from .ticket import TicketEvent
+
+            ticket_store.append(
+                TicketEvent(
+                    ticket_id=ticket_id or task_id,
+                    actor=spec.name,
+                    kind="tool_call",
+                    payload={
+                        "tool": inner.name,
+                        "args": args,
+                        "result": result,
+                        "approved": approved,
+                    },
+                    task_id=task_id,
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "ticket tool_call emit failed for %s.%s: %s",
+                spec.name, inner.name, exc,
+            )
 
     def gated(**kwargs: Any) -> Any:
         if is_destructive:
@@ -100,6 +154,7 @@ def _wrap_one(
                 approved=decision.approved,
             )
             if not decision.approved:
+                emit_tool_call(kwargs, None, decision.approved)
                 return f"REJECTED by human: {decision.reason}"
             if decision.modified_args is not None:
                 kwargs = decision.modified_args
@@ -127,6 +182,7 @@ def _wrap_one(
                 result=_truncate(result),
                 approved=None,
             )
+            emit_tool_call(kwargs, _truncate(result), None)
         else:
             audit.log_tool_call(
                 task_id=task_id,
@@ -136,6 +192,7 @@ def _wrap_one(
                 result=_truncate(result),
                 approved=True,
             )
+            emit_tool_call(kwargs, _truncate(result), True)
             # Persist the captured plan only if the forward call
             # succeeded (no exception). Tools that signal failure by
             # returning an error string still trigger persistence —

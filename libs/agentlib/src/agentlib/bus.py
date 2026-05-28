@@ -38,6 +38,10 @@ class BusMessage:
     timestamp: float
     payload: Any  # spec says dict; v1 accepts any Python object — v2 must be JSON-safe
     causation_id: Optional[str] = None
+    # Group-chat ticket this message belongs to. Falls back to ``task_id``
+    # for standalone (router) tasks, so the existing router path is
+    # unchanged and every message still maps to exactly one ticket.
+    ticket_id: Optional[str] = None
 
 
 def new_message(
@@ -47,6 +51,7 @@ def new_message(
     kind: BusKind,
     payload: Any,
     causation_id: Optional[str] = None,
+    ticket_id: Optional[str] = None,
 ) -> BusMessage:
     return BusMessage(
         msg_id=str(uuid.uuid4()),
@@ -57,6 +62,7 @@ def new_message(
         timestamp=time.time(),
         payload=payload,
         causation_id=causation_id,
+        ticket_id=ticket_id,
     )
 
 
