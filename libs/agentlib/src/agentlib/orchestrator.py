@@ -13,8 +13,9 @@ choose; ``ManualRouter`` returns a fixed mapping for tests.
 from __future__ import annotations
 
 import threading
+import uuid
 from dataclasses import replace
-from typing import Optional, Protocol, Sequence
+from typing import Any, Callable, Optional, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +23,7 @@ from .bus import Bus, BusMessage, new_message
 from .memory import MemoryEntry, MemoryStore, NullMemoryStore, render_memory_block
 from .plan import Plan, PlanResult, step_to_task
 from .spec import AgentContext, AgentResult, AgentSpec, CostBreakdown, TaskMessage
+from .ticket import TicketStore, ticket_bus_sink
 
 
 class Router(Protocol):
@@ -121,10 +123,29 @@ class Orchestrator:
         result_timeout_seconds: float = 600.0,
         memory: Optional[MemoryStore] = None,
         memory_k: int = 3,
+        ticket_store: Optional[TicketStore] = None,
+        checkpointer_factory: Optional[Callable[[], Any]] = None,
     ):
         self.bus = bus
         self.agents = {a.name: a for a in agents}
         self.ctx = ctx
+        # --- group-chat ticket machinery (Phase 2) ---
+        # The transcript is a projection of the bus: when a ticket store is
+        # given we subscribe it on "*" exactly like the audit sinks, so
+        # dispatch/result traffic lands in the transcript automatically.
+        self.ticket_store = ticket_store
+        if ticket_store is not None:
+            self.bus.subscribe("*", ticket_bus_sink(ticket_store))
+        # One long-lived checkpoint saver per (ticket_id, agent_name) so an
+        # agent's context survives across dispatch / ask_agent re-invocations
+        # within a ticket. Lazily created; discarded on ticket close (P3).
+        self._checkpointer_factory = checkpointer_factory or _default_checkpointer
+        self._ticket_checkpointers: dict[tuple[str, str], Any] = {}
+        # Guards against re-entrant invocation of an agent already on the
+        # call stack within the same ticket (e.g. A asks A, or main asks
+        # main) — prevents infinite recursion through ask_agent / dispatch.
+        self._active_in_ticket: set[tuple[str, str]] = set()
+        self._ticket_lock = threading.RLock()
         # Start with the catalog filtered against an empty prerequisite
         # set — agents with no prereqs are still in, anything that
         # depends on an MCP server is held out until the dashboard
@@ -345,6 +366,158 @@ class Orchestrator:
         with self._results_lock:
             self._result_events.pop(task.task_id, None)
             return self._results.pop(task.task_id)
+
+    # ------------------------------------------------------------------
+    # Group-chat ticket dispatch (Phase 2)
+    #
+    # Distinct from the router path above: ``dispatch_to`` runs a named
+    # agent directly (no routing) inside a ticket, giving it a ctx bound to
+    # that (ticket, agent) — a shared checkpointer for retained context plus
+    # the per-ticket ask_agent resolver + dispatcher seams. The router path
+    # (``run`` / ``run_plan`` / ``_dispatch``) is untouched.
+    # ------------------------------------------------------------------
+
+    def dispatch_to(
+        self,
+        agent_name: str,
+        task: TaskMessage,
+        *,
+        requested_by: str = "main",
+        announce: bool = True,
+    ) -> AgentResult:
+        """Run ``agent_name`` on ``task`` within its ticket and return the
+        result. When ``announce`` (the default), the dispatch and result are
+        published on the bus so the ticket transcript + SSE capture them."""
+        ticket_id = task.ticket_id or task.task_id
+        if announce:
+            self.bus.publish(
+                new_message(
+                    task_id=task.task_id,
+                    sender=requested_by,
+                    recipient="*",
+                    kind="task",
+                    payload={"to": agent_name, "subtask": task.natural_language},
+                    ticket_id=ticket_id,
+                )
+            )
+        result = self._run_in_ticket(agent_name, task)
+        if announce:
+            self.bus.publish(
+                new_message(
+                    task_id=task.task_id,
+                    sender=agent_name,
+                    recipient="*",
+                    kind="result",
+                    payload={
+                        "agent": agent_name,
+                        "status": result.status,
+                        "summary": result.summary,
+                    },
+                    ticket_id=ticket_id,
+                )
+            )
+        return result
+
+    def _run_in_ticket(self, agent_name: str, task: TaskMessage) -> AgentResult:
+        if agent_name not in self.agents:
+            raise ValueError(
+                f"unknown agent {agent_name!r}; registered: {list(self.agents)}"
+            )
+        ticket_id = task.ticket_id or task.task_id
+        key = (ticket_id, agent_name)
+        with self._ticket_lock:
+            if key in self._active_in_ticket:
+                # Re-entrant call to an agent already on the stack — refuse
+                # rather than recurse forever.
+                return AgentResult(
+                    task_id=task.task_id,
+                    status="failed",
+                    summary=(
+                        f"refused: {agent_name!r} is already running in ticket "
+                        f"{ticket_id!r} (recursion guard)"
+                    ),
+                    cost=CostBreakdown(),
+                )
+            self._active_in_ticket.add(key)
+        try:
+            ctx = self._ticket_ctx(ticket_id, agent_name)
+            return self.agents[agent_name].handle(task, ctx)
+        finally:
+            with self._ticket_lock:
+                self._active_in_ticket.discard(key)
+
+    def _ticket_ctx(self, ticket_id: str, agent_name: str) -> AgentContext:
+        """A ctx bound to one (ticket, agent): shared transcript, the
+        per-ticket ask_agent resolver + dispatcher seams, and the retained
+        per-(ticket, agent) checkpointer."""
+        return replace(
+            self.ctx,
+            ticket_store=self.ticket_store,
+            agent_resolver=self._make_ticket_resolver(ticket_id),
+            dispatcher=self._make_ticket_dispatcher(ticket_id),
+            checkpointer=self._get_ticket_checkpointer(ticket_id, agent_name),
+        )
+
+    def _get_ticket_checkpointer(self, ticket_id: str, agent_name: str) -> Any:
+        key = (ticket_id, agent_name)
+        with self._ticket_lock:
+            cp = self._ticket_checkpointers.get(key)
+            if cp is None:
+                cp = self._checkpointer_factory()
+                self._ticket_checkpointers[key] = cp
+            return cp
+
+    def _make_ticket_dispatcher(self, ticket_id: str) -> Callable[[str, str], str]:
+        def dispatcher(agent_name: str, subtask: str) -> str:
+            task = TaskMessage(
+                task_id=uuid.uuid4().hex,
+                natural_language=subtask,
+                ticket_id=ticket_id,
+                parent_task_id=ticket_id,
+            )
+            return self.dispatch_to(
+                agent_name, task, requested_by="main", announce=True
+            ).summary
+
+        return dispatcher
+
+    def _make_ticket_resolver(self, ticket_id: str) -> Callable[[str, str], str]:
+        def resolver(target_agent: str, question: str) -> str:
+            if target_agent not in self.agents:
+                return f"ask_agent error: unknown agent {target_agent!r}"
+            task = TaskMessage(
+                task_id=uuid.uuid4().hex,
+                natural_language=question,
+                ticket_id=ticket_id,
+                parent_task_id=ticket_id,
+            )
+            # No announce: the ask_agent tool logs the Q&A as agent_message
+            # events; re-publishing on the bus would double-log it.
+            return self._run_in_ticket(target_agent, task).summary
+
+        return resolver
+
+    def discard_ticket(self, ticket_id: str) -> None:
+        """Drop a ticket's retained per-agent checkpointers (called on
+        ticket close — see Phase 3). Idempotent."""
+        with self._ticket_lock:
+            for key in [k for k in self._ticket_checkpointers if k[0] == ticket_id]:
+                cp = self._ticket_checkpointers.pop(key)
+                storage = getattr(cp, "storage", None)
+                if storage is not None:
+                    try:
+                        storage.clear()
+                    except Exception:
+                        pass
+
+
+def _default_checkpointer() -> Any:
+    """Lazily build an in-memory checkpoint saver. Imported here (not at
+    module top) so the orchestrator stays importable without the langgraph
+    stack on the pure-router path."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    return InMemorySaver()
 
 
 def _result_from_dict(d: dict) -> AgentResult:

@@ -124,6 +124,16 @@ class AgentContext:
     # runtime injects ``ask_agent`` into the agent's gated toolset so it can
     # ask sibling participants directed questions.
     agent_resolver: Optional[Any] = None  # ticket.AgentResolver | None
+    # Per-ticket dispatcher seam consumed by the main agent to delegate a
+    # subtask to a named specialist. Only the main agent builds a dispatch
+    # tool from it; specialists never dispatch. Set by the orchestrator.
+    dispatcher: Optional[Any] = None  # main_agent.Dispatcher | None
+    # Shared checkpoint saver for this (ticket, agent). When set, the agent
+    # attaches its StructuralAgent to it so context survives across
+    # dispatch / ask_agent re-invocations within the ticket, and must NOT
+    # clear it on cleanup. ``None`` => agent owns a private InMemorySaver
+    # (the unchanged router path).
+    checkpointer: Optional[Any] = None  # langgraph BaseCheckpointSaver | None
 
 
 class AgentSpec(ABC):
