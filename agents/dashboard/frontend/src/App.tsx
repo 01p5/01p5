@@ -1,18 +1,28 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { ChatPage } from "./pages/ChatPage";
+import { SessionsPage } from "./pages/SessionsPage";
 import { KubernetesPage } from "./pages/KubernetesPage";
 import { TerraformPage } from "./pages/TerraformPage";
 import { AnsiblePage } from "./pages/AnsiblePage";
 import { ProgrammerPage } from "./pages/ProgrammerPage";
 import { MCPPage } from "./pages/MCPPage";
 
+// Wrapper so /chat and /chat/:ticketId both render ChatPage, remounting
+// (via key) when the ticket changes so its state resets cleanly.
+function ChatRoute(): JSX.Element {
+  const { ticketId } = useParams();
+  return <ChatPage key={ticketId ?? "new"} initialTicketId={ticketId} />;
+}
+
 export default function App(): JSX.Element {
   return (
     <Routes>
       <Route path="/" element={<Layout />}>
         <Route index element={<Navigate to="/chat" replace />} />
-        <Route path="chat" element={<ChatPage />} />
+        <Route path="chat" element={<ChatRoute />} />
+        <Route path="chat/:ticketId" element={<ChatRoute />} />
+        <Route path="sessions" element={<SessionsPage />} />
         <Route path="kubernetes" element={<KubernetesPage />} />
         <Route path="terraform" element={<TerraformPage />} />
         <Route path="ansible" element={<AnsiblePage />} />

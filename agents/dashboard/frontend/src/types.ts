@@ -126,6 +126,14 @@ export type TicketKind =
   | "approval_decision"
   | "mcp_event";
 
+export interface TicketSummary {
+  ticket_id: string;
+  event_count: number;
+  first_message: string;
+  last_ts: number;
+  last_actor: string;
+}
+
 export interface TicketEventDTO {
   ticket_id: string;
   actor: string;

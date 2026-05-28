@@ -48,8 +48,8 @@ export function payloadText(ev: TicketEventDTO): string {
   return "";
 }
 
-export function ChatPage(): JSX.Element {
-  const [ticketId, setTicketId] = useState<string>(() => newTicketId());
+export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {}): JSX.Element {
+  const [ticketId, setTicketId] = useState<string>(() => initialTicketId || newTicketId());
   const [events, setEvents] = useState<TicketEventDTO[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -154,7 +154,7 @@ export function ChatPage(): JSX.Element {
             className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-blue border border-border-subtle hover:border-accent-blue/40 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Resolve this ticket — summarize it to memory and start fresh"
           >
-            <CheckCircle2 size={13} strokeWidth={2.25} />
+            <CheckCircle2 size={15} strokeWidth={2.5} className="text-accent-blue" />
             {closing ? "Closing…" : "Resolve"}
           </button>
           <button
@@ -163,7 +163,7 @@ export function ChatPage(): JSX.Element {
             className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-green border border-border-subtle hover:border-accent-green/40 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
             title="Start a new ticket (fresh group chat)"
           >
-            <Plus size={13} strokeWidth={2.25} />
+            <Plus size={15} strokeWidth={2.5} className="text-accent-green" />
             New
           </button>
         </div>

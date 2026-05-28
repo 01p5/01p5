@@ -102,6 +102,11 @@ class TicketStore(Protocol):
         """Events for ``ticket_id`` with ``seq > after_seq``, ordered by seq."""
         ...
 
+    def list_tickets(self) -> list[dict[str, Any]]:
+        """Summaries of every known ticket (id, event_count, first_message,
+        last_ts, last_actor), most-recently-active first."""
+        ...
+
 
 class InMemoryTicketStore:
     """In-process transcript store. Thread-safe; for tests and the
@@ -125,6 +130,34 @@ class InMemoryTicketStore:
             return [
                 e for e in self._events.get(ticket_id, []) if e.seq > after_seq
             ]
+
+    def list_tickets(self) -> list[dict[str, Any]]:
+        with self._lock:
+            summaries = [
+                _summarize_ticket(tid, events)
+                for tid, events in self._events.items()
+                if events
+            ]
+        summaries.sort(key=lambda t: t["last_ts"], reverse=True)
+        return summaries
+
+
+def _summarize_ticket(ticket_id: str, events: list[TicketEvent]) -> dict[str, Any]:
+    """One-line summary of a ticket for the sessions list."""
+    first_msg = ""
+    for e in events:
+        if e.kind == "human_message" and isinstance(e.payload, dict):
+            first_msg = str(e.payload.get("text", ""))[:140]
+            if first_msg:
+                break
+    last = events[-1]
+    return {
+        "ticket_id": ticket_id,
+        "event_count": len(events),
+        "first_message": first_msg,
+        "last_ts": last.ts,
+        "last_actor": last.actor,
+    }
 
 
 def _safe_ticket_filename(ticket_id: str) -> str:
@@ -197,6 +230,26 @@ class JsonlTicketStore:
                     out.append(ev)
         out.sort(key=lambda e: e.seq)
         return out
+
+    def list_tickets(self) -> list[dict[str, Any]]:
+        summaries: list[dict[str, Any]] = []
+        for path in self.base_dir.glob("*.jsonl"):
+            events: list[TicketEvent] = []
+            with path.open() as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(TicketEvent.from_dict(json.loads(line)))
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+            if not events:
+                continue
+            events.sort(key=lambda e: e.seq)
+            summaries.append(_summarize_ticket(events[0].ticket_id, events))
+        summaries.sort(key=lambda t: t["last_ts"], reverse=True)
+        return summaries
 
 
 # ---------------------------------------------------------------------------

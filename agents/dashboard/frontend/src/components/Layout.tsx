@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug } from "lucide-react";
+import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History } from "lucide-react";
 import clsx from "clsx";
 import { StatusDot } from "./StatusDot";
 import { BusSidebar } from "./BusSidebar";
@@ -10,6 +10,7 @@ import { TelemetryFooter } from "./TelemetryFooter";
 
 const TABS = [
   { to: "/chat",       label: "Chat",       icon: MessageSquare },
+  { to: "/sessions",   label: "Sessions",   icon: History },
   { to: "/kubernetes", label: "Kubernetes", icon: Server },
   { to: "/terraform",  label: "Terraform",  icon: Layers },
   { to: "/ansible",    label: "Ansible",    icon: ListChecks },

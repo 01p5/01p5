@@ -172,6 +172,25 @@ def test_get_unknown_ticket_returns_empty(ticket_server):
     assert body["events"] == []
 
 
+def test_list_tickets_endpoint(ticket_server):
+    srv, store = ticket_server
+    store.append(TicketEvent(ticket_id="S1", actor="human", kind="human_message", payload={"text": "first task"}))
+    store.append(TicketEvent(ticket_id="S2", actor="human", kind="human_message", payload={"text": "second task"}))
+    status, body = _get(srv, "/tickets")
+    assert status == 200
+    ids = {t["ticket_id"] for t in body["tickets"]}
+    assert ids == {"S1", "S2"}
+    assert any(t["first_message"] == "first task" for t in body["tickets"])
+
+
+def test_list_tickets_404_when_disabled():
+    srv = _make_server([_FakeMain()], None)
+    try:
+        assert _get(srv, "/tickets")[0] == 404
+    finally:
+        srv.shutdown()
+
+
 def test_post_message_requires_message(ticket_server):
     srv, _ = ticket_server
     status, body = _post(srv, "/tickets/T1/messages", {"nope": 1})

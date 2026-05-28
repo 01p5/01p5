@@ -26,6 +26,7 @@ Group-chat tickets (the main agent + dispatched sub-agents in one thread):
                                     and runs the main agent on the ticket.
 - ``POST /tickets/{id}/close``    — summarize the ticket to memory + discard
                                     its per-agent checkpoints.
+- ``GET /tickets``                — list past sessions (id, preview, counts).
 - ``GET /tickets/{id}``           — the ticket's full transcript.
 - ``GET /tickets/{id}/events``    — SSE stream of the ticket transcript
                                     (human + agent messages, dispatches,
@@ -383,6 +384,8 @@ class DashboardServer:
                     return outer._handle_get_task(self, rest)
                 if path == "/events":
                     return outer._handle_all_events(self)
+                if path == "/tickets":
+                    return outer._handle_list_tickets_group(self)
                 if path.startswith("/tickets/"):
                     rest = path[len("/tickets/"):]
                     if rest.endswith("/events"):
@@ -563,6 +566,12 @@ class DashboardServer:
             return
         self.submit_ticket(ticket_id, message.strip())
         self._send_json(req, 202, {"ticket_id": ticket_id})
+
+    def _handle_list_tickets_group(self, req: BaseHTTPRequestHandler) -> None:
+        if self.ticket_store is None:
+            self._send_json(req, 404, {"error": "group chat not enabled"})
+            return
+        self._send_json(req, 200, {"tickets": self.ticket_store.list_tickets()})
 
     def _handle_get_ticket(
         self, req: BaseHTTPRequestHandler, ticket_id: str

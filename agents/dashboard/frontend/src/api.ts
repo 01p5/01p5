@@ -14,6 +14,7 @@ import type {
   TaskRecord,
   TelemetryResponse,
   TicketEventDTO,
+  TicketSummary,
   ToolDescriptor,
   ToolInvokeResponse,
 } from "./types";
@@ -67,6 +68,10 @@ export const api = {
     message: string,
   ): Promise<{ ticket_id: string }> =>
     postJson(`/tickets/${encodeURIComponent(ticketId)}/messages`, { message }),
+  listTickets: async (): Promise<TicketSummary[]> => {
+    const body = await getJson<{ tickets: TicketSummary[] }>("/tickets");
+    return body.tickets;
+  },
   getTicket: (
     ticketId: string,
   ): Promise<{ ticket_id: string; events: TicketEventDTO[] }> =>

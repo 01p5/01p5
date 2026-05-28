@@ -107,6 +107,31 @@ def test_jsonl_sanitizes_ticket_id_with_colons(tmp_path):
     assert [e.seq for e in store.transcript("task-123:sysadmin:default")] == [1]
 
 
+def test_inmemory_list_tickets_summaries_recent_first():
+    store = InMemoryTicketStore()
+    store.append(TicketEvent(ticket_id="T1", actor="human", kind="human_message", payload={"text": "first ticket"}))
+    store.append(TicketEvent(ticket_id="T1", actor="main", kind="agent_message", payload={"text": "reply"}))
+    store.append(TicketEvent(ticket_id="T2", actor="human", kind="human_message", payload={"text": "second ticket"}))
+
+    tickets = store.list_tickets()
+    assert {t["ticket_id"] for t in tickets} == {"T1", "T2"}
+    t1 = next(t for t in tickets if t["ticket_id"] == "T1")
+    assert t1["event_count"] == 2
+    assert t1["first_message"] == "first ticket"
+    assert t1["last_actor"] == "main"
+    # Most-recently-active first (T2 appended last).
+    assert tickets[0]["ticket_id"] == "T2"
+
+
+def test_jsonl_list_tickets_reads_all_files(tmp_path):
+    store = JsonlTicketStore(tmp_path)
+    store.append(TicketEvent(ticket_id="task-a:x", actor="human", kind="human_message", payload={"text": "hi a"}))
+    store.append(TicketEvent(ticket_id="T-b", actor="human", kind="human_message", payload={"text": "hi b"}))
+    tickets = store.list_tickets()
+    assert {t["ticket_id"] for t in tickets} == {"task-a:x", "T-b"}
+    assert all(t["first_message"].startswith("hi") for t in tickets)
+
+
 def test_jsonl_after_seq_filter(tmp_path):
     store = JsonlTicketStore(tmp_path)
     for i in range(4):
