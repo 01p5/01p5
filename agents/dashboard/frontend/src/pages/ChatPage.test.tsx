@@ -240,4 +240,17 @@ describe("CollapsibleProse", () => {
     await userEvent.click(more);
     expect(await screen.findByText(/show less/i)).toBeInTheDocument();
   });
+
+  it("renders a GFM markdown table as an actual <table> (remark-gfm)", () => {
+    const md = [
+      "| Pod | Status |",
+      "|---|---|",
+      "| nginx | Running |",
+    ].join("\n");
+    render(<CollapsibleProse text={md} />);
+    // Without remark-gfm this stays literal text and there is no table.
+    expect(document.querySelector("table")).not.toBeNull();
+    expect(screen.getByRole("cell", { name: "nginx" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Pod" })).toBeInTheDocument();
+  });
 });

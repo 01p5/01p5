@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2 } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "../api";
 import { useSSE } from "../hooks/useSSE";
 import type { TicketEventDTO } from "../types";
@@ -416,7 +417,7 @@ export function CollapsibleProse({ text }: { text: string }): JSX.Element {
   return (
     <div className="space-y-2">
       <div className={clsx("prose max-w-none", !expanded && tooLong && "max-h-64 overflow-hidden")}>
-        <ReactMarkdown>{visible}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{visible}</ReactMarkdown>
       </div>
       {tooLong && (
         <button
