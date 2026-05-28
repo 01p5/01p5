@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ChatPage, buildPromptWithContext, type Turn } from "./ChatPage";
+import { ChatPage, actorAccent, payloadText, CollapsibleProse } from "./ChatPage";
+import type { TicketEventDTO } from "../types";
 import { api } from "../api";
 
-// EventSource stub shared by all tests; tests can grab .latest to push.
+// EventSource stub shared by all tests; tests grab .latest to push events.
 class MockEventSource {
   url: string;
   onmessage: ((ev: MessageEvent<string>) => void) | null = null;
@@ -17,9 +18,32 @@ class MockEventSource {
   close(): void {}
 }
 
+let seq = 0;
+function mkEvent(over: Partial<TicketEventDTO>): TicketEventDTO {
+  seq += 1;
+  return {
+    ticket_id: "T",
+    actor: "main",
+    kind: "agent_message",
+    payload: {},
+    seq,
+    event_id: `e${seq}`,
+    ts: seq,
+    ...over,
+  };
+}
+
+async function push(ev: TicketEventDTO): Promise<void> {
+  const src = MockEventSource.latest!;
+  await act(async () => {
+    src.onmessage?.({ data: JSON.stringify(ev) } as MessageEvent<string>);
+  });
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   MockEventSource.latest = null;
+  seq = 0;
   vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
 });
 afterEach(() => {
@@ -28,381 +52,154 @@ afterEach(() => {
 });
 
 describe("ChatPage — empty state", () => {
-  it("renders the EmptyChat heading and 4 example buttons", () => {
+  it("renders the EmptyChat heading and example buttons", () => {
     render(<ChatPage />);
     expect(screen.getByRole("heading", { name: /ask olympus/i })).toBeInTheDocument();
-    const exampleButtons = screen
+    const examples = screen
       .getAllByRole("button")
       .filter((b) => b.textContent && b.textContent.length > 20 && !b.textContent.includes("Send"));
-    expect(exampleButtons.length).toBeGreaterThanOrEqual(4);
+    expect(examples.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("New button is disabled when chat is empty", () => {
+  it("New button is disabled when the transcript is empty", () => {
     render(<ChatPage />);
-    const newBtn = screen.getByRole("button", { name: /^New$/i });
-    expect(newBtn).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^New$/i })).toBeDisabled();
   });
 });
 
 describe("ChatPage — submission", () => {
-  it("submitting via form clears input and creates user + assistant pending bubbles", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "t-1" });
+  it("submitting posts to the ticket and clears the input", async () => {
+    const spy = vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
     render(<ChatPage />);
-
     const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
     await userEvent.type(input, "list pods");
-    expect(input.value).toBe("list pods");
+    await act(async () => { fireEvent.submit(input.closest("form")!); });
 
-    await act(async () => {
-      fireEvent.submit(input.closest("form")!);
-    });
-
-    expect(api.submitTask).toHaveBeenCalled();
-    // User bubble shows the text.
-    expect(screen.getByText("list pods")).toBeInTheDocument();
-    // Assistant bubble shows the pending status indicator.
-    expect(screen.getByText(/picking the right agent/i)).toBeInTheDocument();
-    // Input cleared after submit.
+    expect(spy).toHaveBeenCalledWith(expect.any(String), "list pods");
     await waitFor(() => expect(input.value).toBe(""));
   });
 
-  it("clicking an example button submits directly (no extra typing)", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "t-2" });
+  it("clicking an example button posts that text", async () => {
+    const spy = vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
     render(<ChatPage />);
-    const exBtn = screen.getByText(/list pods in default namespace/i);
     await act(async () => {
-      await userEvent.click(exBtn);
+      await userEvent.click(screen.getByText(/list pods in default namespace/i));
     });
-    expect(api.submitTask).toHaveBeenCalledWith(
-      expect.stringContaining("list pods in default namespace"),
-    );
+    expect(spy).toHaveBeenCalledWith(expect.any(String), "list pods in default namespace");
   });
 
-  it("New button clears turns and re-enables disabled state", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "t-3" });
+  it("a failed send surfaces a local error message", async () => {
+    vi.spyOn(api, "sendTicketMessage").mockRejectedValue(new Error("boom"));
     render(<ChatPage />);
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "hi");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
-
-    await waitFor(() => screen.getByText("hi"));
-    const newBtn = screen.getByRole("button", { name: /^New$/i });
-    expect(newBtn).not.toBeDisabled();
-
-    await userEvent.click(newBtn);
-    await waitFor(() => expect(screen.queryByText("hi")).not.toBeInTheDocument());
-    expect(newBtn).toBeDisabled();
-  });
-});
-
-describe("ChatPage — SSE result event updates bubble", () => {
-  it("a kind:'result' event for a tracked task updates the bubble content", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-A" });
-    render(<ChatPage />);
-
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "do thing");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
-
-    await waitFor(() => screen.getByText(/picking the right agent/i));
-
-    const src = MockEventSource.latest!;
-    await act(async () => {
-      src.onmessage?.({
-        data: JSON.stringify({
-          msg_id: "m1",
-          task_id: "task-A",
-          sender: "agent",
-          recipient: "orchestrator",
-          kind: "result",
-          timestamp: 1,
-          payload: { status: "success", summary: "Did the thing." },
-        }),
-      } as MessageEvent<string>);
-    });
-
-    // The pending "picking the right agent…" status should be gone.
-    expect(screen.queryByText(/picking the right agent/i)).not.toBeInTheDocument();
-    // The summary should be rendered (markdown rendered, but plain text shows as-is).
-    expect(screen.getByText(/did the thing/i)).toBeInTheDocument();
-  });
-});
-
-describe("buildPromptWithContext", () => {
-  const mkTurn = (over: Partial<Turn>): Turn => ({
-    task_id: "x",
-    user: "u",
-    status: "success",
-    summary: "s",
-    approvalsPending: 0,
-    submitted: 0,
-    ...over,
-  });
-
-  it("returns the plain user text when there is no history", () => {
-    expect(buildPromptWithContext("hi", [])).toBe("hi");
-  });
-
-  it("filters out failed / pending / running turns and turns without summary", () => {
-    const turns: Turn[] = [
-      mkTurn({ task_id: "a", user: "U1", summary: "S1", status: "success" }),
-      mkTurn({ task_id: "b", user: "U2", summary: undefined, status: "pending" }),
-      mkTurn({ task_id: "c", user: "U3", summary: "S3", status: "failed" }),
-      mkTurn({ task_id: "d", user: "U4", summary: "S4", status: "running" }),
-    ];
-    const out = buildPromptWithContext("now", turns);
-    expect(out).toContain("U1");
-    expect(out).toContain("S1");
-    expect(out).not.toContain("U2");
-    expect(out).not.toContain("U3");
-    expect(out).not.toContain("U4");
-    expect(out).toContain("now");
-  });
-
-  it("includes all 6 prior completed turns when count <= 6", () => {
-    const turns: Turn[] = Array.from({ length: 6 }, (_, i) =>
-      mkTurn({ task_id: `t${i}`, user: `U${i}`, summary: `S${i}`, status: "success" }),
-    );
-    const out = buildPromptWithContext("ask", turns);
-    for (let i = 0; i < 6; i++) {
-      expect(out).toContain(`U${i}`);
-      expect(out).toContain(`S${i}`);
-    }
-    // Order: U0 before U1 before … before U5.
-    expect(out.indexOf("U0")).toBeLessThan(out.indexOf("U5"));
-  });
-
-  it("includes only the last 6 of 8 prior completed turns", () => {
-    const turns: Turn[] = Array.from({ length: 8 }, (_, i) =>
-      mkTurn({ task_id: `t${i}`, user: `U${i}`, summary: `S${i}`, status: "success" }),
-    );
-    const out = buildPromptWithContext("ask", turns);
-    expect(out).not.toContain("U0");
-    expect(out).not.toContain("U1");
-    for (let i = 2; i < 8; i++) {
-      expect(out).toContain(`U${i}`);
-    }
-  });
-
-  it("includes rejected turns (with summary) as history", () => {
-    const turns: Turn[] = [
-      mkTurn({ task_id: "a", user: "U1", summary: "S1", status: "rejected" }),
-    ];
-    const out = buildPromptWithContext("ask", turns);
-    expect(out).toContain("U1");
-    expect(out).toContain("S1");
-  });
-});
-
-describe("CollapsibleProse via ChatPage", () => {
-  // Test by sending an SSE result with short vs long summary text.
-  async function setupWithSummary(summary: string): Promise<void> {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-C" });
-    render(<ChatPage />);
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "q");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
-    await waitFor(() => screen.getByText(/picking the right agent/i));
-
-    const src = MockEventSource.latest!;
-    await act(async () => {
-      src.onmessage?.({
-        data: JSON.stringify({
-          msg_id: "m1",
-          task_id: "task-C",
-          sender: "agent",
-          recipient: "orchestrator",
-          kind: "result",
-          timestamp: 1,
-          payload: { status: "success", summary },
-        }),
-      } as MessageEvent<string>);
-    });
-  }
-
-  it("short text (<600 chars) renders without a show-more toggle", async () => {
-    await setupWithSummary("a short reply");
-    expect(screen.getByText("a short reply")).toBeInTheDocument();
-    expect(screen.queryByText(/show more/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/show less/i)).not.toBeInTheDocument();
-  });
-
-  it("long text (>600 chars) shows a 'show more' button that expands", async () => {
-    const longText = "x".repeat(700);
-    await setupWithSummary(longText);
-    const more = await screen.findByText(/show more/i);
-    expect(more).toBeInTheDocument();
-    await userEvent.click(more);
-    expect(await screen.findByText(/show less/i)).toBeInTheDocument();
-  });
-});
-
-
-describe("ChatPage — settled-turn intelligence layer", () => {
-  // The new MemoryChips + FeedbackButtons should render under the
-  // assistant bubble once the turn settles, and stay absent while it's
-  // still running.
-
-  it("settled turn renders the FeedbackButtons (👍/👎/✎)", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-fb" });
-    vi.spyOn(api, "listMemory").mockResolvedValue([]);
-    render(<ChatPage />);
-
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "do thing");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
-
-    // While still running, the feedback controls are absent.
-    expect(screen.queryByRole("button", { name: /mark as good/i })).toBeNull();
-
-    const src = MockEventSource.latest!;
-    await act(async () => {
-      src.onmessage?.({
-        data: JSON.stringify({
-          msg_id: "m1", task_id: "task-fb",
-          sender: "agent", recipient: "orchestrator", kind: "result",
-          timestamp: 1,
-          payload: { status: "success", summary: "Did the thing." },
-        }),
-      } as MessageEvent<string>);
-    });
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /mark as good/i })).toBeInTheDocument(),
-    );
-    expect(screen.getByRole("button", { name: /mark as bad/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /add correction/i })).toBeInTheDocument();
-  });
-
-  it("settled turn renders MemoryChips when prior runs exist", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-mem" });
-    vi.spyOn(api, "listMemory").mockResolvedValue([
-      {
-        task_id: "T-prior",
-        agent: "sysadmin",
-        natural_language: "list pods in default",
-        summary: "found 3",
-        status: "success",
-        ts: 0,
-        metadata: {},
-      },
-    ]);
-    render(<ChatPage />);
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "list pods");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
-
-    const src = MockEventSource.latest!;
-    await act(async () => {
-      src.onmessage?.({
-        data: JSON.stringify({
-          msg_id: "m2", task_id: "task-mem",
-          sender: "agent", recipient: "orchestrator", kind: "result",
-          timestamp: 1,
-          payload: { status: "success", summary: "found 3 pods" },
-        }),
-      } as MessageEvent<string>);
-    });
-
-    await waitFor(() => expect(screen.getByText(/seen before/i)).toBeInTheDocument());
-    expect(screen.getByText("list pods in default")).toBeInTheDocument();
-  });
-
-  it("a still-running turn does NOT render the intelligence-layer widgets", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-r" });
-    vi.spyOn(api, "listMemory").mockResolvedValue([]);
-    render(<ChatPage />);
-
     const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
     await userEvent.type(input, "x");
     await act(async () => { fireEvent.submit(input.closest("form")!); });
-
-    // Still pending → no feedback, no chips.
-    await waitFor(() => screen.getByText(/picking the right agent/i));
-    expect(screen.queryByRole("button", { name: /mark as good/i })).toBeNull();
-    expect(screen.queryByText(/seen before/i)).toBeNull();
+    expect(await screen.findByText(/send failed: boom/i)).toBeInTheDocument();
   });
 
-  it("failed turn shows the feedback buttons too (so users can flag bad outcomes)", async () => {
-    // Whether a failed turn needs feedback is a design call — we
-    // choose YES because a thumbs-down on a wrong-answer is at least
-    // as valuable as a thumbs-up on a right one.
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-fail" });
-    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+  it("New button resets the ticket (subscribes to a new stream)", async () => {
+    vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
     render(<ChatPage />);
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "break things");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hello" } }));
+    expect(screen.getByText("hello")).toBeInTheDocument();
 
-    const src = MockEventSource.latest!;
-    await act(async () => {
-      src.onmessage?.({
-        data: JSON.stringify({
-          msg_id: "m3", task_id: "task-fail",
-          sender: "agent", recipient: "orchestrator", kind: "result",
-          timestamp: 1,
-          payload: { status: "failed", summary: "could not break things" },
-        }),
-      } as MessageEvent<string>);
-    });
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /mark as bad/i })).toBeInTheDocument(),
-    );
+    const firstUrl = MockEventSource.latest!.url;
+    await userEvent.click(screen.getByRole("button", { name: /^New$/i }));
+    await waitFor(() => expect(screen.queryByText("hello")).not.toBeInTheDocument());
+    // A new ticket id => a new SSE url.
+    expect(MockEventSource.latest!.url).not.toBe(firstUrl);
   });
 });
 
-
-describe("ChatPage — cost chip on settled turns", () => {
-  it("renders the CostChip with the SSE result's cost payload", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-cost" });
-    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+describe("ChatPage — transcript rendering", () => {
+  it("renders a human message bubble", async () => {
     render(<ChatPage />);
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "with cost");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
-
-    const src = MockEventSource.latest!;
-    await act(async () => {
-      src.onmessage?.({
-        data: JSON.stringify({
-          msg_id: "m-cost", task_id: "task-cost",
-          sender: "sysadmin", recipient: "orchestrator", kind: "result",
-          timestamp: 1,
-          payload: {
-            status: "success",
-            summary: "cost-tracked",
-            cost: {
-              total_usd: 0.00321,
-              input_tokens: 200,
-              output_tokens: 120,
-              wall_seconds: 2.4,
-            },
-          },
-        }),
-      } as MessageEvent<string>);
-    });
-
-    // CostChip carries the data via attributes — assert against those
-    // rather than reformatted text to keep the test stable across
-    // formatting tweaks.
-    await waitFor(() => {
-      const chip = document.querySelector(".cost-chip");
-      expect(chip).not.toBeNull();
-      expect(chip!.getAttribute("data-cost-usd")).toBe("0.00321");
-      expect(chip!.getAttribute("data-wall-seconds")).toBe("2.4");
-    });
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hi team" } }));
+    expect(screen.getByText("hi team")).toBeInTheDocument();
   });
 
-  it("does NOT render the CostChip on a still-running turn", async () => {
-    vi.spyOn(api, "submitTask").mockResolvedValue({ task_id: "task-running" });
-    vi.spyOn(api, "listMemory").mockResolvedValue([]);
+  it("renders a main agent reply", async () => {
     render(<ChatPage />);
-    const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
-    await userEvent.type(input, "still going");
-    await act(async () => { fireEvent.submit(input.closest("form")!); });
+    await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "on it" } }));
+    expect(screen.getByText("on it")).toBeInTheDocument();
+    expect(screen.getByText(/^Main$/)).toBeInTheDocument();
+  });
 
-    await waitFor(() => screen.getByText(/picking the right agent/i));
-    expect(document.querySelector(".cost-chip")).toBeNull();
+  it("renders a dispatch chip and a specialist result", async () => {
+    render(<ChatPage />);
+    await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "list pods" } }));
+    await push(mkEvent({ kind: "agent_result", actor: "sysadmin", payload: { summary: "3 pods running", status: "success" } }));
+    expect(screen.getByText("list pods")).toBeInTheDocument();
+    expect(screen.getByText("3 pods running")).toBeInTheDocument();
+    // "sysadmin" appears in both the dispatch chip and the result bubble.
+    expect(screen.getAllByText("sysadmin").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("renders an ask_agent question line", async () => {
+    render(<ChatPage />);
+    await push(mkEvent({ kind: "agent_message", actor: "programmer", payload: { type: "question", to: "sysadmin", question: "is the pod up?" } }));
+    expect(screen.getByText("is the pod up?")).toBeInTheDocument();
+    expect(screen.getByText("asks")).toBeInTheDocument();
+  });
+
+  it("renders a tool_call line with the tool name", async () => {
+    render(<ChatPage />);
+    await push(mkEvent({ kind: "tool_call", actor: "sysadmin", payload: { tool: "kubectl_get", args: { kind: "pods" }, result: "ok", approved: true } }));
+    expect(screen.getByText("kubectl_get")).toBeInTheDocument();
+    expect(screen.getByText("approved")).toBeInTheDocument();
+  });
+
+  it("renders an approval-request notice", async () => {
+    render(<ChatPage />);
+    await push(mkEvent({ kind: "approval_request", actor: "sysadmin", payload: { tool: "delete_pod" } }));
+    expect(screen.getByText(/requested approval for delete_pod/i)).toBeInTheDocument();
+  });
+
+  it("dedupes events by event_id (no double render on replay)", async () => {
+    render(<ChatPage />);
+    const ev = mkEvent({ kind: "human_message", actor: "human", payload: { text: "once" } });
+    await push(ev);
+    await push(ev); // same event_id replayed
+    expect(screen.getAllByText("once")).toHaveLength(1);
+  });
+});
+
+describe("actorAccent", () => {
+  it("gives a distinct label for known actors and falls back for unknown", () => {
+    expect(actorAccent("human").label).toBe("You");
+    expect(actorAccent("main").text).toContain("green");
+    expect(actorAccent("sysadmin").text).toContain("blue");
+    expect(actorAccent("programmer").text).toContain("yellow");
+    expect(actorAccent("terraform").text).toContain("orange");
+    expect(actorAccent("ansible").text).toContain("red");
+    expect(actorAccent("hpc").text).toContain("green-dim");
+    expect(actorAccent("mystery").label).toBe("mystery");
+  });
+});
+
+describe("payloadText", () => {
+  it("extracts text by kind", () => {
+    expect(payloadText(mkEvent({ payload: { text: "t" } }))).toBe("t");
+    expect(payloadText(mkEvent({ payload: { answer: "a" } }))).toBe("a");
+    expect(payloadText(mkEvent({ payload: { question: "q" } }))).toBe("q");
+    expect(payloadText(mkEvent({ payload: { summary: "s" } }))).toBe("s");
+    expect(payloadText(mkEvent({ payload: { subtask: "sub" } }))).toBe("sub");
+    expect(payloadText(mkEvent({ payload: {} }))).toBe("");
+    expect(payloadText(mkEvent({ payload: null }))).toBe("");
+  });
+});
+
+describe("CollapsibleProse", () => {
+  it("short text renders without a toggle", () => {
+    render(<CollapsibleProse text="a short reply" />);
+    expect(screen.getByText("a short reply")).toBeInTheDocument();
+    expect(screen.queryByText(/show more/i)).not.toBeInTheDocument();
+  });
+
+  it("long text shows a toggle that expands", async () => {
+    render(<CollapsibleProse text={"x".repeat(700)} />);
+    const more = await screen.findByText(/show more/i);
+    await userEvent.click(more);
+    expect(await screen.findByText(/show less/i)).toBeInTheDocument();
   });
 });

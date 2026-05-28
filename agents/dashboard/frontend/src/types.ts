@@ -113,6 +113,31 @@ export interface BusEvent {
   causation_id?: string | null;
 }
 
+// One entry in a group-chat ticket transcript (the dashboard's
+// TicketEvent, projected over SSE). Actors: "human", "main", a specialist
+// agent name, or an MCP server name.
+export type TicketKind =
+  | "human_message"
+  | "agent_message"
+  | "dispatch"
+  | "agent_result"
+  | "tool_call"
+  | "approval_request"
+  | "approval_decision"
+  | "mcp_event";
+
+export interface TicketEventDTO {
+  ticket_id: string;
+  actor: string;
+  kind: TicketKind;
+  payload: unknown;
+  seq: number;
+  event_id: string;
+  ts: number;
+  causation_id?: string | null;
+  task_id?: string | null;
+}
+
 export interface PendingApproval {
   approval_id: string;
   agent: string;

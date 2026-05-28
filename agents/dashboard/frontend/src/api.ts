@@ -13,6 +13,7 @@ import type {
   RollbackEntry,
   TaskRecord,
   TelemetryResponse,
+  TicketEventDTO,
   ToolDescriptor,
   ToolInvokeResponse,
 } from "./types";
@@ -56,6 +57,20 @@ export const api = {
     getJson(`/tasks/${encodeURIComponent(id)}`),
   submitTask: (natural_language: string): Promise<{ task_id: string }> =>
     postJson("/tasks", { natural_language }),
+
+  // Group-chat tickets — the chat session IS the ticket. Posting a
+  // message runs the main agent on the ticket; the transcript (human +
+  // agent messages, dispatches, tool calls, ask_agent exchanges) streams
+  // back over GET /tickets/{id}/events.
+  sendTicketMessage: (
+    ticketId: string,
+    message: string,
+  ): Promise<{ ticket_id: string }> =>
+    postJson(`/tickets/${encodeURIComponent(ticketId)}/messages`, { message }),
+  getTicket: (
+    ticketId: string,
+  ): Promise<{ ticket_id: string; events: TicketEventDTO[] }> =>
+    getJson(`/tickets/${encodeURIComponent(ticketId)}`),
 
   // Approvals
   listApprovals: (): Promise<PendingApproval[]> => getJson("/approvals"),
