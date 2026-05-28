@@ -12,6 +12,7 @@ choose; ``ManualRouter`` returns a fixed mapping for tests.
 """
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from dataclasses import replace
@@ -421,6 +422,10 @@ class Orchestrator:
                         "agent": agent_name,
                         "status": result.status,
                         "summary": result.summary,
+                        # Carry the structured artifacts too, so the actual
+                        # data (e.g. a pod table in findings) reaches the
+                        # transcript/UI, not just the prose summary.
+                        "artifacts": result.artifacts or {},
                     },
                     ticket_id=ticket_id,
                 )
@@ -484,9 +489,9 @@ class Orchestrator:
                 ticket_id=ticket_id,
                 parent_task_id=ticket_id,
             )
-            return self.dispatch_to(
-                agent_name, task, requested_by="main", announce=True
-            ).summary
+            return _result_relay_text(
+                self.dispatch_to(agent_name, task, requested_by="main", announce=True)
+            )
 
         return dispatcher
 
@@ -502,7 +507,7 @@ class Orchestrator:
             )
             # No announce: the ask_agent tool logs the Q&A as agent_message
             # events; re-publishing on the bus would double-log it.
-            return self._run_in_ticket(target_agent, task).summary
+            return _result_relay_text(self._run_in_ticket(target_agent, task))
 
         return resolver
 
@@ -569,6 +574,29 @@ def _default_checkpointer() -> Any:
     from langgraph.checkpoint.memory import InMemorySaver
 
     return InMemorySaver()
+
+
+def _result_relay_text(result: AgentResult) -> str:
+    """Render a sub-agent's result for relay back to the dispatcher / asker.
+
+    The prose ``summary`` alone is lossy — specialists put the real data in
+    structured ``artifacts`` (e.g. the sysadmin agent's ``findings`` holds the
+    pod table while ``summary`` is a one-liner). Include the artifacts so the
+    main agent actually receives the data and can act on / present it."""
+    parts: list[str] = []
+    if result.summary:
+        parts.append(result.summary)
+    artifacts = result.artifacts or {}
+    # Drop empty containers so a no-artifact result stays clean.
+    meaningful = {k: v for k, v in artifacts.items() if v not in (None, "", [], {})}
+    if meaningful:
+        try:
+            parts.append(
+                "Structured result:\n" + json.dumps(meaningful, indent=2, default=str)
+            )
+        except (TypeError, ValueError):
+            parts.append(f"Structured result: {meaningful}")
+    return "\n\n".join(parts).strip() or (result.summary or "")
 
 
 def _event_text(ev: Any) -> str:

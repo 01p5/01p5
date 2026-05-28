@@ -264,7 +264,14 @@ function EventView({ event }: { event: TicketEventDTO }): JSX.Element | null {
       }
       return <AgentBubble actor={event.actor} text={payloadText(event)} status={p.status as string | undefined} />;
     case "agent_result":
-      return <AgentBubble actor={event.actor} text={payloadText(event)} status={p.status as string | undefined} />;
+      return (
+        <AgentBubble
+          actor={event.actor}
+          text={payloadText(event)}
+          status={p.status as string | undefined}
+          artifacts={p.artifacts as Record<string, unknown> | undefined}
+        />
+      );
     case "dispatch":
       return <DispatchChip to={String(p.to ?? "?")} subtask={payloadText(event)} />;
     case "tool_call":
@@ -293,7 +300,7 @@ function HumanBubble({ text }: { text: string }): JSX.Element {
   );
 }
 
-function AgentBubble({ actor, text, status }: { actor: string; text: string; status?: string }): JSX.Element {
+function AgentBubble({ actor, text, status, artifacts }: { actor: string; text: string; status?: string; artifacts?: Record<string, unknown> }): JSX.Element {
   const accent = actorAccent(actor);
   const failed = status === "failed" || status === "rejected";
   return (
@@ -313,10 +320,24 @@ function AgentBubble({ actor, text, status }: { actor: string; text: string; sta
             )}
           >
             {text ? <CollapsibleProse text={text} /> : <span className="text-text-muted italic text-sm">(no content)</span>}
+            {artifacts && Object.keys(artifacts).length > 0 && <ArtifactsDetails artifacts={artifacts} />}
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function ArtifactsDetails({ artifacts }: { artifacts: Record<string, unknown> }): JSX.Element {
+  return (
+    <details className="mt-2 border-t border-border-subtle/60 pt-2">
+      <summary className="text-[11px] font-mono text-text-muted cursor-pointer hover:text-text-secondary">
+        data
+      </summary>
+      <pre className="mt-2 text-[11px] font-mono text-text-secondary bg-dark-primary border border-border-subtle rounded p-2 overflow-auto max-h-80">
+        {JSON.stringify(artifacts, null, 2)}
+      </pre>
+    </details>
   );
 }
 

@@ -156,6 +156,23 @@ describe("ChatPage — transcript rendering", () => {
     expect(screen.getAllByText("sysadmin").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("renders a specialist result's artifacts (data) in a collapsible block", async () => {
+    render(<ChatPage />);
+    await push(mkEvent({
+      kind: "agent_result",
+      actor: "sysadmin",
+      payload: {
+        summary: "Listed pods.",
+        status: "success",
+        artifacts: { findings: { pods: "nginx-test Running" } },
+      },
+    }));
+    expect(screen.getByText("Listed pods.")).toBeInTheDocument();
+    // The data toggle is present, and the actual pod data is in the DOM.
+    expect(screen.getByText("data")).toBeInTheDocument();
+    expect(screen.getByText(/nginx-test Running/)).toBeInTheDocument();
+  });
+
   it("renders an ask_agent question line", async () => {
     render(<ChatPage />);
     await push(mkEvent({ kind: "agent_message", actor: "programmer", payload: { type: "question", to: "sysadmin", question: "is the pod up?" } }));

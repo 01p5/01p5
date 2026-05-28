@@ -218,6 +218,66 @@ def test_discard_ticket_drops_checkpointers():
     assert ("T1", "worker") not in orch._ticket_checkpointers
 
 
+class _DataAgent(AgentSpec):
+    """A specialist that, like the real sysadmin agent, puts the actual
+    data in structured artifacts and only a terse line in summary."""
+
+    tools: Sequence[Any] = []
+    destructive_verbs: set[str] = set()
+    name = "sysadmin"
+    domain = "k8s"
+
+    def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
+        return AgentResult(
+            task_id=task.task_id,
+            status="success",
+            summary="Listed pods. No changes were made.",
+            artifacts={"findings": {"pods": "nginx-test Running; olympus Running"}, "actions_taken": []},
+            cost=CostBreakdown(),
+        )
+
+
+def test_dispatch_relays_artifacts_not_just_summary():
+    store = InMemoryTicketStore()
+    captured: dict = {}
+
+    def main_behavior(task: TaskMessage, ctx: AgentContext) -> str:
+        captured["relayed"] = ctx.dispatcher("sysadmin", "list pods")
+        return "done"
+
+    main = _SpyAgent("main", behavior=main_behavior)
+    orch = _orch([main, _DataAgent()], store=store)
+    orch.dispatch_to("main", _task("go", "T1"), announce=False)
+
+    relayed = captured["relayed"]
+    assert "Listed pods" in relayed
+    assert "nginx-test Running" in relayed  # the DATA flowed, not just the summary
+
+    # The agent_result transcript event also carries the artifacts now.
+    results = [e for e in store.transcript("T1") if e.kind == "agent_result"]
+    assert results
+    assert results[0].payload["artifacts"]["findings"]["pods"]
+
+
+def test_result_relay_text_summary_only_when_no_artifacts():
+    from agentlib.orchestrator import _result_relay_text
+    r = AgentResult(task_id="t", status="success", summary="just a line", cost=CostBreakdown())
+    assert _result_relay_text(r) == "just a line"
+
+
+def test_result_relay_text_includes_meaningful_artifacts():
+    from agentlib.orchestrator import _result_relay_text
+    r = AgentResult(
+        task_id="t", status="success", summary="done",
+        artifacts={"findings": {"k": "v"}, "actions_taken": []},  # empty list dropped
+        cost=CostBreakdown(),
+    )
+    out = _result_relay_text(r)
+    assert "done" in out
+    assert "findings" in out and "\"k\": \"v\"" in out
+    assert "actions_taken" not in out  # empty container filtered out
+
+
 def test_router_path_unaffected_no_ticket_ctx():
     # The plain router path (run) must not set ticket seams on the ctx.
     worker = _SpyAgent("worker")
