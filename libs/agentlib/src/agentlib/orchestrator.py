@@ -386,11 +386,18 @@ class Orchestrator:
         *,
         requested_by: str = "main",
         announce: bool = True,
+        with_memory: bool = False,
     ) -> AgentResult:
         """Run ``agent_name`` on ``task`` within its ticket and return the
         result. When ``announce`` (the default), the dispatch and result are
-        published on the bus so the ticket transcript + SSE capture them."""
+        published on the bus so the ticket transcript + SSE capture them.
+
+        ``with_memory`` prepends prior-run context (the same retrieval the
+        router path uses) to the task — used for the main agent's opening
+        turn so a new ticket benefits from closed ones."""
         ticket_id = task.ticket_id or task.task_id
+        if with_memory:
+            task = self._with_memory_context(task, agent=agent_name)
         if announce:
             self.bus.publish(
                 new_message(
@@ -512,6 +519,48 @@ class Orchestrator:
                     except Exception:
                         pass
 
+    def close_ticket(
+        self,
+        ticket_id: str,
+        *,
+        summarizer: Optional[Callable[[list], str]] = None,
+        status: str = "success",
+    ) -> Optional[MemoryEntry]:
+        """Close a ticket: summarize its transcript, persist the important
+        details to long-term memory, and discard its per-agent checkpoints.
+
+        The summary is written as a ``MemoryEntry`` keyed to the ticket and
+        attributed to ``main`` — so a later ticket's main-agent turn
+        (dispatched ``with_memory=True``) retrieves it via the existing
+        memory-at-task-start path. ``summarizer`` is injectable (an LLM
+        summarizer can replace the deterministic default). Returns the
+        written entry, or ``None`` when there's no transcript/memory."""
+        if self.ticket_store is None:
+            return None
+        events = self.ticket_store.transcript(ticket_id)
+        summary = (summarizer or _default_ticket_summary)(events)
+        request = next(
+            (_event_text(e) for e in events if e.kind == "human_message" and _event_text(e)),
+            "",
+        )
+        entry: Optional[MemoryEntry] = None
+        if not isinstance(self.memory, NullMemoryStore):
+            entry = MemoryEntry(
+                task_id=ticket_id,
+                agent="main",
+                natural_language=request or "(no request recorded)",
+                summary=summary,
+                status=status,
+                metadata={"kind": "ticket", "event_count": len(events)},
+            )
+            try:
+                self.memory.write(entry)
+            except Exception:
+                # Memory write must never crash a close.
+                entry = None
+        self.discard_ticket(ticket_id)
+        return entry
+
 
 def _default_checkpointer() -> Any:
     """Lazily build an in-memory checkpoint saver. Imported here (not at
@@ -520,6 +569,43 @@ def _default_checkpointer() -> Any:
     from langgraph.checkpoint.memory import InMemorySaver
 
     return InMemorySaver()
+
+
+def _event_text(ev: Any) -> str:
+    """Best-effort display text from a TicketEvent payload."""
+    p = ev.payload if isinstance(getattr(ev, "payload", None), dict) else {}
+    for key in ("text", "summary", "answer", "question", "subtask"):
+        v = p.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
+def _default_ticket_summary(events: list) -> str:
+    """Deterministic ticket summary: the request, which specialists were
+    used, and the final main-agent outcome. No LLM — robust + cheap; swap
+    in an LLM summarizer via ``close_ticket(summarizer=...)`` if desired."""
+    request = next(
+        (_event_text(e) for e in events if e.kind == "human_message" and _event_text(e)),
+        "",
+    )
+    final = ""
+    for e in events:
+        if e.kind == "agent_message" and e.actor == "main" and _event_text(e):
+            final = _event_text(e)
+    dispatched = sorted({
+        str((e.payload or {}).get("to"))
+        for e in events
+        if e.kind == "dispatch" and isinstance(e.payload, dict) and e.payload.get("to")
+    })
+    parts: list[str] = []
+    if request:
+        parts.append(f"Request: {request}")
+    if dispatched:
+        parts.append(f"Specialists used: {', '.join(dispatched)}")
+    if final:
+        parts.append(f"Outcome: {final}")
+    return " | ".join(parts) or "(empty ticket)"
 
 
 def _result_from_dict(d: dict) -> AgentResult:
