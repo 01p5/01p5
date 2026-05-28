@@ -99,14 +99,16 @@ class SysadminAgent(AgentSpec):
     model = gpt55
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
-        gated = gate_tools(self, ctx, task.task_id)
+        gated = gate_tools(self, ctx, task.task_id, ticket_id=task.ticket_id)
         agent = StructuralAgent(
             task_id=task.task_id,
+            ticket_id=task.ticket_id,
             system_prompt=SYSTEM_PROMPT,
             response_class=SysadminResponse,
             model=self.model,
             tools=gated,
             agent_type=self.name,
+            checkpointer=getattr(ctx, "checkpointer", None),
         )
 
         started = time.monotonic()

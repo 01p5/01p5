@@ -106,6 +106,14 @@ def test_get_checkpoint_config_namespaces_thread_by_task_agent_id():
     assert cfg == {"configurable": {"thread_id": "t-1:programmer:abc"}}
 
 
+def test_get_checkpoint_config_uses_ticket_scope_when_set():
+    # Inside a ticket the thread is keyed by ticket (not task) so the same
+    # (ticket, agent) context is reused across re-invocations.
+    sa, _icm, _ca = _build(agent_type="sysadmin", agent_id="a", ticket_id="TCK")
+    cfg = sa._get_checkpoint_config()
+    assert cfg == {"configurable": {"thread_id": "TCK:sysadmin:a"}}
+
+
 # ----- invoke -----
 
 def _wire_agent(sa: StructuralAgent, structured) -> MagicMock:
@@ -170,6 +178,34 @@ def test_cleanup_is_idempotent_and_safe_after_no_invocation():
     sa.cleanup()
     # Calling twice is also safe.
     sa.cleanup()
+
+
+class _FakeSaver:
+    """Checkpoint saver stand-in with observable .storage."""
+
+    def __init__(self):
+        self.storage = {"k": "v"}
+
+
+def test_internal_checkpointer_is_owned_and_cleared_on_cleanup():
+    sa, _icm, _ca = _build()  # no checkpointer passed -> created internally
+    assert sa._owns_checkpointer is True
+    fake = _FakeSaver()
+    sa.checkpointer = fake
+    sa.cleanup()
+    assert fake.storage == {}        # owned -> wiped
+    assert sa.checkpointer is None
+
+
+def test_injected_checkpointer_is_not_cleared_on_cleanup():
+    # A shared per-(ticket, agent) saver is owned by the orchestrator;
+    # cleanup must drop our reference but leave the retained context intact.
+    fake = _FakeSaver()
+    sa, _icm, _ca = _build(checkpointer=fake)
+    assert sa._owns_checkpointer is False
+    assert sa.checkpointer is fake
+    sa.cleanup()
+    assert fake.storage == {"k": "v"}  # injected/shared -> preserved
 
 
 # ----- module-level cost helpers -----

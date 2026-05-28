@@ -116,6 +116,11 @@ class StructuralAgent:
         telemetry_task_ids: list[str] | None = None,
         ticket_id: Optional[str] = None,
     ):
+        # Ownership: an internally-created saver is ours to wipe on
+        # cleanup; an injected one (shared per-(ticket, agent) saver owned
+        # by the orchestrator) must be left intact so retained context
+        # survives across re-invocations within a ticket.
+        self._owns_checkpointer = checkpointer is None
         if checkpointer is None:
             checkpointer = InMemorySaver()
         self.task_id = task_id
@@ -559,7 +564,10 @@ class StructuralAgent:
             self.agent = None
         # 2. Clear checkpoint storage (conversation history, large JSON blobs)
         if hasattr(self, "checkpointer") and self.checkpointer is not None:
-            if hasattr(self.checkpointer, "storage"):
+            # Only wipe storage we own. A shared per-(ticket, agent) saver
+            # is owned by the orchestrator (dropped on ticket close); wiping
+            # it here would erase the retained group-chat context.
+            if getattr(self, "_owns_checkpointer", True) and hasattr(self.checkpointer, "storage"):
                 self.checkpointer.storage.clear()
             self.checkpointer = None
         self.tools = []
