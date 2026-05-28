@@ -24,6 +24,8 @@ Group-chat tickets (the main agent + dispatched sub-agents in one thread):
 
 - ``POST /tickets/{id}/messages`` — body: ``{message}``. Posts a human turn
                                     and runs the main agent on the ticket.
+- ``POST /tickets/{id}/close``    — summarize the ticket to memory + discard
+                                    its per-agent checkpoints.
 - ``GET /tickets/{id}``           — the ticket's full transcript.
 - ``GET /tickets/{id}/events``    — SSE stream of the ticket transcript
                                     (human + agent messages, dispatches,
@@ -291,8 +293,9 @@ class DashboardServer:
             try:
                 # announce=False: the main agent's own turn is recorded as a
                 # single agent_message below, not as a dispatch+result pair.
+                # with_memory: pull context from prior closed tickets.
                 result = self.orchestrator.dispatch_to(
-                    "main", task, announce=False
+                    "main", task, announce=False, with_memory=True
                 )
                 payload = {
                     "text": result.summary,
@@ -429,6 +432,9 @@ class DashboardServer:
                 if self.path.startswith("/tickets/") and self.path.endswith("/messages"):
                     inner = self.path[len("/tickets/"):-len("/messages")]
                     return outer._handle_post_ticket_message(self, inner)
+                if self.path.startswith("/tickets/") and self.path.endswith("/close"):
+                    inner = self.path[len("/tickets/"):-len("/close")]
+                    return outer._handle_close_ticket(self, inner)
                 if self.path.startswith("/approvals/"):
                     return outer._handle_resolve_approval(
                         self, self.path[len("/approvals/"):]
@@ -571,6 +577,31 @@ class DashboardServer:
         self, req: BaseHTTPRequestHandler, ticket_id: str
     ) -> None:
         self._serve_ticket_sse(req, ticket_id)
+
+    def _handle_close_ticket(
+        self, req: BaseHTTPRequestHandler, ticket_id: str
+    ) -> None:
+        if self.ticket_store is None:
+            self._send_json(req, 404, {"error": "group chat not enabled"})
+            return
+        try:
+            entry = self.orchestrator.close_ticket(ticket_id)
+        except Exception as exc:
+            logger.exception("close ticket %s failed", ticket_id)
+            self._send_json(req, 500, {"error": f"{type(exc).__name__}: {exc}"})
+            return
+        summary = entry.summary if entry is not None else "(no memory configured)"
+        # Record the closure on the transcript so the chat shows it settled.
+        self.ticket_store.append(
+            TicketEvent(
+                ticket_id=ticket_id,
+                actor="main",
+                kind="agent_message",
+                payload={"text": f"Ticket closed. {summary}", "status": "closed"},
+                task_id=ticket_id,
+            )
+        )
+        self._send_json(req, 200, {"ticket_id": ticket_id, "summary": summary})
 
     def _handle_list_tasks(self, req: BaseHTTPRequestHandler) -> None:
         with self._tasks_lock:

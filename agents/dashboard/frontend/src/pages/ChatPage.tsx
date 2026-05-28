@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench } from "lucide-react";
+import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2 } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import { api } from "../api";
@@ -52,6 +52,7 @@ export function ChatPage(): JSX.Element {
   const [events, setEvents] = useState<TicketEventDTO[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [closing, setClosing] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -108,6 +109,20 @@ export function ChatPage(): JSX.Element {
     inputRef.current?.focus();
   };
 
+  // Close (resolve) the ticket: the backend summarizes it into long-term
+  // memory and discards its checkpoints, then we start a fresh ticket.
+  const closeAndReset = async (): Promise<void> => {
+    if (events.length === 0 || closing) return;
+    setClosing(true);
+    try {
+      await api.closeTicket(ticketId);
+    } catch { /* best-effort; still start fresh */ }
+    finally {
+      setClosing(false);
+      resetConversation();
+    }
+  };
+
   const send = (e: React.FormEvent): void => {
     e.preventDefault();
     void submit(input);
@@ -131,15 +146,26 @@ export function ChatPage(): JSX.Element {
             )}
           </span>
         </div>
-        <button
-          onClick={resetConversation}
-          disabled={events.length === 0}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-green border border-border-subtle hover:border-accent-green/40 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          title="Start a new ticket (fresh group chat)"
-        >
-          <Plus size={13} strokeWidth={2.25} />
-          New
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void closeAndReset()}
+            disabled={events.length === 0 || closing}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-blue border border-border-subtle hover:border-accent-blue/40 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Resolve this ticket — summarize it to memory and start fresh"
+          >
+            <CheckCircle2 size={13} strokeWidth={2.25} />
+            {closing ? "Closing…" : "Resolve"}
+          </button>
+          <button
+            onClick={resetConversation}
+            disabled={events.length === 0}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-green border border-border-subtle hover:border-accent-green/40 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Start a new ticket (fresh group chat)"
+          >
+            <Plus size={13} strokeWidth={2.25} />
+            New
+          </button>
+        </div>
       </div>
 
       {/* Transcript */}

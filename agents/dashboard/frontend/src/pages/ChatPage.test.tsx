@@ -97,6 +97,27 @@ describe("ChatPage — submission", () => {
     expect(await screen.findByText(/send failed: boom/i)).toBeInTheDocument();
   });
 
+  it("Resolve button closes the ticket and starts a fresh one", async () => {
+    vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
+    const close = vi.spyOn(api, "closeTicket").mockResolvedValue({ ticket_id: "T", summary: "done" });
+    render(<ChatPage />);
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hello" } }));
+
+    const resolve = screen.getByRole("button", { name: /resolve/i });
+    expect(resolve).not.toBeDisabled();
+    const firstUrl = MockEventSource.latest!.url;
+    await act(async () => { await userEvent.click(resolve); });
+
+    expect(close).toHaveBeenCalledWith(expect.any(String));
+    await waitFor(() => expect(screen.queryByText("hello")).not.toBeInTheDocument());
+    expect(MockEventSource.latest!.url).not.toBe(firstUrl);
+  });
+
+  it("Resolve button is disabled on an empty transcript", () => {
+    render(<ChatPage />);
+    expect(screen.getByRole("button", { name: /resolve/i })).toBeDisabled();
+  });
+
   it("New button resets the ticket (subscribes to a new stream)", async () => {
     vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
     render(<ChatPage />);

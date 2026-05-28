@@ -199,8 +199,24 @@ def test_endpoints_404_when_group_chat_disabled():
     try:
         assert _post(srv, "/tickets/T1/messages", {"message": "x"})[0] == 404
         assert _get(srv, "/tickets/T1")[0] == 404
+        assert _post(srv, "/tickets/T1/close", {})[0] == 404
     finally:
         srv.shutdown()
+
+
+def test_close_ticket_endpoint_records_closure(ticket_server):
+    srv, store = ticket_server
+    _post(srv, "/tickets/TC/messages", {"message": "do it"})
+    assert _wait(lambda: len(store.transcript("TC")) >= 2)
+
+    status, body = _post(srv, "/tickets/TC/close", {})
+    assert status == 200
+    assert body["ticket_id"] == "TC"
+    assert "summary" in body
+    last = store.transcript("TC")[-1]
+    assert last.kind == "agent_message"
+    assert last.payload["status"] == "closed"
+    assert "Ticket closed" in last.payload["text"]
 
 
 # ---- direct unit coverage of helpers + wiring ----

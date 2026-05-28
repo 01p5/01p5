@@ -71,6 +71,10 @@ export const api = {
     ticketId: string,
   ): Promise<{ ticket_id: string; events: TicketEventDTO[] }> =>
     getJson(`/tickets/${encodeURIComponent(ticketId)}`),
+  closeTicket: (
+    ticketId: string,
+  ): Promise<{ ticket_id: string; summary: string }> =>
+    postJson(`/tickets/${encodeURIComponent(ticketId)}/close`, {}),
 
   // Approvals
   listApprovals: (): Promise<PendingApproval[]> => getJson("/approvals"),
