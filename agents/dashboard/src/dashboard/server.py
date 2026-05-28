@@ -20,6 +20,15 @@ LLM-driven (agent picks the tools):
 - ``GET /tasks/{id}/events``      — SSE stream of bus messages for the
                                     task.
 
+Group-chat tickets (the main agent + dispatched sub-agents in one thread):
+
+- ``POST /tickets/{id}/messages`` — body: ``{message}``. Posts a human turn
+                                    and runs the main agent on the ticket.
+- ``GET /tickets/{id}``           — the ticket's full transcript.
+- ``GET /tickets/{id}/events``    — SSE stream of the ticket transcript
+                                    (human + agent messages, dispatches,
+                                    tool calls, ask_agent exchanges).
+
 Live activity + audit:
 
 - ``GET /events``                 — SSE stream of every bus message.
@@ -73,6 +82,7 @@ from agentlib import (
     BusMessage,
     EmbeddingMemoryStore,
     InMemoryBus,
+    InMemoryTicketStore,
     JsonlAuditLogger,
     JsonlMemoryStore,
     JsonlRollbackStore,
@@ -82,6 +92,8 @@ from agentlib import (
     RollbackStore,
     Router,
     TaskMessage,
+    TicketEvent,
+    TicketStore,
     gate_tools,
 )
 from langchain_core.tools import BaseTool
@@ -125,11 +137,17 @@ class DashboardServer:
         port: int = 8765,
         static_dir: Optional[Path] = None,
         mcp_servers: Optional[list[dict[str, Any]]] = None,
+        ticket_store: Optional[TicketStore] = None,
     ):
         self.orchestrator = orchestrator
         self.bus = bus
         self.approval_hook = approval_hook
         self.audit_log_path = audit_log_path
+        # Group-chat ticket transcript (Phase 2). The orchestrator writes
+        # dispatch/result/tool_call/ask events here; the dashboard records
+        # human + main-agent messages and streams the whole transcript per
+        # ticket over SSE. None => group chat disabled (endpoints 404).
+        self.ticket_store = ticket_store
         # MCP server registry: list of dicts with the per-server view
         # the UI needs (name, target_agent, tools, destructive set,
         # config-summary). Populated by build_default_server when
@@ -240,6 +258,68 @@ class DashboardServer:
         ).start()
         return task_id
 
+    # ---- group-chat ticket submission (worker thread) ----
+
+    def submit_ticket(self, ticket_id: str, message: str) -> None:
+        """Post a human message into a ticket and run the main agent on it.
+
+        The human turn is recorded synchronously (so the SSE stream shows it
+        immediately); the main agent runs in a worker thread, dispatching
+        specialists as it sees fit. The main agent's reply is recorded as an
+        ``agent_message`` event. Specialist dispatches, tool calls, and
+        ask_agent exchanges land on the transcript via the orchestrator."""
+        if self.ticket_store is None:
+            raise RuntimeError("group chat disabled: no ticket store wired")
+
+        self.ticket_store.append(
+            TicketEvent(
+                ticket_id=ticket_id,
+                actor="human",
+                kind="human_message",
+                payload={"text": message},
+                task_id=ticket_id,
+            )
+        )
+
+        def worker():
+            task = TaskMessage(
+                task_id=str(uuid.uuid4()),
+                natural_language=message,
+                ticket_id=ticket_id,
+                parent_task_id=ticket_id,
+            )
+            try:
+                # announce=False: the main agent's own turn is recorded as a
+                # single agent_message below, not as a dispatch+result pair.
+                result = self.orchestrator.dispatch_to(
+                    "main", task, announce=False
+                )
+                payload = {
+                    "text": result.summary,
+                    "status": result.status,
+                    "resolved": bool((result.artifacts or {}).get("resolved")),
+                }
+            except Exception as exc:
+                logger.exception("ticket %s main-agent turn failed", ticket_id)
+                payload = {
+                    "text": f"main agent error: {type(exc).__name__}: {exc}",
+                    "status": "failed",
+                    "resolved": False,
+                }
+            self.ticket_store.append(
+                TicketEvent(
+                    ticket_id=ticket_id,
+                    actor="main",
+                    kind="agent_message",
+                    payload=payload,
+                    task_id=ticket_id,
+                )
+            )
+
+        threading.Thread(
+            target=worker, name=f"dashboard-ticket:{ticket_id}", daemon=True
+        ).start()
+
     # ---- HTTP server lifecycle ----
 
     def serve(self) -> None:
@@ -300,6 +380,11 @@ class DashboardServer:
                     return outer._handle_get_task(self, rest)
                 if path == "/events":
                     return outer._handle_all_events(self)
+                if path.startswith("/tickets/"):
+                    rest = path[len("/tickets/"):]
+                    if rest.endswith("/events"):
+                        return outer._handle_ticket_events(self, rest[: -len("/events")])
+                    return outer._handle_get_ticket(self, rest)
                 if path == "/approvals":
                     return outer._handle_list_approvals(self)
                 if path == "/audit":
@@ -341,6 +426,9 @@ class DashboardServer:
             def do_POST(self):  # noqa: N802
                 if self.path == "/tasks":
                     return outer._handle_post_task(self)
+                if self.path.startswith("/tickets/") and self.path.endswith("/messages"):
+                    inner = self.path[len("/tickets/"):-len("/messages")]
+                    return outer._handle_post_ticket_message(self, inner)
                 if self.path.startswith("/approvals/"):
                     return outer._handle_resolve_approval(
                         self, self.path[len("/approvals/"):]
@@ -449,6 +537,40 @@ class DashboardServer:
             return
         task_id = self.submit(nl.strip())
         self._send_json(req, 202, {"task_id": task_id})
+
+    # ---- group-chat tickets ----
+
+    def _handle_post_ticket_message(
+        self, req: BaseHTTPRequestHandler, ticket_id: str
+    ) -> None:
+        if self.ticket_store is None:
+            self._send_json(req, 404, {"error": "group chat not enabled"})
+            return
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            self._send_json(req, 400, {"error": "invalid JSON"})
+            return
+        message = body.get("message")
+        if not isinstance(message, str) or not message.strip():
+            self._send_json(req, 400, {"error": "message required"})
+            return
+        self.submit_ticket(ticket_id, message.strip())
+        self._send_json(req, 202, {"ticket_id": ticket_id})
+
+    def _handle_get_ticket(
+        self, req: BaseHTTPRequestHandler, ticket_id: str
+    ) -> None:
+        if self.ticket_store is None:
+            self._send_json(req, 404, {"error": "group chat not enabled"})
+            return
+        events = [e.to_dict() for e in self.ticket_store.transcript(ticket_id)]
+        self._send_json(req, 200, {"ticket_id": ticket_id, "events": events})
+
+    def _handle_ticket_events(
+        self, req: BaseHTTPRequestHandler, ticket_id: str
+    ) -> None:
+        self._serve_ticket_sse(req, ticket_id)
 
     def _handle_list_tasks(self, req: BaseHTTPRequestHandler) -> None:
         with self._tasks_lock:
@@ -1123,6 +1245,40 @@ class DashboardServer:
     def _handle_all_events(self, req: BaseHTTPRequestHandler) -> None:
         self._serve_sse(req, task_filter=None)
 
+    def _serve_ticket_sse(self, req: BaseHTTPRequestHandler, ticket_id: str) -> None:
+        """Stream a ticket's group-chat transcript. The transcript is the
+        unified record (human + agent messages, dispatches, tool calls,
+        ask_agent exchanges), so we tail the ticket store by monotonic
+        ``seq`` rather than the bus — the bus misses directly-written
+        events. Polling is fine at single-dashboard volume."""
+        if self.ticket_store is None:
+            req.send_response(404)
+            req.end_headers()
+            return
+        req.send_response(200)
+        req.send_header("Content-Type", "text/event-stream")
+        req.send_header("Cache-Control", "no-cache")
+        req.send_header("X-Accel-Buffering", "no")
+        req.end_headers()
+
+        last_seq = 0
+        last_heartbeat = time.monotonic()
+        while True:
+            new_events = self.ticket_store.transcript(ticket_id, after_seq=last_seq)
+            for ev in new_events:
+                if not _send_sse_ticket_event(req, ev):
+                    return  # client disconnected
+                last_seq = ev.seq
+            now = time.monotonic()
+            if now - last_heartbeat > 15.0:
+                try:
+                    req.wfile.write(b": heartbeat\n\n")
+                    req.wfile.flush()
+                    last_heartbeat = now
+                except (ConnectionError, BrokenPipeError):
+                    return
+            time.sleep(0.6)
+
     def _serve_sse(
         self, req: BaseHTTPRequestHandler, task_filter: Optional[str]
     ) -> None:
@@ -1176,6 +1332,7 @@ def _send_sse_event(req: BaseHTTPRequestHandler, msg: BusMessage) -> bool:
     payload = {
         "msg_id": msg.msg_id,
         "task_id": msg.task_id,
+        "ticket_id": getattr(msg, "ticket_id", None),
         "sender": msg.sender,
         "recipient": msg.recipient,
         "kind": msg.kind,
@@ -1184,6 +1341,17 @@ def _send_sse_event(req: BaseHTTPRequestHandler, msg: BusMessage) -> bool:
         "causation_id": msg.causation_id,
     }
     line = f"data: {json.dumps(payload, default=str)}\n\n".encode("utf-8")
+    try:
+        req.wfile.write(line)
+        req.wfile.flush()
+        return True
+    except (ConnectionError, BrokenPipeError):
+        return False
+
+
+def _send_sse_ticket_event(req: BaseHTTPRequestHandler, ev: TicketEvent) -> bool:
+    """Write one group-chat transcript event as an SSE data line."""
+    line = f"data: {json.dumps(ev.to_dict(), default=str)}\n\n".encode("utf-8")
     try:
         req.wfile.write(line)
         req.wfile.flush()
@@ -1271,6 +1439,7 @@ def build_default_server(
     from olympus_cli.registry import build_orchestrator, default_agents
 
     bus = InMemoryBus()
+    ticket_store = InMemoryTicketStore()
     approval_hook = QueueApprovalHook()
     if rollback is None and os.environ.get("OLYMPUS_ROLLBACK", "").lower() != "disabled":
         rollback_log_path = rollback_log_path or str(
@@ -1295,6 +1464,12 @@ def build_default_server(
             else:
                 memory = JsonlMemoryStore(memory_log_path)
     agents = default_agents()
+    # The generalist main agent coordinates group-chat tickets. It is a
+    # dispatch target (routable=False) so the LLMRouter never picks it for a
+    # standalone task; only the chat/ticket path invokes it.
+    from main_agent.agent import MainAgent
+
+    agents.append(MainAgent())
     mcp_registry = _wire_mcp_servers(agents, mcp_servers or [])
     orch = build_orchestrator(
         ctx=ctx,
@@ -1302,6 +1477,7 @@ def build_default_server(
         router=router,
         bus=bus,
         memory=memory,
+        ticket_store=ticket_store,
     )
     return DashboardServer(
         orchestrator=orch,
@@ -1311,6 +1487,7 @@ def build_default_server(
         host=host,
         port=port,
         mcp_servers=mcp_registry,
+        ticket_store=ticket_store,
     )
 
 

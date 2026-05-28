@@ -138,6 +138,9 @@ class MainAgent(AgentSpec):
     # No native tools — dispatch + ask_agent are injected at handle() time
     # from the AgentContext seams.
     tools: Sequence[Any] = []
+    # The coordinator is a dispatch target + chat entry point, never a
+    # routing candidate — the LLMRouter must not pick it for a task.
+    routable = False
     model = gpt55
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:

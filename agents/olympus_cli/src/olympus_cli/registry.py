@@ -12,7 +12,7 @@ custom ``agents`` list in ``build_orchestrator``.
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 import os
 from pathlib import Path
@@ -64,6 +64,7 @@ def build_orchestrator(
     router: Optional[Router] = None,
     bus: Optional[InMemoryBus] = None,
     memory: Optional[MemoryStore] = None,
+    ticket_store: Optional[Any] = None,
 ) -> Orchestrator:
     """Construct an Orchestrator wired to a fresh in-memory bus by default.
 
@@ -86,11 +87,20 @@ def build_orchestrator(
         agents = default_agents()
     bus = bus or InMemoryBus()
     if router is None:
-        router = LLMRouter({a.name: a.domain for a in agents})
+        # Non-routable agents (the main coordinator) are dispatch targets,
+        # not routing candidates — keep them out of the router catalog.
+        router = LLMRouter(
+            {a.name: a.domain for a in agents if getattr(a, "routable", True)}
+        )
     if memory is None:
         memory = _memory_from_env()
     return Orchestrator(
-        bus=bus, agents=agents, ctx=ctx, router=router, memory=memory
+        bus=bus,
+        agents=agents,
+        ctx=ctx,
+        router=router,
+        memory=memory,
+        ticket_store=ticket_store,
     )
 
 

@@ -163,6 +163,10 @@ class AgentSpec(ABC):
     # aren't met is silently excluded from candidate-agent lists, so
     # the router never picks it.
     prerequisites: set[str] = set()
+    # Whether the router may pick this agent for a standalone task. The main
+    # (coordinator) agent sets this False: it is a dispatch target + chat
+    # entry point, never something the LLMRouter routes a task to.
+    routable: bool = True
 
     @abstractmethod
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult: ...

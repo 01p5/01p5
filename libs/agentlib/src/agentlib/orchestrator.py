@@ -153,6 +153,7 @@ class Orchestrator:
         initial_catalog = {
             a.name: a.domain for a in agents
             if not getattr(a, "prerequisites", None)
+            and getattr(a, "routable", True)
         }
         self.router = router or LLMRouter(initial_catalog)
         self._result_timeout = result_timeout_seconds
@@ -182,6 +183,7 @@ class Orchestrator:
         active = {
             a.name: a.domain for a in self.agents.values()
             if getattr(a, "prerequisites", set()) <= fulfilled_prereqs
+            and getattr(a, "routable", True)
         }
         # Static-dict router: just mutate. Future routers can override
         # this by implementing their own .agent_descriptions surface.
