@@ -291,4 +291,17 @@ export const api = {
   },
   removeTerminalSession: (id: string): Promise<{ ok: true }> =>
     deleteJson(`/terminal/sessions/${encodeURIComponent(id)}`),
+
+  /** Pull-based ask of the terminal_companion agent (TERM.4b).
+   *  Returns the structured answer + any suggested next-command
+   *  one-liners the LLM produced. The frontend renders them as code
+   *  blocks the user can copy by hand (click-to-inject lands in
+   *  TERM.5). */
+  askTerminalCompanion: (sessionId: string, question: string): Promise<{
+    answer: string;
+    suggested_commands: string[];
+  }> => postJson(
+    `/terminal/sessions/${encodeURIComponent(sessionId)}/ask`,
+    { question },
+  ),
 };

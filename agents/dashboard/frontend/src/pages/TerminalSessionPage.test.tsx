@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { wsUrlFor, TerminalSessionPage } from "./TerminalSessionPage";
+import { api } from "../api";
 
 
 // Capture mock instances so each test can drive ws events.
@@ -119,6 +121,46 @@ describe("TerminalSessionPage", () => {
       expect(screen.getByTestId("conn-pill").textContent).toMatch(/error/i),
     );
     expect(screen.getByText(/connection error/i)).toBeInTheDocument();
+  });
+
+  it("renders the companion panel by default", () => {
+    renderAt();
+    expect(screen.getByTestId("companion-panel")).toBeInTheDocument();
+    expect(screen.getByText(/ask anything about this terminal session/i))
+      .toBeInTheDocument();
+  });
+
+  it("hides the companion panel when the close button is clicked", async () => {
+    renderAt();
+    expect(screen.getByTestId("companion-panel")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("companion-close"));
+    expect(screen.queryByTestId("companion-panel")).toBeNull();
+    expect(screen.getByTestId("companion-open")).toBeInTheDocument();
+  });
+
+  it("submitting a question calls askTerminalCompanion + renders answer", async () => {
+    const ask = vi.spyOn(api, "askTerminalCompanion").mockResolvedValue({
+      answer: "the prompt is in /opt/olympus",
+      suggested_commands: ["pwd", "ls"],
+    });
+    renderAt("sess-1");
+    const input = screen.getByTestId("companion-input");
+    await userEvent.type(input, "where am I");
+    await userEvent.click(screen.getByTestId("companion-send"));
+    await waitFor(() => expect(ask).toHaveBeenCalled());
+    expect(ask.mock.calls[0][0]).toBe("sess-1");
+    expect(ask.mock.calls[0][1]).toBe("where am I");
+    expect(await screen.findByText(/the prompt is in/)).toBeInTheDocument();
+    expect(screen.getByText("pwd")).toBeInTheDocument();
+    expect(screen.getByText("ls")).toBeInTheDocument();
+  });
+
+  it("surfaces an error in the history when ask fails", async () => {
+    vi.spyOn(api, "askTerminalCompanion").mockRejectedValue(new Error("LLM down"));
+    renderAt("sess-1");
+    await userEvent.type(screen.getByTestId("companion-input"), "anything");
+    await userEvent.click(screen.getByTestId("companion-send"));
+    expect(await screen.findByText(/LLM down/)).toBeInTheDocument();
   });
 
   it("closes the WebSocket on unmount", () => {
