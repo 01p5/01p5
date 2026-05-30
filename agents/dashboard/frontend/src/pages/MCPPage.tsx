@@ -509,7 +509,20 @@ function HPCIntegrationCard({ servers, onConnected }: HPCCardProps): JSX.Element
         // registers a real cluster via slurm-mgr's dashboard, they'd
         // override to `--cluster <name>` in the advanced section.
         args: ["--local"],
-        destructive: ["jobs_cancel", "jobs_hold", "jobs_release", "jobs_requeue"],
+        // Mirror of the real slurm-mcp's destructive=True annotations
+        // (slurm_mcp/tools.py). Until agentlib auto-derives destructive
+        // from MCP advisory annotations.destructive, this stays in
+        // sync by hand. Missing entries = bypassed approval queue.
+        destructive: [
+          "jobs_cancel", "jobs_hold", "jobs_release", "jobs_requeue", "jobs_update",
+          "nodes_set_state",
+          "partitions_create", "partitions_update", "partitions_delete",
+          "reservations_create", "reservations_update", "reservations_delete",
+          "accounts_add", "accounts_modify", "accounts_delete",
+          "users_add", "users_modify", "users_delete",
+          "qos_add", "qos_modify", "qos_delete",
+          "cluster_reconfigure",
+        ],
       },
     ];
 
