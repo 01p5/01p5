@@ -96,3 +96,11 @@ serviceAccount:
 rbac:
   create: true
   destructive: false    # true → grants delete on pods (gated by ApprovalHook anyway)
+
+# Generic Helm extension points. Per-deploy data the chart itself
+# doesn't model. Used by e.g. the sandbox demo to mount its own MCP
+# server binaries into the pod + extend PATH so they're discoverable.
+# Each is passed through as-is to the deployment spec.
+extraEnv: []          # list of corev1 EnvVar
+extraVolumes: []      # list of corev1 Volume
+extraVolumeMounts: [] # list of corev1 VolumeMount

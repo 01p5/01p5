@@ -109,6 +109,12 @@ spec:
             # both. Per-key PEM bodies live in {dir}/keys/{key_id}.
             - name: OLYMPUS_INVENTORY_PATH
               value: {{ .Values.dashboard.inventoryPath | quote }}
+            {{- with .Values.extraEnv }}
+            # extraEnv — generic Helm extension. Per-deploy env vars
+            # the chart itself doesn't know about (e.g. sandbox demo
+            # extends PATH so mounted demo MCP binaries are discoverable).
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 5
@@ -125,6 +131,9 @@ spec:
               mountPath: {{ .Values.secrets.sshPrivateKeyMount }}
               subPath: {{ .Values.secrets.sshPrivateKeyKey }}
               readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
         - name: audit
@@ -147,6 +156,12 @@ spec:
             items:
               - key: {{ .Values.secrets.sshPrivateKeyKey }}
                 path: {{ .Values.secrets.sshPrivateKeyKey }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        # extraVolumes — generic Helm extension. Pair with extraVolumeMounts
+        # above to expose per-deploy data (e.g. sandbox demo MCP binaries
+        # in a ConfigMap mounted as 0755 + put on PATH via extraEnv).
+        {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- if .Values.audit.persistence.enabled }}
 ---
