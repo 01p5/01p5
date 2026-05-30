@@ -13,6 +13,7 @@ import { AnsiblePage } from "./pages/AnsiblePage";
 import { HostsPage } from "./pages/HostsPage";
 import { ProgrammerPage } from "./pages/ProgrammerPage";
 import { MCPPage } from "./pages/MCPPage";
+import { TerminalPage, TerminalSessionPage } from "./pages/TerminalPage";
 
 // Wrapper so /chat and /chat/:ticketId both render ChatPage, remounting
 // (via key) when the ticket changes so its state resets cleanly.
@@ -64,6 +65,8 @@ export default function App(): JSX.Element {
           <Route path="programmer" element={<Navigate to="/capabilities/programmer" replace />} />
           <Route path="hosts" element={<HostsPage />} />
           <Route path="mcp" element={<MCPPage />} />
+          <Route path="terminal" element={<TerminalPage />} />
+          <Route path="terminal/:sessionId" element={<TerminalSessionPage />} />
           {/* Catch-all → chat */}
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Route>

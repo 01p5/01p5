@@ -230,6 +230,24 @@ export interface MemoryEntry {
   };
 }
 
+/** Live terminal session on the dashboard pod — owns a PTY-wrapped
+ *  ssh subprocess targeting an inventory host. Server-side shape mirrors
+ *  dashboard.terminal.SessionInfo + the ws_url POST returns. */
+export interface TerminalSession {
+  session_id: string;
+  host_alias: string;
+  ssh_user: string;
+  address: string;
+  created_at: number;
+  attached: boolean;
+  last_active_at: number;
+  alive: boolean;
+  /** Only set on the create response — the relative WS path the browser
+   *  dials to bridge xterm to the pty. List responses omit it; clients
+   *  compute the same path from session_id. */
+  ws_url?: string;
+}
+
 export interface InventoryHost {
   id: string;
   name: string;

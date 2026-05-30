@@ -64,8 +64,8 @@ describe("Layout", () => {
     renderLayout();
     expect(screen.getByText(/^olympus$/i)).toBeInTheDocument();
     // CHAT.1 dropped Sessions; NAV.1 collapsed K8s/TF/Ansible/Programmer
-    // into Capabilities. Topnav is intentionally compact now.
-    ["Chat", "Auditing", "Capabilities", "Hosts", "MCP"].forEach((label) => {
+    // into Capabilities. TERM.3a added Terminal.
+    ["Chat", "Auditing", "Capabilities", "Hosts", "Terminal", "MCP"].forEach((label) => {
       expect(screen.getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
     });
     expect(screen.queryByRole("link", { name: /^sessions$/i })).toBeNull();

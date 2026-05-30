@@ -16,6 +16,7 @@ import type {
   MeResponse,
   TaskRecord,
   TelemetryResponse,
+  TerminalSession,
   TicketEventDTO,
   TicketSummary,
   ToolDescriptor,
@@ -270,4 +271,24 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.text();
   },
+
+  // ---- Terminal sessions (TERM.2a/2b backend, TERM.3 UI) ----
+  // Pool of operator-driven SSH-PTY sessions hosted on the dashboard
+  // pod. Create picks an inventory host (+ optional ssh_user override);
+  // the server returns a ws_url the browser dials with xterm.js.
+  listTerminalSessions: async (): Promise<TerminalSession[]> => {
+    const r = await getJson<{ sessions: TerminalSession[] }>("/terminal/sessions");
+    return r.sessions;
+  },
+  createTerminalSession: async (body: {
+    host_alias: string;
+    ssh_user?: string;
+  }): Promise<TerminalSession> => {
+    const r = await postJson<{ session: TerminalSession }>(
+      "/terminal/sessions", body,
+    );
+    return r.session;
+  },
+  removeTerminalSession: (id: string): Promise<{ ok: true }> =>
+    deleteJson(`/terminal/sessions/${encodeURIComponent(id)}`),
 };

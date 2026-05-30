@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { MessageSquare, Plug, Network, ClipboardList, Wrench } from "lucide-react";
+import { MessageSquare, Plug, Network, ClipboardList, Wrench, TerminalSquare } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
@@ -17,6 +17,7 @@ const TABS = [
   { to: "/auditing",     label: "Auditing",     icon: ClipboardList },
   { to: "/capabilities", label: "Capabilities", icon: Wrench },
   { to: "/hosts",        label: "Hosts",        icon: Network },
+  { to: "/terminal",     label: "Terminal",     icon: TerminalSquare },
   { to: "/mcp",          label: "MCP",          icon: Plug },
 ];
 
