@@ -3,6 +3,7 @@ import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History, Netwo
 import clsx from "clsx";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
+import { ApprovalToastBroker } from "./ApprovalToastBroker";
 import { StatusDot } from "./StatusDot";
 import { TelemetryFooter } from "./TelemetryFooter";
 
@@ -87,6 +88,7 @@ export function Layout(): JSX.Element {
         <Outlet />
       </main>
       <TelemetryFooter />
+      <ApprovalToastBroker />
     </div>
   );
 }
