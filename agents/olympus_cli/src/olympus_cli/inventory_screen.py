@@ -102,5 +102,12 @@ class InventoryScreen(Screen):
 
     def _reload_rendered(self) -> None:
         static = self.query_one("#rendered", Static)
-        text = render_ansible_inventory(self._store.list_hosts())
-        static.update(text or "(empty inventory — add hosts via olympus-inventory or the webui)")
+        hosts = self._store.list_hosts()
+        if hosts:
+            text = render_ansible_inventory(hosts)
+        else:
+            # ``render_ansible_inventory([])`` still emits the header
+            # comment (truthy), so a plain ``text or fallback`` would
+            # never trigger. Branch explicitly.
+            text = "(empty inventory — add hosts via olympus-inventory or the webui)"
+        static.update(text)
