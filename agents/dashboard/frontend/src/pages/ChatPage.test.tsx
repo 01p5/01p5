@@ -1,9 +1,29 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { ChatPage, actorAccent, payloadText, CollapsibleProse } from "./ChatPage";
 import type { TicketEventDTO } from "../types";
 import { api } from "../api";
+
+// AUD.5b: ChatPage now uses useNavigate() to sync the first-send
+// ticket id into the URL, which requires a Router context in tests.
+// MemoryRouter's history is in-memory (window.location doesn't move),
+// so we capture the location via a sibling component for assertions.
+let lastLocation = "";
+function LocationCapture(): null {
+  const loc = useLocation();
+  lastLocation = loc.pathname;
+  return null;
+}
+function renderChat(initialTicketId?: string): void {
+  render(
+    <MemoryRouter initialEntries={[initialTicketId ? `/chat/${initialTicketId}` : "/chat"]}>
+      <ChatPage initialTicketId={initialTicketId} />
+      <LocationCapture />
+    </MemoryRouter>,
+  );
+}
 
 // EventSource stub shared by all tests; tests grab .latest to push events.
 class MockEventSource {
@@ -53,7 +73,7 @@ afterEach(() => {
 
 describe("ChatPage — empty state", () => {
   it("renders the EmptyChat heading and example buttons", () => {
-    render(<ChatPage />);
+    renderChat();
     expect(screen.getByRole("heading", { name: /ask olympus/i })).toBeInTheDocument();
     const examples = screen
       .getAllByRole("button")
@@ -62,7 +82,7 @@ describe("ChatPage — empty state", () => {
   });
 
   it("New button is disabled when the transcript is empty", () => {
-    render(<ChatPage />);
+    renderChat();
     expect(screen.getByRole("button", { name: /^New$/i })).toBeDisabled();
   });
 });
@@ -70,7 +90,7 @@ describe("ChatPage — empty state", () => {
 describe("ChatPage — submission", () => {
   it("submitting posts to the ticket and clears the input", async () => {
     const spy = vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
-    render(<ChatPage />);
+    renderChat();
     const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
     await userEvent.type(input, "list pods");
     await act(async () => { fireEvent.submit(input.closest("form")!); });
@@ -81,7 +101,7 @@ describe("ChatPage — submission", () => {
 
   it("clicking an example button posts that text", async () => {
     const spy = vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
-    render(<ChatPage />);
+    renderChat();
     await act(async () => {
       await userEvent.click(screen.getByText(/list pods in default namespace/i));
     });
@@ -90,7 +110,7 @@ describe("ChatPage — submission", () => {
 
   it("a failed send surfaces a local error message", async () => {
     vi.spyOn(api, "sendTicketMessage").mockRejectedValue(new Error("boom"));
-    render(<ChatPage />);
+    renderChat();
     const input = screen.getByPlaceholderText(/describe a task/i) as HTMLInputElement;
     await userEvent.type(input, "x");
     await act(async () => { fireEvent.submit(input.closest("form")!); });
@@ -100,7 +120,7 @@ describe("ChatPage — submission", () => {
   it("Resolve button closes the ticket and starts a fresh one", async () => {
     vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
     const close = vi.spyOn(api, "closeTicket").mockResolvedValue({ ticket_id: "T", summary: "done" });
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hello" } }));
 
     const resolve = screen.getByRole("button", { name: /resolve/i });
@@ -114,13 +134,13 @@ describe("ChatPage — submission", () => {
   });
 
   it("Resolve button is disabled on an empty transcript", () => {
-    render(<ChatPage />);
+    renderChat();
     expect(screen.getByRole("button", { name: /resolve/i })).toBeDisabled();
   });
 
   it("New button resets the ticket (subscribes to a new stream)", async () => {
     vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "T" });
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hello" } }));
     expect(screen.getByText("hello")).toBeInTheDocument();
 
@@ -134,20 +154,20 @@ describe("ChatPage — submission", () => {
 
 describe("ChatPage — transcript rendering", () => {
   it("renders a human message bubble", async () => {
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hi team" } }));
     expect(screen.getByText("hi team")).toBeInTheDocument();
   });
 
   it("renders a main agent reply", async () => {
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "on it" } }));
     expect(screen.getByText("on it")).toBeInTheDocument();
     expect(screen.getByText(/^Main$/)).toBeInTheDocument();
   });
 
   it("renders a dispatch chip and a specialist result", async () => {
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "list pods" } }));
     await push(mkEvent({ kind: "agent_result", actor: "sysadmin", payload: { summary: "3 pods running", status: "success" } }));
     expect(screen.getByText("list pods")).toBeInTheDocument();
@@ -157,7 +177,7 @@ describe("ChatPage — transcript rendering", () => {
   });
 
   it("renders a specialist result's artifacts (data) in a collapsible block", async () => {
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({
       kind: "agent_result",
       actor: "sysadmin",
@@ -174,31 +194,65 @@ describe("ChatPage — transcript rendering", () => {
   });
 
   it("renders an ask_agent question line", async () => {
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "agent_message", actor: "programmer", payload: { type: "question", to: "sysadmin", question: "is the pod up?" } }));
     expect(screen.getByText("is the pod up?")).toBeInTheDocument();
     expect(screen.getByText("asks")).toBeInTheDocument();
   });
 
   it("renders a tool_call line with the tool name", async () => {
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "tool_call", actor: "sysadmin", payload: { tool: "kubectl_get", args: { kind: "pods" }, result: "ok", approved: true } }));
     expect(screen.getByText("kubectl_get")).toBeInTheDocument();
     expect(screen.getByText("approved")).toBeInTheDocument();
   });
 
   it("renders an approval-request notice", async () => {
-    render(<ChatPage />);
+    renderChat();
     await push(mkEvent({ kind: "approval_request", actor: "sysadmin", payload: { tool: "delete_pod" } }));
     expect(screen.getByText(/requested approval for delete_pod/i)).toBeInTheDocument();
   });
 
   it("dedupes events by event_id (no double render on replay)", async () => {
-    render(<ChatPage />);
+    renderChat();
     const ev = mkEvent({ kind: "human_message", actor: "human", payload: { text: "once" } });
     await push(ev);
     await push(ev); // same event_id replayed
     expect(screen.getAllByText("once")).toHaveLength(1);
+  });
+
+  it("syncs the ticket id into the URL after the first send (AUD.5b)", async () => {
+    vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "ignored" });
+    // Inline the route under a Routes so we can read the location.
+    // Easier: render the page and assert window.location after submit.
+    renderChat();
+    // First send: triggers POST then navigate('/chat/{id}', { replace: true }).
+    const input = await screen.findByPlaceholderText(/describe a task/i);
+    await userEvent.type(input, "hello world");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(api.sendTicketMessage).toHaveBeenCalled());
+    // sendTicketMessage's first arg is the generated ticket id — it
+    // should match the URL after the post-submit navigate fires.
+    const ticketId = vi.mocked(api.sendTicketMessage).mock.calls[0][0];
+    await waitFor(() => {
+      expect(lastLocation).toBe(`/chat/${ticketId}`);
+    });
+  });
+
+  it("does NOT re-navigate on subsequent sends (URL sync is one-shot)", async () => {
+    vi.spyOn(api, "sendTicketMessage").mockResolvedValue({ ticket_id: "x" });
+    renderChat("tk-existing");
+    const input = await screen.findByPlaceholderText(/describe a task/i);
+    await userEvent.type(input, "first");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(api.sendTicketMessage).toHaveBeenCalledTimes(1));
+    // URL already matched the initial id, no navigate fired.
+    expect(lastLocation).toBe("/chat/tk-existing");
+    // Second send doesn't perturb the URL either.
+    await userEvent.type(input, "second");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(api.sendTicketMessage).toHaveBeenCalledTimes(2));
+    expect(lastLocation).toBe("/chat/tk-existing");
   });
 });
 

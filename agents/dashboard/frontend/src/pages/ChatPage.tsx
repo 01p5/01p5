@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2 } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
@@ -49,7 +50,14 @@ export function payloadText(ev: TicketEventDTO): string {
 }
 
 export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {}): JSX.Element {
+  const navigate = useNavigate();
   const [ticketId, setTicketId] = useState<string>(() => initialTicketId || newTicketId());
+  // Track whether this ticket's id is already reflected in the URL.
+  // When the user lands on /chat (no :ticketId), the ticket is local-only
+  // until first send; then the URL syncs so refresh / deep-link / the
+  // ApprovalToastBroker's "is the user looking at this ticket?" check
+  // all become first-class.
+  const [urlSynced, setUrlSynced] = useState<boolean>(Boolean(initialTicketId));
   const [events, setEvents] = useState<TicketEventDTO[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -87,6 +95,16 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
     try {
       await api.sendTicketMessage(ticketId, trimmed);
       setInput("");
+      // First-send URL sync: lift the local-state ticketId into the URL
+      // so refresh preserves the conversation, deep-linking works, and
+      // the ApprovalToastBroker can read window.location to decide
+      // whether to render an approval inline-in-chat vs as a toast.
+      // ``replace`` keeps Back working naturally (it goes to wherever
+      // the user came from, not to /chat-with-no-id).
+      if (!urlSynced) {
+        navigate(`/chat/${encodeURIComponent(ticketId)}`, { replace: true });
+        setUrlSynced(true);
+      }
     } catch (err) {
       // Surface a local error line; the real transcript is server-driven.
       setEvents((prev) => [...prev, {
@@ -106,6 +124,7 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
 
   const resetConversation = (): void => {
     setTicketId(newTicketId());
+    setUrlSynced(false);
     setInput("");
     inputRef.current?.focus();
   };
