@@ -130,7 +130,12 @@ slurmDashboard:
     requests: { cpu: 50m,  memory: 64Mi }
     limits:   { cpu: 500m, memory: 256Mi }
   persistence:
-    enabled: true
+    # Default off — kubeadm / kind clusters typically have no default
+    # StorageClass, so a PVC just sits unbound and blocks scheduling.
+    # Operators with dynamic provisioning flip this to true.
+    # Cost of off: hosts.json doesn't survive pod restart; the user
+    # re-registers clusters/nodes via the embedded portal.
+    enabled: false
     size: 256Mi
     storageClass: ""
 
@@ -145,6 +150,11 @@ gpuDashboard:
     requests: { cpu: 50m,  memory: 64Mi }
     limits:   { cpu: 500m, memory: 256Mi }
   persistence:
-    enabled: true
+    # Default off — kubeadm / kind clusters typically have no default
+    # StorageClass, so a PVC just sits unbound and blocks scheduling.
+    # Operators with dynamic provisioning flip this to true.
+    # Cost of off: hosts.json doesn't survive pod restart; the user
+    # re-registers clusters/nodes via the embedded portal.
+    enabled: false
     size: 256Mi
     storageClass: ""
