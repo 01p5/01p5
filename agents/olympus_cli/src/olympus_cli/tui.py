@@ -26,6 +26,7 @@ import uuid
 
 try:
     from textual.app import App, ComposeResult
+    from textual.binding import Binding
     from textual.containers import Vertical
     from textual.widgets import Footer, Header, Input, Log
 except ImportError as exc:  # pragma: no cover — exercised at runtime, not in tests
@@ -46,7 +47,16 @@ from .registry import build_orchestrator, default_agents, manual_router
 
 
 class OlympusApp(App[int]):
-    """Single-screen TUI: input box at top, message log below."""
+    """Single-screen TUI: input box at top, message log below.
+
+    Press ``i`` to push the InventoryScreen (browse hosts + ssh keys +
+    rendered ansible inventory). Edits go through ``olympus-inventory``
+    or the webui's Hosts tab.
+    """
+
+    BINDINGS = [
+        Binding("i", "open_inventory", "inventory"),
+    ]
 
     CSS = """
     Screen { layout: vertical; }
@@ -54,12 +64,21 @@ class OlympusApp(App[int]):
     Input { dock: top; }
     """
 
-    def __init__(self, router_name: str = "llm", audit_log_path: str | None = None):
+    def __init__(self, router_name: str = "llm", audit_log_path: str | None = None,
+                 inventory_path: str | None = None):
         super().__init__()
         self._router_name = router_name
         self._audit_log_path = audit_log_path or os.path.expanduser("~/.olympus/audit.jsonl")
+        self._inventory_path = inventory_path or os.path.expanduser("~/.olympus/inventory.json")
         self._log: Log | None = None
         self._bus = InMemoryBus()
+
+    def action_open_inventory(self) -> None:
+        # Lazy import so the inventory screen's textual symbols are only
+        # touched when actually navigating to it.
+        from .inventory_screen import InventoryScreen
+
+        self.push_screen(InventoryScreen(store_path=self._inventory_path))
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -123,8 +142,17 @@ def main(argv: list[str] | None = None) -> int:
         "--audit-log",
         default=os.path.expanduser("~/.olympus/audit.jsonl"),
     )
+    parser.add_argument(
+        "--inventory",
+        default=os.path.expanduser("~/.olympus/inventory.json"),
+        help="Inventory store file (browse with the 'i' key binding).",
+    )
     args = parser.parse_args(argv)
-    app = OlympusApp(router_name=args.router, audit_log_path=args.audit_log)
+    app = OlympusApp(
+        router_name=args.router,
+        audit_log_path=args.audit_log,
+        inventory_path=args.inventory,
+    )
     return app.run() or 0
 
 

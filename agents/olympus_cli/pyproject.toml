@@ -23,6 +23,7 @@ tui = ["textual>=0.50"]
 [project.scripts]
 olympus = "olympus_cli.main:main"
 olympus-tui = "olympus_cli.tui:main"
+olympus-inventory = "olympus_cli.inventory_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
