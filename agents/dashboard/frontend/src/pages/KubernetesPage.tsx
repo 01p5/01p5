@@ -111,7 +111,7 @@ export function KubernetesPage(): JSX.Element {
                   : "text-text-secondary hover:text-text-primary"
               }`}
             >
-              <Icon size={13} />
+              <Icon size={16} strokeWidth={2.25} />
               {label}
             </button>
           ),

@@ -64,7 +64,7 @@ export function Layout(): JSX.Element {
           {auth.state === "authed" && (
             <div className="flex items-center gap-2">
               <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono text-text-secondary border border-border-subtle rounded">
-                <User size={12} className="text-accent-green" />
+                <User size={14} className="text-accent-green" strokeWidth={2.5} />
                 <span>{auth.email}</span>
               </div>
               <button
@@ -72,7 +72,7 @@ export function Layout(): JSX.Element {
                 title="Sign out"
                 className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-red border border-border-subtle hover:border-accent-red/40 rounded transition-colors"
               >
-                <LogOut size={13} className="text-accent-red" strokeWidth={2.25} />
+                <LogOut size={16} className="text-accent-red" strokeWidth={2.5} />
                 Logout
               </button>
             </div>
