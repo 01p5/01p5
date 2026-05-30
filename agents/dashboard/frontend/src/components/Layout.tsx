@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, Network, ClipboardList } from "lucide-react";
+import { MessageSquare, Plug, Network, ClipboardList, Wrench } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
@@ -7,18 +7,17 @@ import { ApprovalToastBroker } from "./ApprovalToastBroker";
 import { StatusDot } from "./StatusDot";
 import { TelemetryFooter } from "./TelemetryFooter";
 
-// CHAT.1: /sessions is no longer a top-nav tab — past tickets live in
-// the SessionsRail rendered inside ChatPage (ChatGPT-style). The route
-// stays registered in App.tsx for backwards-compatible deep-links.
+// CHAT.1 dropped Sessions (it lives in SessionsRail inside ChatPage).
+// NAV.1 collapsed Kubernetes / Terraform / Ansible / Programmer into
+// one "Capabilities" entry (sub-tabs inside CapabilitiesPage). The
+// legacy /sessions, /kubernetes, /terraform, /ansible, /programmer
+// routes stay registered in App.tsx so deep-links keep working.
 const TABS = [
-  { to: "/chat",       label: "Chat",       icon: MessageSquare },
-  { to: "/auditing",   label: "Auditing",   icon: ClipboardList },
-  { to: "/kubernetes", label: "Kubernetes", icon: Server },
-  { to: "/terraform",  label: "Terraform",  icon: Layers },
-  { to: "/ansible",    label: "Ansible",    icon: ListChecks },
-  { to: "/hosts",      label: "Hosts",      icon: Network },
-  { to: "/programmer", label: "Programmer", icon: Hammer },
-  { to: "/mcp",        label: "MCP",        icon: Plug },
+  { to: "/chat",         label: "Chat",         icon: MessageSquare },
+  { to: "/auditing",     label: "Auditing",     icon: ClipboardList },
+  { to: "/capabilities", label: "Capabilities", icon: Wrench },
+  { to: "/hosts",        label: "Hosts",        icon: Network },
+  { to: "/mcp",          label: "MCP",          icon: Plug },
 ];
 
 export function Layout(): JSX.Element {

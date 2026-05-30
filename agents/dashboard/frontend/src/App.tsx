@@ -3,6 +3,7 @@ import { Toaster } from "sonner";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { AuditingPage } from "./pages/AuditingPage";
+import { CapabilitiesPage } from "./pages/CapabilitiesPage";
 import { ChatPage } from "./pages/ChatPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SessionsPage } from "./pages/SessionsPage";
@@ -45,11 +46,23 @@ export default function App(): JSX.Element {
           <Route path="chat/:ticketId" element={<ChatRoute />} />
           <Route path="sessions" element={<SessionsPage />} />
           <Route path="auditing" element={<AuditingPage />} />
-          <Route path="kubernetes" element={<KubernetesPage />} />
-          <Route path="terraform" element={<TerraformPage />} />
-          <Route path="ansible" element={<AnsiblePage />} />
+          {/* NAV.1: Capabilities umbrella — the 4 agent surfaces as
+              sub-tabs of one top-nav entry. */}
+          <Route path="capabilities" element={<CapabilitiesPage />}>
+            <Route index element={<Navigate to="kubernetes" replace />} />
+            <Route path="kubernetes" element={<KubernetesPage />} />
+            <Route path="terraform" element={<TerraformPage />} />
+            <Route path="ansible" element={<AnsiblePage />} />
+            <Route path="programmer" element={<ProgrammerPage />} />
+          </Route>
+          {/* Backwards-compat: the legacy top-level paths Navigate-
+              redirect to the nested form so bookmarks + in-app links
+              from before NAV.1 still resolve. */}
+          <Route path="kubernetes" element={<Navigate to="/capabilities/kubernetes" replace />} />
+          <Route path="terraform"  element={<Navigate to="/capabilities/terraform"  replace />} />
+          <Route path="ansible"    element={<Navigate to="/capabilities/ansible"    replace />} />
+          <Route path="programmer" element={<Navigate to="/capabilities/programmer" replace />} />
           <Route path="hosts" element={<HostsPage />} />
-          <Route path="programmer" element={<ProgrammerPage />} />
           <Route path="mcp" element={<MCPPage />} />
           {/* Catch-all → chat */}
           <Route path="*" element={<Navigate to="/chat" replace />} />

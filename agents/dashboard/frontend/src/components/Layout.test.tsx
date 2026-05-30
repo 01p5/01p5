@@ -46,6 +46,7 @@ function renderLayout(initial = "/chat"): void {
           <Route path="chat" element={<div>chat-content</div>} />
           <Route path="sessions" element={<div>sessions-content</div>} />
           <Route path="auditing" element={<div>auditing-content</div>} />
+          <Route path="capabilities/*" element={<div>caps-content</div>} />
           <Route path="kubernetes" element={<div>k8s-content</div>} />
           <Route path="terraform" element={<div>tf-content</div>} />
           <Route path="ansible" element={<div>ansible-content</div>} />
@@ -62,12 +63,16 @@ describe("Layout", () => {
   it("renders every tab in the nav and the Olympus brand", () => {
     renderLayout();
     expect(screen.getByText(/^olympus$/i)).toBeInTheDocument();
-    // CHAT.1: Sessions moved off the topnav into the chat-page rail.
-    ["Chat", "Auditing", "Kubernetes", "Terraform", "Ansible",
-     "Hosts", "Programmer", "MCP"].forEach((label) => {
+    // CHAT.1 dropped Sessions; NAV.1 collapsed K8s/TF/Ansible/Programmer
+    // into Capabilities. Topnav is intentionally compact now.
+    ["Chat", "Auditing", "Capabilities", "Hosts", "MCP"].forEach((label) => {
       expect(screen.getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
     });
-    expect(screen.queryByRole("link", { name: /sessions/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /^sessions$/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /^kubernetes$/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /^terraform$/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /^ansible$/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /^programmer$/i })).toBeNull();
   });
 
   it("renders the Outlet content for the active route", async () => {
@@ -76,9 +81,8 @@ describe("Layout", () => {
   });
 
   it("marks the matching NavLink as active (NavLink applies an aria-current)", () => {
-    renderLayout("/terraform");
-    // react-router NavLink sets aria-current="page" on the active link.
-    const active = screen.getByRole("link", { name: /terraform/i });
+    renderLayout("/auditing");
+    const active = screen.getByRole("link", { name: /auditing/i });
     expect(active).toHaveAttribute("aria-current", "page");
     // Other tabs are NOT active.
     expect(screen.getByRole("link", { name: /chat/i })).not.toHaveAttribute("aria-current");
@@ -88,13 +92,13 @@ describe("Layout", () => {
     renderLayout("/chat");
     // Initially Chat is active.
     expect(screen.getByRole("link", { name: /chat/i })).toHaveAttribute("aria-current", "page");
-    await userEvent.click(screen.getByRole("link", { name: /kubernetes/i }));
+    await userEvent.click(screen.getByRole("link", { name: /capabilities/i }));
     await waitFor(() => {
-      expect(screen.getByRole("link", { name: /kubernetes/i })).toHaveAttribute("aria-current", "page");
+      expect(screen.getByRole("link", { name: /capabilities/i })).toHaveAttribute("aria-current", "page");
     });
     expect(screen.getByRole("link", { name: /chat/i })).not.toHaveAttribute("aria-current");
     // And the Outlet swapped.
-    expect(screen.getByText("k8s-content")).toBeInTheDocument();
+    expect(screen.getByText("caps-content")).toBeInTheDocument();
   });
 
   it("does NOT mount the auditing panels in the Layout (they moved to /auditing)", () => {
