@@ -32,6 +32,14 @@ Group-chat tickets (the main agent + dispatched sub-agents in one thread):
                                     (human + agent messages, dispatches,
                                     tool calls, ask_agent exchanges).
 
+Auth (Phase A — Google OAuth + session cookie):
+
+- ``GET /me``                     — `{authenticated, email}` for the SPA's
+                                    RequireAuth (401 if no/invalid session).
+- ``GET /auth/google/start``      — 302 → Google consent screen.
+- ``GET /auth/google/callback``   — 302 → ``/`` on success, sets session cookie.
+- ``POST /auth/logout``           — clears the session cookie.
+
 Live activity + audit:
 
 - ``GET /events``                 — SSE stream of every bus message.
@@ -101,6 +109,20 @@ from agentlib import (
 )
 from langchain_core.tools import BaseTool
 
+from .auth import (
+    OAUTH_STATE_COOKIE,
+    AuthConfig,
+    Authenticator,
+    GoogleAuthError,
+    clear_cookie_header,
+    exchange_code_for_email,
+    google_authorize_url,
+    new_oauth_state,
+    parse_cookie_header,
+    public_status,
+    set_cookie_header,
+)
+
 logger = logging.getLogger(__name__)
 
 # Default location for the JSONL audit log. Mirrors the per-agent CLIs.
@@ -141,11 +163,17 @@ class DashboardServer:
         static_dir: Optional[Path] = None,
         mcp_servers: Optional[list[dict[str, Any]]] = None,
         ticket_store: Optional[TicketStore] = None,
+        auth: Optional[Authenticator] = None,
     ):
         self.orchestrator = orchestrator
         self.bus = bus
         self.approval_hook = approval_hook
         self.audit_log_path = audit_log_path
+        # Auth (Phase A). When no Authenticator is passed, default to a
+        # bypass-on config — the existing test fixtures construct the
+        # server without auth and expect open access; production
+        # build_default_server wires a real Authenticator from env.
+        self.auth: Authenticator = auth or Authenticator(AuthConfig(bypass=True))
         # Group-chat ticket transcript (Phase 2). The orchestrator writes
         # dispatch/result/tool_call/ask events here; the dashboard records
         # human + main-agent messages and streams the whole transcript per
@@ -371,10 +399,21 @@ class DashboardServer:
 
             def do_GET(self):  # noqa: N802
                 path, _, _query = self.path.partition("?")
+                # Auth gate (Phase A): API/SSE/data prefixes require a session.
+                # SPA shell + /me + /auth/* + /healthz stay public so the
+                # unauthenticated SPA can load its own /login route.
+                if outer.auth.requires_auth_get(path) and outer.auth.session_from_request(self.headers) is None:
+                    return outer._send_json(self, 401, {"error": "unauthenticated"})
                 if path == "/" or path == "/index.html":
                     return outer._serve_static(self, "index.html")
                 if path == "/healthz":
                     return outer._send_json(self, 200, {"ok": True})
+                if path == "/me":
+                    return outer._handle_me(self)
+                if path == "/auth/google/start":
+                    return outer._handle_auth_google_start(self)
+                if path == "/auth/google/callback":
+                    return outer._handle_auth_google_callback(self)
                 if path == "/tasks":
                     return outer._handle_list_tasks(self)
                 if path.startswith("/tasks/"):
@@ -430,6 +469,11 @@ class DashboardServer:
                 return outer._serve_static(self, "index.html")
 
             def do_POST(self):  # noqa: N802
+                path = self.path.partition("?")[0]
+                if outer.auth.requires_auth_post(path) and outer.auth.session_from_request(self.headers) is None:
+                    return outer._send_json(self, 401, {"error": "unauthenticated"})
+                if path == "/auth/logout":
+                    return outer._handle_auth_logout(self)
                 if self.path == "/tasks":
                     return outer._handle_post_task(self)
                 if self.path.startswith("/tickets/") and self.path.endswith("/messages"):
@@ -546,6 +590,75 @@ class DashboardServer:
             return
         task_id = self.submit(nl.strip())
         self._send_json(req, 202, {"task_id": task_id})
+
+    # ---- auth (Phase A) ----
+
+    def _handle_me(self, req: BaseHTTPRequestHandler) -> None:
+        """Return the authenticated user — or 401 if unauthenticated.
+        The SPA's RequireAuth gate polls this on mount."""
+        session = self.auth.session_from_request(req.headers)
+        if session is None:
+            return self._send_json(req, 401, {"authenticated": False})
+        return self._send_json(req, 200, {
+            "authenticated": True,
+            "email": session.email,
+            "auth": public_status(self.auth.config),
+        })
+
+    def _handle_auth_google_start(self, req: BaseHTTPRequestHandler) -> None:
+        cfg = self.auth.config
+        if not cfg.google_oauth_enabled():
+            return self._send_json(req, 503, {"error": "google oauth not configured"})
+        state = new_oauth_state()
+        url = google_authorize_url(cfg, state)
+        # CSRF: store state in a short-lived httpOnly cookie; the callback
+        # compares it against the ?state= query param Google echoes back.
+        req.send_response(302)
+        req.send_header("Location", url)
+        req.send_header(
+            "Set-Cookie",
+            set_cookie_header(OAUTH_STATE_COOKIE, state, max_age=600, secure=cfg.cookie_secure),
+        )
+        req.send_header("Content-Length", "0")
+        req.end_headers()
+
+    def _handle_auth_google_callback(self, req: BaseHTTPRequestHandler) -> None:
+        cfg = self.auth.config
+        from urllib.parse import parse_qs, urlparse
+
+        query = parse_qs(urlparse(req.path).query)
+        if "error" in query:
+            return self._send_json(req, 400, {"error": "oauth_error", "detail": query.get("error", [""])[0]})
+        code = (query.get("code") or [""])[0]
+        state = (query.get("state") or [""])[0]
+        expected_state = parse_cookie_header(req.headers.get("Cookie", "") or "", OAUTH_STATE_COOKIE)
+        if not code or not state or not expected_state or state != expected_state:
+            return self._send_json(req, 400, {"error": "invalid_state"})
+        try:
+            email = exchange_code_for_email(cfg, code)
+        except GoogleAuthError as exc:
+            return self._send_json(req, 401, {"error": "oauth_failed", "detail": str(exc)})
+        if not cfg.is_email_allowed(email):
+            return self._send_json(req, 403, {"error": "email_not_allowed", "email": email})
+        # Mint a session cookie, clear the state cookie, redirect to /.
+        req.send_response(302)
+        req.send_header("Location", "/")
+        req.send_header("Set-Cookie", self.auth.mint_cookie(email))
+        req.send_header(
+            "Set-Cookie",
+            clear_cookie_header(OAUTH_STATE_COOKIE, secure=cfg.cookie_secure),
+        )
+        req.send_header("Content-Length", "0")
+        req.end_headers()
+
+    def _handle_auth_logout(self, req: BaseHTTPRequestHandler) -> None:
+        req.send_response(200)
+        req.send_header("Content-Type", "application/json")
+        req.send_header("Set-Cookie", self.auth.clear_cookie())
+        body = json.dumps({"ok": True}).encode()
+        req.send_header("Content-Length", str(len(body)))
+        req.end_headers()
+        req.wfile.write(body)
 
     # ---- group-chat tickets ----
 
@@ -1519,6 +1632,11 @@ def build_default_server(
         memory=memory,
         ticket_store=ticket_store,
     )
+    # Auth (Phase A): config from env; AUTH_BYPASS=1 disables auth for
+    # local dev. In a public deploy, set OLYMPUS_AUTH_GOOGLE_CLIENT_ID/SECRET
+    # + ALLOWED_DOMAINS + SESSION_SECRET via the olympus-secrets secret.
+    auth_cfg = AuthConfig.from_env()
+    authenticator = Authenticator(auth_cfg)
     return DashboardServer(
         orchestrator=orch,
         bus=bus,
@@ -1528,6 +1646,7 @@ def build_default_server(
         port=port,
         mcp_servers=mcp_registry,
         ticket_store=ticket_store,
+        auth=authenticator,
     )
 
 

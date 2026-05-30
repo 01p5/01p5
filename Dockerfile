@@ -40,7 +40,8 @@ WORKDIR /opt/olympus
 # Lean install — same set as .github/workflows/ci.yml.
 RUN pip install --no-cache-dir \
         ruff pytest pydantic \
-        'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0'
+        'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0' \
+        'google-auth>=2.30'
 
 # Optional: full LLM stack for live agent runs.
 RUN if [ "$INSTALL_LLM_STACK" = "1" ]; then \

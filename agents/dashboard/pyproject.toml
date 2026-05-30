@@ -12,6 +12,8 @@ license = {text = "MIT"}
 dependencies = [
     "agentlib",
     "olympus-cli",
+    # Verifies Google's id_token signatures for the OAuth sign-in path.
+    "google-auth>=2.30",
 ]
 
 [project.scripts]
