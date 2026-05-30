@@ -118,7 +118,8 @@ describe("TerminalPage", () => {
 
     await userEvent.click(screen.getByTestId("terminal-create-confirm"));
     await waitFor(() => expect(create).toHaveBeenCalled());
-    const body = create.mock.calls[0][0];
+    // Body is a union — narrow to the ssh shape for these assertions.
+    const body = create.mock.calls[0][0] as { host_alias: string; ssh_user?: string };
     expect(body.host_alias).toBe("w1");
     expect(body.ssh_user).toBe("alice");
     await waitFor(() => expect(lastLocation).toBe("/terminal/s-new"));
@@ -178,6 +179,7 @@ function mkSession(over: Partial<TerminalSession>): TerminalSession {
     attached: false,
     last_active_at: 1_700_000_000,
     alive: true,
+    kind: null,
     ...over,
   };
 }

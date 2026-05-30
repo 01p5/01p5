@@ -280,10 +280,10 @@ export const api = {
     const r = await getJson<{ sessions: TerminalSession[] }>("/terminal/sessions");
     return r.sessions;
   },
-  createTerminalSession: async (body: {
-    host_alias: string;
-    ssh_user?: string;
-  }): Promise<TerminalSession> => {
+  createTerminalSession: async (body:
+    | { host_alias: string; ssh_user?: string }   // ssh mode (default)
+    | { kind: string }                            // local CLI mode (e.g. "olympus-tui")
+  ): Promise<TerminalSession> => {
     const r = await postJson<{ session: TerminalSession }>(
       "/terminal/sessions", body,
     );

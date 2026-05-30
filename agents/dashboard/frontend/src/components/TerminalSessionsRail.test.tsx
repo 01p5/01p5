@@ -46,6 +46,7 @@ function mkSession(over: Partial<TerminalSession>): TerminalSession {
     attached: false,
     last_active_at: 1_700_000_000,
     alive: true,
+    kind: null,
     ...over,
   };
 }
@@ -89,5 +90,31 @@ describe("TerminalSessionsRail", () => {
     renderRail([]);
     await userEvent.click(screen.getByTestId("terminal-rail-new"));
     expect(await screen.findByText(/open new terminal session/i)).toBeInTheDocument();
+  });
+
+  it("modal's Olympus CLI quick-start posts kind=olympus-tui + navigates (TERM.9b)", async () => {
+    const create = vi.spyOn(api, "createTerminalSession").mockResolvedValue(
+      mkSession({ session_id: "s-cli", host_alias: "olympus-tui",
+                  address: "(local)", ssh_user: "", kind: "olympus-tui" }),
+    );
+    renderRail([]);
+    await userEvent.click(screen.getByTestId("terminal-rail-new"));
+    await userEvent.click(await screen.findByTestId("terminal-quickstart-olympus-cli"));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    // Body shape: just {kind} — no host_alias required.
+    const body = create.mock.calls[0][0];
+    expect(body).toEqual({ kind: "olympus-tui" });
+    await waitFor(() => expect(lastLocation).toBe("/terminal/s-cli"));
+  });
+
+  it("local-CLI session row shows the kind label instead of user@host", async () => {
+    renderRail([
+      mkSession({ session_id: "s-cli", host_alias: "olympus-tui",
+                  ssh_user: "", address: "(local)", kind: "olympus-tui" }),
+    ]);
+    const row = await screen.findByTestId("terminal-rail-row-s-cli");
+    // Doesn't render "@" + address for local sessions.
+    expect(row.textContent).not.toMatch(/@\(local\)/);
+    expect(row.textContent).toMatch(/local/i);
   });
 });

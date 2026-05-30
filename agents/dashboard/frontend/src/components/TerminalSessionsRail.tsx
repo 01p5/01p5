@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Circle, TerminalSquare } from "lucide-react";
+import { Plus, Circle, TerminalSquare, Sparkles } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { usePolling } from "../hooks/usePolling";
@@ -76,9 +76,12 @@ export function TerminalSessionsRail({
                 )}
               />
               <div className="flex-1 min-w-0">
-                <div className="font-mono text-[12px] text-text-primary truncate">{s.host_alias}</div>
+                <div className="font-mono text-[12px] text-text-primary truncate flex items-center gap-1.5">
+                  {s.kind && <Sparkles size={10} className="text-accent-green/80 shrink-0" strokeWidth={2.5} />}
+                  <span className="truncate">{s.host_alias}</span>
+                </div>
                 <div className="font-mono text-[10px] text-text-muted truncate">
-                  {s.ssh_user}@{s.address}
+                  {s.kind ? <em className="not-italic">local</em> : `${s.ssh_user}@${s.address}`}
                 </div>
               </div>
             </button>
@@ -147,12 +150,51 @@ export function NewTerminalSessionModal({
     }
   };
 
+  // TERM.9b — skip the host picker entirely + spawn the local
+  // olympus-tui CLI inside the dashboard pod.
+  const onOpenOlympusCli = async (): Promise<void> => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const s = await api.createTerminalSession({ kind: "olympus-tui" });
+      onCreated(s);
+    } catch (e) {
+      setErr((e as Error).message);
+      setBusy(false);
+    }
+  };
+
   const hostObj = hosts.find((h) => h.name === selectedHost);
   const inputCls = "w-full bg-dark-primary border border-border-subtle rounded px-2.5 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent-green/60";
 
   return (
     <Modal open={open} onClose={onClose} title="Open new terminal session">
       <div className="space-y-3">
+        {/* Quick-start row — local CLIs that skip the host picker. */}
+        <div className="space-y-1">
+          <label className="block text-[10px] font-mono uppercase tracking-[1.5px] text-text-secondary">
+            Quick-start
+            <span className="ml-2 normal-case tracking-normal text-text-muted">
+              — local CLIs inside the dashboard pod
+            </span>
+          </label>
+          <button
+            type="button"
+            onClick={() => void onOpenOlympusCli()}
+            disabled={busy}
+            data-testid="terminal-quickstart-olympus-cli"
+            className="w-full flex items-center gap-2 px-3 py-2 text-[12px] font-mono text-accent-green border border-accent-green/40 hover:bg-accent-green/10 rounded transition-colors disabled:opacity-40"
+          >
+            <Sparkles size={14} strokeWidth={2.5} />
+            <span className="flex-1 text-left">Open Olympus CLI (olympus-tui)</span>
+            <span className="text-[10px] uppercase tracking-[1.5px] text-text-muted">local</span>
+          </button>
+        </div>
+
+        <div className="text-[10px] font-mono uppercase tracking-[1.5px] text-text-muted text-center pt-1">
+          — or ssh to a host —
+        </div>
+
         <Field label="Host (from inventory)" hint="open /hosts to add more">
           {hosts.length === 0 ? (
             <div className="text-[11px] font-mono text-text-muted italic px-2 py-3 border border-dashed border-border-subtle rounded">

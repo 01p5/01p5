@@ -230,9 +230,14 @@ export interface MemoryEntry {
   };
 }
 
-/** Live terminal session on the dashboard pod — owns a PTY-wrapped
- *  ssh subprocess targeting an inventory host. Server-side shape mirrors
- *  dashboard.terminal.SessionInfo + the ws_url POST returns. */
+/** Live terminal session on the dashboard pod. Two flavours:
+ *  - ``kind=null`` (default): pty wraps an ssh subprocess against an
+ *    inventory host (host_alias / ssh_user / address describe the target).
+ *  - ``kind="olympus-tui"`` (or another future local-CLI label): pty
+ *    wraps a local CLI inside the pod. host_alias becomes the kind
+ *    label; address is ``(local)``; ssh_user is empty.
+ *  Server-side shape mirrors dashboard.terminal.SessionInfo + the
+ *  ws_url POST returns. */
 export interface TerminalSession {
   session_id: string;
   host_alias: string;
@@ -242,6 +247,10 @@ export interface TerminalSession {
   attached: boolean;
   last_active_at: number;
   alive: boolean;
+  /** None for ssh sessions; one of the allowlisted local-CLI kind
+   *  labels otherwise. Frontend uses this to pick the row icon + to
+   *  skip the host-picker on the +New modal. */
+  kind: string | null;
   /** Only set on the create response — the relative WS path the browser
    *  dials to bridge xterm to the pty. List responses omit it; clients
    *  compute the same path from session_id. */

@@ -122,8 +122,13 @@ function SessionRow({
         <div className="flex items-baseline gap-3 flex-wrap">
           <span className="font-mono text-sm font-semibold text-text-primary">{session.host_alias}</span>
           <span className="font-mono text-[11px] text-text-secondary">
-            {session.ssh_user}@{session.address}
+            {session.kind ? "(local CLI)" : `${session.ssh_user}@${session.address}`}
           </span>
+          {session.kind && (
+            <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-accent-green">
+              {session.kind}
+            </span>
+          )}
           {session.attached && (
             <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-accent-green">
               attached
