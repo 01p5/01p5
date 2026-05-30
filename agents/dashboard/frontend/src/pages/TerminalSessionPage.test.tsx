@@ -226,6 +226,24 @@ describe("TerminalSessionPage", () => {
     expect(ws.sentFrames.length).toBe(beforeFrames);
   });
 
+  it("sends an initial resize JSON frame on ws.open (TERM.6)", () => {
+    renderAt();
+    const ws = MockWebSocket.instances[0];
+    ws.readyState = MockWebSocket.OPEN;
+    ws.onopen?.();
+
+    const resizeFrames = ws.sentFrames
+      .map((f) => typeof f === "string" ? f : "")
+      .filter((s) => s.includes('"type":"resize"'));
+    expect(resizeFrames.length).toBeGreaterThanOrEqual(1);
+    const parsed = JSON.parse(resizeFrames[0]);
+    expect(parsed.type).toBe("resize");
+    expect(typeof parsed.cols).toBe("number");
+    expect(typeof parsed.rows).toBe("number");
+    expect(parsed.cols).toBeGreaterThan(0);
+    expect(parsed.rows).toBeGreaterThan(0);
+  });
+
   it("closes the WebSocket on unmount", () => {
     const { unmount } = render(
       <MemoryRouter initialEntries={["/terminal/sess"]}>

@@ -45,14 +45,17 @@ close events with the host_alias + ssh_user so there's a paper trail.
 from __future__ import annotations
 
 import dataclasses
+import fcntl
 import logging
 import os
 import pty
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 import uuid
@@ -429,6 +432,41 @@ class SessionManager:
             self._sessions.clear()
         for s in sessions:
             s._close()  # noqa: SLF001
+
+    def resize(
+        self,
+        session: TerminalSession,
+        *,
+        cols: int,
+        rows: int,
+    ) -> None:
+        """Push a new window size to the session's pty.
+
+        TIOCSWINSZ on the master fd updates the kernel's record + the
+        kernel auto-sends SIGWINCH to the slave's foreground process
+        group, so curses-based TUIs (htop, vim, less) redraw on the
+        next event loop tick without any extra signaling from us.
+
+        Silently bails on a closed session or a bogus size; this is
+        called from the browser so we don't trust the values blindly
+        (clamp at 1..1000 cols, 1..500 rows). Any ioctl error is
+        logged at debug and swallowed — a failed resize must NOT take
+        down the session.
+        """
+        if session.closed:
+            return
+        try:
+            cols_clean = max(1, min(int(cols), 1000))
+            rows_clean = max(1, min(int(rows), 500))
+        except (TypeError, ValueError):
+            return
+        # struct winsize { ws_row; ws_col; ws_xpixel; ws_ypixel; }
+        packed = struct.pack("HHHH", rows_clean, cols_clean, 0, 0)
+        try:
+            fcntl.ioctl(session._master_fd, termios.TIOCSWINSZ, packed)  # noqa: SLF001
+        except OSError as exc:
+            logger.debug("TIOCSWINSZ on session %s failed: %s",
+                         session.session_id, exc)
 
 
 def session_to_info(session: TerminalSession) -> SessionInfo:

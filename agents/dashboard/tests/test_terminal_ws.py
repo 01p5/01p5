@@ -27,6 +27,7 @@ from wsproto.events import (
     BytesMessage,
     CloseConnection,
     Request,
+    TextMessage,
 )
 
 
@@ -214,6 +215,83 @@ def test_bridge_forwards_keystrokes_into_pty_and_streams_output_back():
                 if isinstance(ev, BytesMessage):
                     seen.extend(ev.data)
         assert b"hello" in bytes(seen)
+
+        _send_event(client_sock, client_ws,
+                    CloseConnection(code=1000, reason="bye"))
+        bridge_thread.join(timeout=2.0)
+    finally:
+        client_sock.close()
+        server_sock.close()
+        mgr.shutdown_all()
+
+
+def test_bridge_dispatches_resize_text_frame_to_manager(monkeypatch):
+    """TERM.6 — TEXT frame with {type:resize,cols,rows} → calls
+    SessionManager.resize on the bound session."""
+    mgr, session, server_sock, client_sock, server_ws, client_ws = _open_ws_pair()
+    captured = {}
+
+    def fake_resize(s, *, cols, rows):
+        captured["session"] = s
+        captured["cols"] = cols
+        captured["rows"] = rows
+
+    monkeypatch.setattr(mgr, "resize", fake_resize)
+
+    try:
+        bridge_thread = threading.Thread(
+            target=bridge_session_to_socket,
+            kwargs=dict(session=session, manager=mgr, sock=server_sock,
+                        ws=server_ws, stop_after_seconds=2.0),
+            daemon=True,
+        )
+        bridge_thread.start()
+
+        _send_event(client_sock, client_ws,
+                    TextMessage(data='{"type":"resize","cols":120,"rows":40}'))
+
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and "cols" not in captured:
+            time.sleep(0.02)
+        assert captured.get("session") is session
+        assert captured["cols"] == 120
+        assert captured["rows"] == 40
+
+        _send_event(client_sock, client_ws,
+                    CloseConnection(code=1000, reason="bye"))
+        bridge_thread.join(timeout=2.0)
+    finally:
+        client_sock.close()
+        server_sock.close()
+        mgr.shutdown_all()
+
+
+def test_bridge_falls_back_to_keystrokes_on_unstructured_text():
+    """TEXT frames that aren't JSON / aren't a known control type
+    fall through to write_input — preserves the old "TextMessage =
+    keystrokes" behavior for clients that don't use binary frames."""
+    mgr, session, server_sock, client_sock, server_ws, client_ws = _open_ws_pair()
+    try:
+        bridge_thread = threading.Thread(
+            target=bridge_session_to_socket,
+            kwargs=dict(session=session, manager=mgr, sock=server_sock,
+                        ws=server_ws, stop_after_seconds=3.0),
+            daemon=True,
+        )
+        bridge_thread.start()
+
+        _recv_events(client_sock, client_ws, timeout=0.2)
+
+        # Plain text — not JSON, not a control envelope.
+        _send_event(client_sock, client_ws, TextMessage(data="raw input\n"))
+
+        seen = bytearray()
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline and b"raw input" not in seen:
+            for ev in _recv_events(client_sock, client_ws, timeout=0.5):
+                if isinstance(ev, BytesMessage):
+                    seen.extend(ev.data)
+        assert b"raw input" in bytes(seen)
 
         _send_event(client_sock, client_ws,
                     CloseConnection(code=1000, reason="bye"))

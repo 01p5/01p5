@@ -330,6 +330,80 @@ def test_ssh_env_overrides_set_xterm_256color():
     assert _SSH_ENV_OVERRIDES["LC_ALL"] == "C.UTF-8"
 
 
+def test_resize_calls_tiocswinsz_on_master_fd(mgr, monkeypatch):
+    """TERM.6 — resize() must ioctl TIOCSWINSZ with the packed
+    winsize struct. Mock fcntl.ioctl to capture the call without
+    actually touching the kernel."""
+    import termios
+    import struct as _struct
+    captured = {}
+
+    def fake_ioctl(fd, req, arg, *_args):
+        captured["fd"] = fd
+        captured["req"] = req
+        captured["arg"] = arg
+        return 0
+
+    monkeypatch.setattr("dashboard.terminal.fcntl.ioctl", fake_ioctl)
+    s = mgr.create(owner_email="u@x", host_alias="h", ssh_user="u",
+                   address="a", executable="/bin/cat", args=[])
+    mgr.resize(s, cols=160, rows=50)
+    assert captured["req"] == termios.TIOCSWINSZ
+    # struct winsize { ws_row; ws_col; ws_xpixel; ws_ypixel; }
+    rows, cols, _, _ = _struct.unpack("HHHH", captured["arg"])
+    assert rows == 50
+    assert cols == 160
+    mgr.close(s.session_id)
+
+
+def test_resize_clamps_to_sane_bounds(mgr, monkeypatch):
+    import struct as _struct
+    captured = []
+    monkeypatch.setattr(
+        "dashboard.terminal.fcntl.ioctl",
+        lambda fd, req, arg, *_a: captured.append(_struct.unpack("HHHH", arg)),
+    )
+    s = mgr.create(owner_email="u@x", host_alias="h", ssh_user="u",
+                   address="a", executable="/bin/cat", args=[])
+    mgr.resize(s, cols=0,        rows=0)          # below floor
+    mgr.resize(s, cols=999_999,  rows=999_999)    # above ceiling
+    rows1, cols1, _, _ = captured[0]
+    assert (rows1, cols1) == (1, 1)
+    rows2, cols2, _, _ = captured[1]
+    assert (rows2, cols2) == (500, 1000)
+    mgr.close(s.session_id)
+
+
+def test_resize_silently_skips_closed_session(mgr, monkeypatch):
+    called = False
+
+    def fake_ioctl(*a, **kw):
+        nonlocal called
+        called = True
+        return 0
+
+    monkeypatch.setattr("dashboard.terminal.fcntl.ioctl", fake_ioctl)
+    s = mgr.create(owner_email="u@x", host_alias="h", ssh_user="u",
+                   address="a", executable="/bin/cat", args=[])
+    mgr.close(s.session_id)
+    mgr.resize(s, cols=80, rows=24)
+    assert called is False
+
+
+def test_resize_swallows_ioctl_oserror(mgr, monkeypatch):
+    """A bogus fd / kernel hiccup must NOT take down the session."""
+    monkeypatch.setattr(
+        "dashboard.terminal.fcntl.ioctl",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("nope")),
+    )
+    s = mgr.create(owner_email="u@x", host_alias="h", ssh_user="u",
+                   address="a", executable="/bin/cat", args=[])
+    # Should not raise.
+    mgr.resize(s, cols=80, rows=24)
+    assert s.is_alive()
+    mgr.close(s.session_id)
+
+
 def test_create_passes_env_overrides_to_subprocess(mgr, monkeypatch):
     """End-to-end: create() must layer the TERM / LANG / LC_ALL
     overrides on top of the inherited env when spawning the

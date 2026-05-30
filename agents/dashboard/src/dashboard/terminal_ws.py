@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import select
 import socket
@@ -226,16 +227,28 @@ def bridge_session_to_socket(
                 break
             ws.receive_data(data)
             for event in ws.events():
-                if isinstance(event, (BytesMessage, TextMessage)):
-                    # Browser keystrokes / pasted text → pty stdin.
-                    payload = event.data if isinstance(event.data, bytes) \
-                        else event.data.encode("utf-8")
+                if isinstance(event, BytesMessage):
+                    # BINARY = browser keystrokes for the pty.
                     try:
-                        session.write_input(payload)
+                        session.write_input(event.data)
                     except BrokenPipeError:
                         _send(ws.send(CloseConnection(code=CloseReason.NORMAL_CLOSURE)))
                         stop_event.set()
                         break
+                elif isinstance(event, TextMessage):
+                    # TEXT = JSON control envelope. TERM.6 uses this for
+                    # window-size negotiation; other control types
+                    # (signal, paste-mode, …) will slot in here.
+                    handled = _handle_text_control(event.data, session, manager)
+                    if not handled:
+                        # Fall back: treat unstructured text as keystrokes
+                        # for clients that don't bother with binary frames.
+                        try:
+                            session.write_input(event.data.encode("utf-8"))
+                        except BrokenPipeError:
+                            _send(ws.send(CloseConnection(code=CloseReason.NORMAL_CLOSURE)))
+                            stop_event.set()
+                            break
                 elif isinstance(event, Ping):
                     _send(ws.send(Pong(payload=event.payload)))
                 elif isinstance(event, CloseConnection):
@@ -247,6 +260,41 @@ def bridge_session_to_socket(
         stop_event.set()
         pump_thread.join(timeout=1.0)
         session.detach()
+
+
+def _handle_text_control(
+    payload: str,
+    session: TerminalSession,
+    manager: SessionManager,
+) -> bool:
+    """Parse a TEXT frame as a JSON control envelope and dispatch.
+
+    Returns True if the frame was a recognized control message (caller
+    consumes it), False if it didn't parse as JSON or wasn't a known
+    type (caller falls back to treating it as keystrokes).
+
+    Known types:
+      - ``{"type": "resize", "cols": int, "rows": int}`` — TIOCSWINSZ
+        the session's pty so curses TUIs see the real browser size.
+    """
+    try:
+        msg = json.loads(payload)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("type") == "resize":
+        try:
+            manager.resize(
+                session,
+                cols=int(msg.get("cols", 80)),
+                rows=int(msg.get("rows", 24)),
+            )
+        except (TypeError, ValueError):
+            logger.debug("bad resize payload for %s: %r",
+                         session.session_id, msg)
+        return True
+    return False
 
 
 __all__ = [

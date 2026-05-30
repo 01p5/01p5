@@ -57,7 +57,20 @@ export function TerminalSessionPage(): JSX.Element {
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
-    ws.onopen = () => setState("open");
+    // TERM.6 — push the current xterm cols/rows to the server so the
+    // remote pty's TIOCSWINSZ matches the browser pane. Without this
+    // the pty stays at 80×24 and TUIs (htop, vim, less) render badly
+    // on wider panes. Called on ws.open and on every term.onResize.
+    const sendResize = (cols: number, rows: number): void => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
+      }
+    };
+
+    ws.onopen = () => {
+      setState("open");
+      sendResize(term.cols, term.rows);
+    };
     ws.onmessage = (ev: MessageEvent<ArrayBuffer | string>) => {
       // Server always emits binary; tolerate text for safety.
       if (ev.data instanceof ArrayBuffer) {
@@ -81,6 +94,12 @@ export function TerminalSessionPage(): JSX.Element {
         ws.send(new TextEncoder().encode(data));
       }
     });
+    // FitAddon's resize triggers term.onResize when the dimensions
+    // actually change. Forward the new size to the server (which then
+    // TIOCSWINSZ's the pty + the kernel auto-SIGWINCHes the shell).
+    const resizeDispose = term.onResize(({ cols, rows }) => {
+      sendResize(cols, rows);
+    });
 
     // Fit on window resize so a maximized window uses every column.
     // Also observe the terminal's own container so collapsing the
@@ -97,6 +116,7 @@ export function TerminalSessionPage(): JSX.Element {
       window.removeEventListener("resize", onResize);
       ro?.disconnect();
       inputDispose.dispose();
+      resizeDispose.dispose();
       try { ws.close(); } catch { /* ignore */ }
       term.dispose();
       wsRef.current = null;
