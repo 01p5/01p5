@@ -14,6 +14,10 @@ dependencies = [
     "olympus-cli",
     # Verifies Google's id_token signatures for the OAuth sign-in path.
     "google-auth>=2.30",
+    # Sans-IO WebSocket protocol parser used by the terminal bridge
+    # (TERM.2b). Tiny lib (only depends on h11), drives both server and
+    # client handshake + frame parsing.
+    "wsproto>=1.2",
 ]
 
 [project.scripts]

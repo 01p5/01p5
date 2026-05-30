@@ -135,6 +135,7 @@ from .auth import (
     set_cookie_header,
 )
 from .terminal import SessionManager, session_to_info
+from .terminal_ws import WSHandshakeError, bridge_session_to_socket, perform_ws_handshake
 
 logger = logging.getLogger(__name__)
 
@@ -494,6 +495,9 @@ class DashboardServer:
                     return outer._handle_render_inventory(self)
                 if path == "/terminal/sessions":
                     return outer._handle_list_terminal_sessions(self)
+                if path.startswith("/terminal/sessions/") and path.endswith("/ws"):
+                    sid = path[len("/terminal/sessions/"):-len("/ws")]
+                    return outer._handle_terminal_ws(self, sid)
                 if path.startswith("/static/"):
                     return outer._serve_static(self, path[len("/static/"):])
                 # Vite-built hashed assets live under /assets/.
@@ -1663,6 +1667,43 @@ class DashboardServer:
         info = self._terminal_info_to_jsonable(session_to_info(session))
         info["ws_url"] = f"/terminal/sessions/{session.session_id}/ws"
         return self._send_json(req, 201, {"session": info})
+
+    def _handle_terminal_ws(
+        self, req: BaseHTTPRequestHandler, session_id: str,
+    ) -> None:
+        """Upgrade HTTP → WebSocket and bridge the connection to the
+        session's pty. Blocks until either side closes.
+
+        Auth gate runs in do_GET above (the /terminal prefix is gated);
+        here we re-check ownership so an attacker who got a session id
+        but isn't the owner can't attach via WS."""
+        owner = self._owner_email(req)
+        if owner is None:
+            return self._send_json(req, 401, {"error": "unauthenticated"})
+        session = self.session_manager.get(session_id)
+        if session is None or session.owner_email != owner:
+            return self._send_json(req, 404, {"error": "session not found"})
+
+        try:
+            ws = perform_ws_handshake(
+                requestline=req.requestline,
+                headers=req.headers,
+                write_response=req.wfile.write,
+            )
+        except WSHandshakeError as exc:
+            return self._send_json(req, 400, {"error": f"ws upgrade failed: {exc}"})
+
+        # The underlying TCP socket is hijacked from here on — let the
+        # bridge own all reads/writes until close.
+        try:
+            bridge_session_to_socket(
+                session=session,
+                manager=self.session_manager,
+                sock=req.connection,
+                ws=ws,
+            )
+        except Exception:
+            logger.exception("terminal ws bridge crashed for %s", session_id)
 
     def _handle_delete_terminal_session(
         self, req: BaseHTTPRequestHandler, session_id: str,
