@@ -25,16 +25,19 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 import urllib.parse
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "olympus_session"
 OAUTH_STATE_COOKIE = "olympus_oauth_state"
 DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+DEFAULT_OTP_TTL_SECONDS = 600                # 10 min — code expires
+DEFAULT_OTP_RATE_LIMIT_SECONDS = 60          # 1 issue per email per minute
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +61,16 @@ class AuthConfig:
     google_client_id: str = ""
     google_client_secret: str = ""
     redirect_base_url: str = ""  # e.g. https://0lympu5.com — used to build the OAuth redirect_uri
+    # Email-OTP fallback (Phase B). SMTP creds + a "from" address. When
+    # smtp_host is empty, the email-code routes return 503.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_starttls: bool = True
+    otp_ttl_seconds: int = DEFAULT_OTP_TTL_SECONDS
+    otp_rate_limit_seconds: int = DEFAULT_OTP_RATE_LIMIT_SECONDS
 
     @classmethod
     def from_env(cls, env: Optional[dict[str, str]] = None) -> "AuthConfig":
@@ -92,6 +105,16 @@ class AuthConfig:
             google_client_id=e.get("OLYMPUS_AUTH_GOOGLE_CLIENT_ID", ""),
             google_client_secret=e.get("OLYMPUS_AUTH_GOOGLE_CLIENT_SECRET", ""),
             redirect_base_url=(e.get("OLYMPUS_AUTH_REDIRECT_BASE_URL") or "").rstrip("/"),
+            smtp_host=e.get("OLYMPUS_AUTH_SMTP_HOST", ""),
+            smtp_port=int(e.get("OLYMPUS_AUTH_SMTP_PORT") or 587),
+            smtp_username=e.get("OLYMPUS_AUTH_SMTP_USERNAME", ""),
+            smtp_password=e.get("OLYMPUS_AUTH_SMTP_PASSWORD", ""),
+            smtp_from=e.get("OLYMPUS_AUTH_SMTP_FROM", ""),
+            smtp_use_starttls=_env_truthy(e.get("OLYMPUS_AUTH_SMTP_STARTTLS", "1")),
+            otp_ttl_seconds=int(e.get("OLYMPUS_AUTH_OTP_TTL_SECONDS") or DEFAULT_OTP_TTL_SECONDS),
+            otp_rate_limit_seconds=int(
+                e.get("OLYMPUS_AUTH_OTP_RATE_LIMIT_SECONDS") or DEFAULT_OTP_RATE_LIMIT_SECONDS
+            ),
         )
 
     def is_email_allowed(self, email: str) -> bool:
@@ -107,6 +130,10 @@ class AuthConfig:
 
     def google_redirect_uri(self) -> str:
         return f"{self.redirect_base_url}/auth/google/callback"
+
+    def email_otp_enabled(self) -> bool:
+        """True iff SMTP creds are wired (host + from at minimum)."""
+        return bool(self.smtp_host and self.smtp_from)
 
 
 # ---------------------------------------------------------------------------
@@ -224,12 +251,142 @@ def _path_matches(path: str, prefixes: tuple[str, ...]) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Email-OTP (Phase B)
+# ---------------------------------------------------------------------------
+
+class RateLimitedError(RuntimeError):
+    """Raised when an OTP issue request is too soon after the previous one."""
+
+    def __init__(self, retry_after_seconds: int):
+        super().__init__(f"rate limited; retry in {retry_after_seconds}s")
+        self.retry_after_seconds = retry_after_seconds
+
+
+@dataclass
+class _OTPRecord:
+    code: str
+    expires_at: int
+    issued_at: int
+
+
+class OTPStore:
+    """In-memory single-use email-OTP store.
+
+    Codes are short numeric strings (default 6 digits), unique per email,
+    expire after ``ttl_seconds``, and are consumed on a successful verify.
+    Per-email rate limit prevents spamming the SMTP server."""
+
+    def __init__(self, ttl_seconds: int = DEFAULT_OTP_TTL_SECONDS, rate_limit_seconds: int = DEFAULT_OTP_RATE_LIMIT_SECONDS, code_length: int = 6):
+        self.ttl_seconds = ttl_seconds
+        self.rate_limit_seconds = rate_limit_seconds
+        self.code_length = code_length
+        self._records: dict[str, _OTPRecord] = {}
+        self._lock = threading.RLock()
+
+    def _now(self) -> int:
+        return int(time.time())
+
+    def _gen_code(self) -> str:
+        # Cryptographic randomness; left-pad to fixed length.
+        n = secrets.randbelow(10 ** self.code_length)
+        return str(n).zfill(self.code_length)
+
+    def issue(self, email: str) -> str:
+        """Generate (and store) a new code for ``email``. Raises
+        ``RateLimitedError`` if a previous code was issued recently."""
+        key = email.strip().lower()
+        now = self._now()
+        with self._lock:
+            prev = self._records.get(key)
+            if prev is not None and prev.issued_at + self.rate_limit_seconds > now:
+                raise RateLimitedError(prev.issued_at + self.rate_limit_seconds - now)
+            code = self._gen_code()
+            self._records[key] = _OTPRecord(
+                code=code, expires_at=now + self.ttl_seconds, issued_at=now,
+            )
+            return code
+
+    def verify(self, email: str, code: str) -> bool:
+        """Constant-time compare + single-use consumption on success."""
+        key = email.strip().lower()
+        now = self._now()
+        with self._lock:
+            rec = self._records.get(key)
+            if rec is None:
+                return False
+            if now > rec.expires_at:
+                self._records.pop(key, None)
+                return False
+            if not hmac.compare_digest(rec.code.encode(), str(code).strip().encode()):
+                return False
+            # Consume on success.
+            self._records.pop(key, None)
+            return True
+
+
+class EmailSender(Protocol):
+    def send_otp(self, email: str, code: str) -> None: ...
+
+
+@dataclass
+class SmtpSender:
+    """SMTP-backed EmailSender. Uses STARTTLS by default; auth only if a
+    username is provided. Sends a small plain-text message."""
+    host: str
+    port: int
+    from_addr: str
+    username: str = ""
+    password: str = ""
+    use_starttls: bool = True
+    timeout_seconds: int = 10
+
+    def send_otp(self, email: str, code: str) -> None:
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["From"] = self.from_addr
+        msg["To"] = email
+        msg["Subject"] = f"Olympus sign-in code: {code}"
+        msg.set_content(
+            f"Your Olympus sign-in code is:\n\n  {code}\n\n"
+            f"It expires in a few minutes. If you didn't request this, ignore it."
+        )
+        with smtplib.SMTP(self.host, self.port, timeout=self.timeout_seconds) as s:
+            if self.use_starttls:
+                s.starttls()
+            if self.username:
+                s.login(self.username, self.password)
+            s.send_message(msg)
+
+
+def smtp_sender_from_config(config: AuthConfig) -> Optional[SmtpSender]:
+    if not config.email_otp_enabled():
+        return None
+    return SmtpSender(
+        host=config.smtp_host,
+        port=config.smtp_port,
+        from_addr=config.smtp_from,
+        username=config.smtp_username,
+        password=config.smtp_password,
+        use_starttls=config.smtp_use_starttls,
+    )
+
+
 class Authenticator:
     """Validates session cookies (or bypasses entirely when configured)
     and decides which routes need auth."""
 
-    def __init__(self, config: AuthConfig):
+    def __init__(self, config: AuthConfig, *, email_sender: Optional[EmailSender] = None, otp_store: Optional[OTPStore] = None):
         self.config = config
+        # Email-OTP backend — when None and SMTP creds are configured,
+        # default to SmtpSender; explicit None disables email login.
+        self.email_sender: Optional[EmailSender] = email_sender if email_sender is not None else smtp_sender_from_config(config)
+        self.otp_store = otp_store or OTPStore(
+            ttl_seconds=config.otp_ttl_seconds,
+            rate_limit_seconds=config.otp_rate_limit_seconds,
+        )
 
     # ---- gating policy ----
 
@@ -392,6 +549,7 @@ def public_status(config: AuthConfig) -> dict:
     return {
         "bypass": config.bypass,
         "google_oauth": config.google_oauth_enabled(),
+        "email_otp": config.email_otp_enabled(),
         "allowed_domains": sorted(config.allowed_domains),
         "cookie_secure": config.cookie_secure,
     }

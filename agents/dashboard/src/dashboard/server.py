@@ -38,6 +38,9 @@ Auth (Phase A — Google OAuth + session cookie):
                                     RequireAuth (401 if no/invalid session).
 - ``GET /auth/google/start``      — 302 → Google consent screen.
 - ``GET /auth/google/callback``   — 302 → ``/`` on success, sets session cookie.
+- ``POST /auth/email/start``      — body ``{email}``: send a one-time code
+                                    (allowlisted domains only, rate-limited).
+- ``POST /auth/email/verify``     — body ``{email, code}``: mint a session.
 - ``POST /auth/logout``           — clears the session cookie.
 
 Live activity + audit:
@@ -114,6 +117,7 @@ from .auth import (
     AuthConfig,
     Authenticator,
     GoogleAuthError,
+    RateLimitedError,
     clear_cookie_header,
     exchange_code_for_email,
     google_authorize_url,
@@ -474,6 +478,10 @@ class DashboardServer:
                     return outer._send_json(self, 401, {"error": "unauthenticated"})
                 if path == "/auth/logout":
                     return outer._handle_auth_logout(self)
+                if path == "/auth/email/start":
+                    return outer._handle_email_start(self)
+                if path == "/auth/email/verify":
+                    return outer._handle_email_verify(self)
                 if self.path == "/tasks":
                     return outer._handle_post_task(self)
                 if self.path.startswith("/tickets/") and self.path.endswith("/messages"):
@@ -659,6 +667,59 @@ class DashboardServer:
         req.send_header("Content-Length", str(len(body)))
         req.end_headers()
         req.wfile.write(body)
+
+    def _handle_email_start(self, req: BaseHTTPRequestHandler) -> None:
+        """Phase B: send a one-time code to an allowlisted email."""
+        cfg = self.auth.config
+        if self.auth.email_sender is None:
+            return self._send_json(req, 503, {"error": "email login not configured"})
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        email = (body.get("email") or "").strip()
+        if not email or "@" not in email:
+            return self._send_json(req, 400, {"error": "email required"})
+        if not cfg.is_email_allowed(email):
+            return self._send_json(req, 403, {"error": "email_not_allowed"})
+        try:
+            code = self.auth.otp_store.issue(email)
+        except RateLimitedError as exc:
+            return self._send_json(req, 429, {
+                "error": "rate_limited",
+                "retry_after": exc.retry_after_seconds,
+            })
+        try:
+            self.auth.email_sender.send_otp(email, code)
+        except Exception as exc:
+            logger.exception("email send failed for %s", email)
+            return self._send_json(req, 502, {"error": f"send_failed: {type(exc).__name__}"})
+        return self._send_json(req, 202, {"sent": True, "email": email})
+
+    def _handle_email_verify(self, req: BaseHTTPRequestHandler) -> None:
+        cfg = self.auth.config
+        if self.auth.email_sender is None:
+            return self._send_json(req, 503, {"error": "email login not configured"})
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        email = (body.get("email") or "").strip()
+        code = (body.get("code") or "").strip()
+        if not email or not code:
+            return self._send_json(req, 400, {"error": "email and code required"})
+        if not cfg.is_email_allowed(email):
+            return self._send_json(req, 403, {"error": "email_not_allowed"})
+        if not self.auth.otp_store.verify(email, code):
+            return self._send_json(req, 401, {"error": "invalid_or_expired_code"})
+        # Match → mint session cookie.
+        req.send_response(200)
+        req.send_header("Content-Type", "application/json")
+        req.send_header("Set-Cookie", self.auth.mint_cookie(email))
+        body_out = json.dumps({"authenticated": True, "email": email}).encode()
+        req.send_header("Content-Length", str(len(body_out)))
+        req.end_headers()
+        req.wfile.write(body_out)
 
     # ---- group-chat tickets ----
 

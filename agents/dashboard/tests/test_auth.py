@@ -501,6 +501,206 @@ def test_google_callback_surfaces_google_failure(auth_server, monkeypatch):
     assert "oauth_failed" in body
 
 
+# ---------------------------------------------------------------------------
+# Phase B — Email-OTP (store + sender + routes)
+# ---------------------------------------------------------------------------
+
+from dashboard.auth import OTPStore, RateLimitedError, SmtpSender, smtp_sender_from_config  # noqa: E402
+
+
+def test_otp_store_issue_then_verify_consumes_code():
+    store = OTPStore(ttl_seconds=60, rate_limit_seconds=0)
+    code = store.issue("alice@stanford.edu")
+    assert code.isdigit() and len(code) == 6
+    assert store.verify("alice@stanford.edu", code) is True
+    # Single-use: a second verify on the same code fails.
+    assert store.verify("alice@stanford.edu", code) is False
+
+
+def test_otp_store_wrong_code_does_not_consume():
+    store = OTPStore(rate_limit_seconds=0)
+    code = store.issue("a@stanford.edu")
+    assert store.verify("a@stanford.edu", "wrongcd") is False
+    # Real code still works (mismatch didn't consume it).
+    assert store.verify("a@stanford.edu", code) is True
+
+
+def test_otp_store_rate_limits_re_issue():
+    store = OTPStore(rate_limit_seconds=60)
+    store.issue("a@stanford.edu")
+    with pytest.raises(RateLimitedError) as exc:
+        store.issue("a@stanford.edu")
+    assert exc.value.retry_after_seconds > 0
+
+
+def test_otp_store_expired_code_rejected(monkeypatch):
+    store = OTPStore(ttl_seconds=10, rate_limit_seconds=0)
+    base = [1000]
+    monkeypatch.setattr(store, "_now", lambda: base[0])
+    code = store.issue("a@stanford.edu")
+    base[0] += 11   # past TTL
+    assert store.verify("a@stanford.edu", code) is False
+
+
+def test_otp_store_case_insensitive_email():
+    store = OTPStore(rate_limit_seconds=0)
+    code = store.issue("Alice@Stanford.edu")
+    assert store.verify("alice@stanford.edu", code) is True
+
+
+def test_smtp_sender_calls_smtplib(monkeypatch):
+    sent = {}
+
+    class _FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            sent["host"] = host
+            sent["port"] = port
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def starttls(self): sent["starttls"] = True
+        def login(self, u, p): sent["login"] = (u, p)
+        def send_message(self, msg):
+            sent["msg_to"] = msg["To"]
+            sent["subj"] = msg["Subject"]
+
+    import smtplib
+    monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
+
+    SmtpSender(host="smtp.test", port=587, from_addr="bot@x", username="u", password="p").send_otp("u@stanford.edu", "123456")
+    assert sent["host"] == "smtp.test"
+    assert sent["starttls"] is True
+    assert sent["login"] == ("u", "p")
+    assert sent["msg_to"] == "u@stanford.edu"
+    assert "123456" in sent["subj"]
+
+
+def test_smtp_sender_from_config_none_when_disabled():
+    assert smtp_sender_from_config(_cfg()) is None
+    cfg = _cfg(smtp_host="smtp.test", smtp_from="bot@x")
+    assert isinstance(smtp_sender_from_config(cfg), SmtpSender)
+
+
+# ---- email routes (live HTTP) ----
+
+class _CaptureSender:
+    def __init__(self): self.sent: list[tuple[str, str]] = []
+    def send_otp(self, email, code): self.sent.append((email, code))
+
+
+@pytest.fixture
+def email_server():
+    """Server with email-OTP enabled (capture-sender so nothing actually
+    hits SMTP) and Google deliberately off so the routes are isolated."""
+    cfg = _cfg(smtp_host="smtp.test", smtp_from="bot@x", otp_rate_limit_seconds=0)
+    sender = _CaptureSender()
+    srv = _build_server(Authenticator(cfg, email_sender=sender))
+    yield srv, sender, srv.auth
+    srv.shutdown()
+
+
+def test_email_start_sends_code_to_allowed(email_server):
+    srv, sender, _ = email_server
+    code, _, body = _post(srv, "/auth/email/start", {"email": "alice@stanford.edu"})
+    assert code == 202
+    assert json.loads(body)["sent"] is True
+    assert len(sender.sent) == 1
+    assert sender.sent[0][0] == "alice@stanford.edu"
+
+
+def test_email_start_rejects_disallowed_domain(email_server):
+    srv, sender, _ = email_server
+    code, _, body = _post(srv, "/auth/email/start", {"email": "eve@gmail.com"})
+    assert code == 403
+    assert "email_not_allowed" in body
+    assert sender.sent == []
+
+
+def test_email_start_400_on_missing_email(email_server):
+    srv, _, _ = email_server
+    assert _post(srv, "/auth/email/start", {})[0] == 400
+
+
+def test_email_start_503_when_otp_not_configured():
+    srv = _build_server(Authenticator(_cfg(), email_sender=None))
+    try:
+        code, _, body = _post(srv, "/auth/email/start", {"email": "a@stanford.edu"})
+        assert code == 503
+        assert "not configured" in body
+    finally:
+        srv.shutdown()
+
+
+def test_email_start_429_when_rate_limited():
+    cfg = _cfg(smtp_host="smtp.test", smtp_from="bot@x", otp_rate_limit_seconds=60)
+    sender = _CaptureSender()
+    srv = _build_server(Authenticator(cfg, email_sender=sender))
+    try:
+        assert _post(srv, "/auth/email/start", {"email": "a@stanford.edu"})[0] == 202
+        code, _, body = _post(srv, "/auth/email/start", {"email": "a@stanford.edu"})
+        assert code == 429
+        assert json.loads(body)["error"] == "rate_limited"
+    finally:
+        srv.shutdown()
+
+
+def test_email_start_502_when_sender_raises():
+    cfg = _cfg(smtp_host="smtp.test", smtp_from="bot@x", otp_rate_limit_seconds=0)
+
+    class _Broken:
+        def send_otp(self, email, code): raise RuntimeError("smtp down")
+
+    srv = _build_server(Authenticator(cfg, email_sender=_Broken()))
+    try:
+        code, _, body = _post(srv, "/auth/email/start", {"email": "a@stanford.edu"})
+        assert code == 502
+        assert "send_failed" in body
+    finally:
+        srv.shutdown()
+
+
+def test_email_verify_sets_session_on_match(email_server):
+    srv, sender, authn = email_server
+    _post(srv, "/auth/email/start", {"email": "alice@stanford.edu"})
+    code_val = sender.sent[-1][1]
+    status, headers, body = _post(srv, "/auth/email/verify", {
+        "email": "alice@stanford.edu", "code": code_val,
+    })
+    assert status == 200
+    assert json.loads(body)["email"] == "alice@stanford.edu"
+    token = _cookie_value(headers, "olympus_session")
+    assert token
+    s = verify_session(token, authn.config.session_secret)
+    assert s and s.email == "alice@stanford.edu"
+
+
+def test_email_verify_rejects_wrong_code(email_server):
+    srv, sender, _ = email_server
+    _post(srv, "/auth/email/start", {"email": "alice@stanford.edu"})
+    status, _, body = _post(srv, "/auth/email/verify", {
+        "email": "alice@stanford.edu", "code": "000000",
+    })
+    assert status == 401
+    assert "invalid_or_expired_code" in body
+
+
+def test_email_verify_rejects_disallowed_domain(email_server):
+    srv, _, _ = email_server
+    assert _post(srv, "/auth/email/verify", {"email": "eve@gmail.com", "code": "1"})[0] == 403
+
+
+def test_email_verify_400_when_missing_fields(email_server):
+    srv, _, _ = email_server
+    assert _post(srv, "/auth/email/verify", {"email": "alice@stanford.edu"})[0] == 400
+
+
+def test_email_verify_503_when_otp_not_configured():
+    srv = _build_server(Authenticator(_cfg(), email_sender=None))
+    try:
+        assert _post(srv, "/auth/email/verify", {"email": "a@stanford.edu", "code": "1"})[0] == 503
+    finally:
+        srv.shutdown()
+
+
 def test_bypass_auth_makes_apis_open(auth_server=None):
     # AUTH_BYPASS path: any cookie-less request looks authed.
     cfg = _cfg(bypass=True)
