@@ -103,6 +103,12 @@ spec:
               value: {{ .Values.hardening.demoMode | quote }}
             - name: OLYMPUS_DAILY_COST_CAP_USD
               value: {{ .Values.hardening.dailyCostCapUsd | quote }}
+            # --- Inventory (Phase INV) ---
+            # User-managed hosts + ssh keys file. Sibling of the audit
+            # log so a single mounted volume (audit.persistence) covers
+            # both. Per-key PEM bodies live in {dir}/keys/{key_id}.
+            - name: OLYMPUS_INVENTORY_PATH
+              value: {{ .Values.dashboard.inventoryPath | quote }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 5

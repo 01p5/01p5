@@ -230,10 +230,17 @@ def clear_cookie_header(name: str, *, secure: bool, path: str = "/") -> str:
 _GATED_GET_PREFIXES = (
     "/tasks", "/events", "/approvals", "/audit", "/tools",
     "/memory", "/rollback", "/telemetry", "/mcp", "/stacks", "/tickets",
+    "/inventory",
 )
 _GATED_POST_PREFIXES = (
     "/tasks", "/approvals/", "/memory/", "/rollback/",
-    "/mcp/servers", "/tools/", "/tickets/",
+    "/mcp/servers", "/tools/", "/tickets/", "/inventory/",
+)
+_GATED_PUT_PREFIXES = (
+    "/inventory/",
+)
+_GATED_DELETE_PREFIXES = (
+    "/inventory/", "/mcp/servers/",
 )
 
 
@@ -397,6 +404,14 @@ class Authenticator:
     @staticmethod
     def requires_auth_post(path: str) -> bool:
         return _path_matches(path.partition("?")[0], _GATED_POST_PREFIXES)
+
+    @staticmethod
+    def requires_auth_put(path: str) -> bool:
+        return _path_matches(path.partition("?")[0], _GATED_PUT_PREFIXES)
+
+    @staticmethod
+    def requires_auth_delete(path: str) -> bool:
+        return _path_matches(path.partition("?")[0], _GATED_DELETE_PREFIXES)
 
     # ---- session resolution ----
 

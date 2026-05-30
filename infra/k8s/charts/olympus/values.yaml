@@ -15,6 +15,10 @@ dashboard:
   port: 8765
   router: llm           # "llm" or "manual"
   auditLogPath: /var/lib/olympus/audit.jsonl
+  # User-managed hosts + ssh keys (Phase INV). File sits in the same
+  # mounted volume as the audit log so one PVC (audit.persistence)
+  # handles both. Key PEMs live in {dir}/keys/{key_id}, mode 0600.
+  inventoryPath: /var/lib/olympus/inventory.json
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits:   { cpu: 1,    memory: 1Gi }

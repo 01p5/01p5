@@ -97,8 +97,12 @@ from agentlib import (
     Bus,
     BusMessage,
     EmbeddingMemoryStore,
+    FileBackedInventoryStore,
     InMemoryBus,
+    InMemoryInventoryStore,
     InMemoryTicketStore,
+    InventoryError,
+    InventoryStore,
     JsonlAuditLogger,
     JsonlMemoryStore,
     JsonlRollbackStore,
@@ -112,6 +116,7 @@ from agentlib import (
     TicketStore,
     gate_tools,
     get_cost_for_type,
+    render_ansible_inventory,
 )
 from langchain_core.tools import BaseTool
 
@@ -171,6 +176,7 @@ class DashboardServer:
         mcp_servers: Optional[list[dict[str, Any]]] = None,
         ticket_store: Optional[TicketStore] = None,
         auth: Optional[Authenticator] = None,
+        inventory_store: Optional[InventoryStore] = None,
     ):
         self.orchestrator = orchestrator
         self.bus = bus
@@ -181,6 +187,10 @@ class DashboardServer:
         # server without auth and expect open access; production
         # build_default_server wires a real Authenticator from env.
         self.auth: Authenticator = auth or Authenticator(AuthConfig(bypass=True))
+        # User-managed hosts + ssh keys. Default is in-memory (tests
+        # construct DashboardServer without one); build_default_server
+        # swaps in a FileBackedInventoryStore against the persistent volume.
+        self.inventory_store: InventoryStore = inventory_store or InMemoryInventoryStore()
         # Group-chat ticket transcript (Phase 2). The orchestrator writes
         # dispatch/result/tool_call/ask events here; the dashboard records
         # human + main-agent messages and streams the whole transcript per
@@ -462,6 +472,12 @@ class DashboardServer:
                     return outer._handle_list_terraform_stacks(self)
                 if path == "/stacks/ansible":
                     return outer._handle_list_ansible_playbooks(self)
+                if path == "/inventory/hosts":
+                    return outer._handle_list_hosts(self)
+                if path == "/inventory/keys":
+                    return outer._handle_list_keys(self)
+                if path == "/inventory/render":
+                    return outer._handle_render_inventory(self)
                 if path.startswith("/static/"):
                     return outer._serve_static(self, path[len("/static/"):])
                 # Vite-built hashed assets live under /assets/.
@@ -510,13 +526,36 @@ class DashboardServer:
                     if "/" in rest:
                         agent_name, _, tool_name = rest.partition("/")
                         return outer._handle_invoke_tool(self, agent_name, tool_name)
+                if self.path == "/inventory/hosts":
+                    return outer._handle_post_host(self)
+                if self.path == "/inventory/keys":
+                    return outer._handle_post_key(self)
+                self.send_response(404)
+                self.end_headers()
+
+            def do_PUT(self):  # noqa: N802
+                path = self.path.partition("?")[0]
+                if outer.auth.requires_auth_put(path) and outer.auth.session_from_request(self.headers) is None:
+                    return outer._send_json(self, 401, {"error": "unauthenticated"})
+                if path.startswith("/inventory/hosts/"):
+                    host_id = path[len("/inventory/hosts/"):]
+                    return outer._handle_put_host(self, host_id)
                 self.send_response(404)
                 self.end_headers()
 
             def do_DELETE(self):  # noqa: N802
-                if self.path.startswith("/mcp/servers/"):
-                    name = self.path[len("/mcp/servers/"):]
+                path = self.path.partition("?")[0]
+                if outer.auth.requires_auth_delete(path) and outer.auth.session_from_request(self.headers) is None:
+                    return outer._send_json(self, 401, {"error": "unauthenticated"})
+                if path.startswith("/mcp/servers/"):
+                    name = path[len("/mcp/servers/"):]
                     return outer._handle_delete_mcp_server(self, name)
+                if path.startswith("/inventory/hosts/"):
+                    host_id = path[len("/inventory/hosts/"):]
+                    return outer._handle_delete_host(self, host_id)
+                if path.startswith("/inventory/keys/"):
+                    key_id = path[len("/inventory/keys/"):]
+                    return outer._handle_delete_key(self, key_id)
                 self.send_response(404)
                 self.end_headers()
 
@@ -1400,6 +1439,120 @@ class DashboardServer:
                 stacks.append(str(tf_dir.relative_to(root.parent)))
         self._send_json(req, 200, sorted(set(stacks)))
 
+    # ---- inventory (Phase INV) ----
+
+    @staticmethod
+    def _host_to_jsonable(host: Any) -> dict[str, Any]:
+        d = dataclasses.asdict(host)
+        # Sort keys defensively so the wire shape is stable for tests.
+        return d
+
+    @staticmethod
+    def _key_to_jsonable(key: Any) -> dict[str, Any]:
+        """Strip the content side of the SshKey dataclass before serializing
+        — we never put private-key bytes on the wire even if the dataclass
+        is extended later. The InventoryStore protocol already gates this
+        (content lives behind ``get_key_content``), but defense-in-depth."""
+        d = dataclasses.asdict(key)
+        d.pop("content", None)
+        return d
+
+    def _handle_list_hosts(self, req: BaseHTTPRequestHandler) -> None:
+        hosts = self.inventory_store.list_hosts()
+        self._send_json(req, 200, {"hosts": [self._host_to_jsonable(h) for h in hosts]})
+
+    def _handle_post_host(self, req: BaseHTTPRequestHandler) -> None:
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        if not isinstance(body, dict):
+            return self._send_json(req, 400, {"error": "body must be an object"})
+        try:
+            host = self.inventory_store.add_host(
+                name=body.get("name", ""),
+                address=body.get("address", ""),
+                ssh_user=body.get("ssh_user") or "ubuntu",
+                ssh_port=body.get("ssh_port") or 22,
+                key_id=body.get("key_id") or None,
+                groups=list(body.get("groups") or []),
+                vars=dict(body.get("vars") or {}),
+                description=body.get("description") or "",
+            )
+        except InventoryError as exc:
+            return self._send_json(req, 400, {"error": str(exc)})
+        return self._send_json(req, 201, {"host": self._host_to_jsonable(host)})
+
+    def _handle_put_host(self, req: BaseHTTPRequestHandler, host_id: str) -> None:
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        if not isinstance(body, dict):
+            return self._send_json(req, 400, {"error": "body must be an object"})
+        # Only forward the fields the user actually sent — partial update.
+        updates: dict[str, Any] = {}
+        for k in ("name", "address", "ssh_user", "ssh_port", "key_id",
+                  "groups", "vars", "description"):
+            if k in body:
+                updates[k] = body[k]
+        try:
+            host = self.inventory_store.update_host(host_id, **updates)
+        except InventoryError as exc:
+            msg = str(exc)
+            status = 404 if "not found" in msg else 400
+            return self._send_json(req, status, {"error": msg})
+        return self._send_json(req, 200, {"host": self._host_to_jsonable(host)})
+
+    def _handle_delete_host(self, req: BaseHTTPRequestHandler, host_id: str) -> None:
+        ok = self.inventory_store.remove_host(host_id)
+        if not ok:
+            return self._send_json(req, 404, {"error": "host not found"})
+        return self._send_json(req, 200, {"ok": True})
+
+    def _handle_list_keys(self, req: BaseHTTPRequestHandler) -> None:
+        keys = self.inventory_store.list_keys()
+        self._send_json(req, 200, {"keys": [self._key_to_jsonable(k) for k in keys]})
+
+    def _handle_post_key(self, req: BaseHTTPRequestHandler) -> None:
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        if not isinstance(body, dict):
+            return self._send_json(req, 400, {"error": "body must be an object"})
+        try:
+            key = self.inventory_store.add_key(
+                name=body.get("name", ""),
+                content=body.get("content", ""),
+            )
+        except InventoryError as exc:
+            return self._send_json(req, 400, {"error": str(exc)})
+        return self._send_json(req, 201, {"key": self._key_to_jsonable(key)})
+
+    def _handle_delete_key(self, req: BaseHTTPRequestHandler, key_id: str) -> None:
+        try:
+            ok = self.inventory_store.remove_key(key_id)
+        except InventoryError as exc:
+            return self._send_json(req, 409, {"error": str(exc)})
+        if not ok:
+            return self._send_json(req, 404, {"error": "key not found"})
+        return self._send_json(req, 200, {"ok": True})
+
+    def _handle_render_inventory(self, req: BaseHTTPRequestHandler) -> None:
+        """Render the current store as an ansible INI inventory text
+        for preview in the UI. Does NOT include key file paths — the UI
+        only needs the structure; the ansible agent materializes a
+        full run-dir with keys when it actually runs."""
+        hosts = self.inventory_store.list_hosts()
+        text = render_ansible_inventory(hosts)
+        encoded = text.encode("utf-8")
+        req.send_response(200)
+        req.send_header("Content-Type", "text/plain; charset=utf-8")
+        req.send_header("Content-Length", str(len(encoded)))
+        req.end_headers()
+        req.wfile.write(encoded)
+
     def _handle_list_ansible_playbooks(self, req: BaseHTTPRequestHandler) -> None:
         """Scan infra/ansible/ for top-level *.yml playbooks."""
         roots = self._infra_roots("ansible")
@@ -1695,6 +1848,13 @@ def build_default_server(
     # + ALLOWED_DOMAINS + SESSION_SECRET via the olympus-secrets secret.
     auth_cfg = AuthConfig.from_env()
     authenticator = Authenticator(auth_cfg)
+    # Inventory store: file-backed on disk, default sibling of the audit log.
+    # The chart mounts /var/lib/olympus as the audit volume; inventory.json
+    # lands there too so a single PVC handles both.
+    inventory_path = os.environ.get("OLYMPUS_INVENTORY_PATH", "").strip() or str(
+        Path(audit_log_path).with_name("inventory.json")
+    )
+    inventory_store: InventoryStore = FileBackedInventoryStore(inventory_path)
     return DashboardServer(
         orchestrator=orch,
         bus=bus,
@@ -1705,6 +1865,7 @@ def build_default_server(
         mcp_servers=mcp_registry,
         ticket_store=ticket_store,
         auth=authenticator,
+        inventory_store=inventory_store,
     )
 
 
