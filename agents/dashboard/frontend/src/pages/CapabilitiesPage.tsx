@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Server, Layers, ListChecks, Hammer, Wrench } from "lucide-react";
+import { Server, Layers, ListChecks, Hammer, Wrench, Cpu } from "lucide-react";
 import clsx from "clsx";
 
 const SUBTABS = [
@@ -7,6 +7,7 @@ const SUBTABS = [
   { to: "terraform",  label: "Terraform",  icon: Layers },
   { to: "ansible",    label: "Ansible",    icon: ListChecks },
   { to: "programmer", label: "Programmer", icon: Hammer },
+  { to: "hpc",        label: "HPC",        icon: Cpu },
 ];
 
 /**
