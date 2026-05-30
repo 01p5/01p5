@@ -2,6 +2,7 @@ import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import { Toaster } from "sonner";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
+import { AuditingPage } from "./pages/AuditingPage";
 import { ChatPage } from "./pages/ChatPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SessionsPage } from "./pages/SessionsPage";
@@ -43,6 +44,7 @@ export default function App(): JSX.Element {
           <Route path="chat" element={<ChatRoute />} />
           <Route path="chat/:ticketId" element={<ChatRoute />} />
           <Route path="sessions" element={<SessionsPage />} />
+          <Route path="auditing" element={<AuditingPage />} />
           <Route path="kubernetes" element={<KubernetesPage />} />
           <Route path="terraform" element={<TerraformPage />} />
           <Route path="ansible" element={<AnsiblePage />} />

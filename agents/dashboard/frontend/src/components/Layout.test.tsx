@@ -44,9 +44,12 @@ function renderLayout(initial = "/chat"): void {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route path="chat" element={<div>chat-content</div>} />
+          <Route path="sessions" element={<div>sessions-content</div>} />
+          <Route path="auditing" element={<div>auditing-content</div>} />
           <Route path="kubernetes" element={<div>k8s-content</div>} />
           <Route path="terraform" element={<div>tf-content</div>} />
           <Route path="ansible" element={<div>ansible-content</div>} />
+          <Route path="hosts" element={<div>hosts-content</div>} />
           <Route path="programmer" element={<div>prog-content</div>} />
           <Route path="mcp" element={<div>mcp-content</div>} />
         </Route>
@@ -56,10 +59,11 @@ function renderLayout(initial = "/chat"): void {
 }
 
 describe("Layout", () => {
-  it("renders all 6 tabs and the Olympus brand", () => {
+  it("renders every tab in the nav and the Olympus brand", () => {
     renderLayout();
     expect(screen.getByText(/^olympus$/i)).toBeInTheDocument();
-    ["Chat", "Kubernetes", "Terraform", "Ansible", "Programmer", "MCP"].forEach((label) => {
+    ["Chat", "Sessions", "Auditing", "Kubernetes", "Terraform", "Ansible",
+     "Hosts", "Programmer", "MCP"].forEach((label) => {
       expect(screen.getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
     });
   });
@@ -91,12 +95,18 @@ describe("Layout", () => {
     expect(screen.getByText("k8s-content")).toBeInTheDocument();
   });
 
-  it("right sidebar surfaces the three intelligence-layer panels", async () => {
+  it("does NOT mount the auditing panels in the Layout (they moved to /auditing)", () => {
     renderLayout("/chat");
-    // Approvals + Rollback + Audit panels are all mounted in the right column.
-    await waitFor(() => expect(screen.getByText(/approval queue/i)).toBeInTheDocument());
-    expect(screen.getByText(/rollback queue/i)).toBeInTheDocument();
-    expect(screen.getByText(/audit log/i)).toBeInTheDocument();
+    // Approval queue / Rollback queue / Audit log / Live Activity used to
+    // ride along in left + right side panels; AUD.2 moves them to /auditing
+    // and exposes them only via the new Auditing tab.
+    expect(screen.queryByText(/approval queue/i)).toBeNull();
+    expect(screen.queryByText(/rollback queue/i)).toBeNull();
+    expect(screen.queryByText(/audit log/i)).toBeNull();
+    expect(screen.queryByText(/live activity/i)).toBeNull();
+    // But the Auditing tab IS there, linking to /auditing.
+    const tab = screen.getByRole("link", { name: /auditing/i });
+    expect(tab).toHaveAttribute("href", "/auditing");
   });
 
   it("telemetry footer mounts and stays hidden until tasks > 0", async () => {

@@ -1,18 +1,15 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History, Network } from "lucide-react";
+import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History, Network, ClipboardList } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
 import { StatusDot } from "./StatusDot";
-import { BusSidebar } from "./BusSidebar";
-import { ApprovalsPanel } from "./ApprovalsPanel";
-import { AuditPanel } from "./AuditPanel";
-import { RollbackPanel } from "./RollbackPanel";
 import { TelemetryFooter } from "./TelemetryFooter";
 
 const TABS = [
   { to: "/chat",       label: "Chat",       icon: MessageSquare },
   { to: "/sessions",   label: "Sessions",   icon: History },
+  { to: "/auditing",   label: "Auditing",   icon: ClipboardList },
   { to: "/kubernetes", label: "Kubernetes", icon: Server },
   { to: "/terraform",  label: "Terraform",  icon: Layers },
   { to: "/ansible",    label: "Ansible",    icon: ListChecks },
@@ -80,17 +77,14 @@ export function Layout(): JSX.Element {
         </div>
       </header>
 
-      {/* Three-column main */}
-      <main className="grid grid-cols-[280px_1fr_380px] min-h-0 overflow-hidden">
-        <BusSidebar />
-        <div className="min-h-0 overflow-hidden flex flex-col">
-          <Outlet />
-        </div>
-        <aside className="bg-dark-secondary border-l border-border-subtle grid grid-rows-3 min-h-0">
-          <ApprovalsPanel />
-          <RollbackPanel />
-          <AuditPanel />
-        </aside>
+      {/* Single-column main. Live Activity / Approval queue / Rollback
+          queue / Audit log used to live in left + right side panels
+          here; they moved to /auditing (AUD.2/4). New approvals now
+          surface as a global Sonner toast — except when the user is
+          looking at the chat ticket the approval belongs to, where the
+          approval card renders inline in the transcript. */}
+      <main className="min-h-0 overflow-hidden flex flex-col">
+        <Outlet />
       </main>
       <TelemetryFooter />
     </div>
