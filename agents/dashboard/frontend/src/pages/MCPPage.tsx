@@ -495,11 +495,20 @@ function HPCIntegrationCard({ servers, onConnected }: HPCCardProps): JSX.Element
       {
         name: "gpu-mcp",
         command: gpuCmd.trim() || "gpu-mcp",
+        args: [] as string[],
         destructive: [] as string[],
       },
       {
         name: "slurm-mcp",
         command: slurmCmd.trim() || "slurm-mcp",
+        // --local makes slurm-mcp start without a registered cluster:
+        // tool calls shell out to local sinfo/squeue (will surface a
+        // legible error if slurm CLI isn't installed). Without this
+        // arg the binary exits immediately with
+        // "--cluster <name> or --local is required". Once the user
+        // registers a real cluster via slurm-mgr's dashboard, they'd
+        // override to `--cluster <name>` in the advanced section.
+        args: ["--local"],
         destructive: ["jobs_cancel", "jobs_hold", "jobs_release", "jobs_requeue"],
       },
     ];
@@ -516,7 +525,7 @@ function HPCIntegrationCard({ servers, onConnected }: HPCCardProps): JSX.Element
           target_agent: "hpc",
           transport: "stdio",
           command: s.command,
-          args: [],
+          args: s.args,
           destructive: s.destructive,
         });
         next[s.name] = {
