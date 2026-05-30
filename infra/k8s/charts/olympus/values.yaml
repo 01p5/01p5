@@ -104,3 +104,47 @@ rbac:
 extraEnv: []          # list of corev1 EnvVar
 extraVolumes: []      # list of corev1 Volume
 extraVolumeMounts: [] # list of corev1 VolumeMount
+
+# ---------------------------------------------------------------------
+# S2.C1 — Sibling dashboards.
+#
+# Both default OFF. When enabled, each adds a Deployment + Service
+# (and optionally a PVC for hosts.json) in the same namespace. Olympus
+# reverse-proxies /slurm/* and /gpu/* into these services and embeds
+# the SPAs under /capabilities/slurm and /capabilities/gpu (S2.C2 +
+# S2.D1). Olympus also talks MCP-over-HTTP to their /mcp endpoints
+# so the HPC view in /capabilities/hpc gets real data.
+#
+# Images: built from the sibling repos slurm-mgr + gpu-watch
+# (Dockerfiles added in S2.A2 + S2.B2).
+# ---------------------------------------------------------------------
+
+slurmDashboard:
+  enabled: false
+  image:
+    repository: slurm-dashboard
+    tag: dev
+    pullPolicy: IfNotPresent
+  port: 8770
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  persistence:
+    enabled: true
+    size: 256Mi
+    storageClass: ""
+
+gpuDashboard:
+  enabled: false
+  image:
+    repository: gpu-dashboard
+    tag: dev
+    pullPolicy: IfNotPresent
+  port: 8780
+  resources:
+    requests: { cpu: 50m,  memory: 64Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+  persistence:
+    enabled: true
+    size: 256Mi
+    storageClass: ""

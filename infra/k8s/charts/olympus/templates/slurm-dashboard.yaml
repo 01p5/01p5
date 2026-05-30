@@ -1,0 +1,110 @@
+{{- if .Values.slurmDashboard.enabled }}
+# S2.C1 — slurm-dashboard sibling. Optional; default off. When enabled,
+# Olympus reverse-proxies /slurm/* into this service (port 8770) so
+# users see the standalone slurm-mgr dashboard embedded under
+# /capabilities/slurm — including its built-in cluster registration UI.
+# Olympus also speaks MCP-over-HTTP to its POST /mcp/<cluster> endpoint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "olympus.fullname" . }}-slurm-dashboard
+  labels: {{- include "olympus.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}-slurm-dashboard
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Chart.Name }}-slurm-dashboard
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: slurm-dashboard
+          image: "{{ .Values.slurmDashboard.image.repository }}:{{ .Values.slurmDashboard.image.tag }}"
+          imagePullPolicy: {{ .Values.slurmDashboard.image.pullPolicy }}
+          command: ["slurm-dashboard"]
+          args:
+            - --host=0.0.0.0
+            - --port={{ .Values.slurmDashboard.port }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.slurmDashboard.port }}
+          env:
+            # slurmlib's ClusterRegistry reads SLURM_MGR_HOSTS first,
+            # else ~/.slurm-mgr/hosts.json. Pin it explicitly so the
+            # PVC mount below is the canonical store.
+            - name: SLURM_MGR_HOSTS
+              value: /var/lib/slurm-mgr/hosts.json
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources: {{- toYaml .Values.slurmDashboard.resources | nindent 12 }}
+          volumeMounts:
+            - name: hosts
+              mountPath: /var/lib/slurm-mgr
+            {{- if .Values.secrets.sshPrivateKeyKey }}
+            # Reuse Olympus's SSH key secret — the slurm dashboard SSHes
+            # to its registered controllers using the same cluster-issued
+            # key. Mounted read-only at /etc/olympus/ssh/.
+            - name: ssh-key
+              mountPath: {{ .Values.secrets.sshPrivateKeyMount }}
+              subPath: {{ .Values.secrets.sshPrivateKeyKey }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: hosts
+          {{- if .Values.slurmDashboard.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "olympus.fullname" . }}-slurm-dashboard-hosts
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.secrets.sshPrivateKeyKey }}
+        - name: ssh-key
+          secret:
+            secretName: {{ include "olympus.secretName" . }}
+            defaultMode: 384  # 0o600 — SSH refuses world-readable keys
+            optional: true
+            items:
+              - key: {{ .Values.secrets.sshPrivateKeyKey }}
+                path: {{ .Values.secrets.sshPrivateKeyKey }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "olympus.fullname" . }}-slurm-dashboard
+  labels: {{- include "olympus.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.slurmDashboard.port }}
+      targetPort: http
+      name: http
+  selector:
+    app.kubernetes.io/name: {{ .Chart.Name }}-slurm-dashboard
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if .Values.slurmDashboard.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "olympus.fullname" . }}-slurm-dashboard-hosts
+  labels: {{- include "olympus.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.slurmDashboard.persistence.size }}
+  {{- with .Values.slurmDashboard.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}
+{{- end }}
