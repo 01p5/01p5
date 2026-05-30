@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, cleanup, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { ChatPage, actorAccent, payloadText, CollapsibleProse } from "./ChatPage";
@@ -65,6 +65,11 @@ beforeEach(() => {
   MockEventSource.latest = null;
   seq = 0;
   vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
+  // AUD.5c: ChatPage polls /approvals so it can render inline cards
+  // for pending approvals matched on ticket_id. Default to empty so
+  // unrelated tests don't see surprise UI; tests that need approvals
+  // mock listApprovals explicitly.
+  vi.spyOn(api, "listApprovals").mockResolvedValue([]);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -237,6 +242,58 @@ describe("ChatPage — transcript rendering", () => {
     await waitFor(() => {
       expect(lastLocation).toBe(`/chat/${ticketId}`);
     });
+  });
+
+  it("renders an inline ApprovalCard for pending approvals matching the ticket (AUD.5c)", async () => {
+    vi.spyOn(api, "listApprovals").mockResolvedValue([
+      {
+        approval_id: "ap-mine", ticket_id: "tk-existing",
+        agent: "sysadmin", tool: "delete_pod",
+        args: { name: "stuck" }, rationale: "Pod is in CrashLoopBackoff",
+        diff: null, requested_at: 1,
+      },
+      {
+        approval_id: "ap-other", ticket_id: "tk-different",
+        agent: "ansible", tool: "run_module",
+        args: {}, rationale: "from a different session",
+        diff: null, requested_at: 2,
+      },
+    ]);
+    renderChat("tk-existing");
+    // The matching approval renders inline; the other does NOT.
+    expect(await screen.findByTestId("inline-approval-ap-mine")).toBeInTheDocument();
+    expect(screen.queryByTestId("inline-approval-ap-other")).toBeNull();
+    expect(screen.getByText(/Pod is in CrashLoopBackoff/)).toBeInTheDocument();
+    expect(screen.getByText(/sysadmin → delete_pod/)).toBeInTheDocument();
+  });
+
+  it("Approve button on inline card calls resolveApproval(true)", async () => {
+    vi.spyOn(api, "listApprovals").mockResolvedValue([{
+      approval_id: "ap-1", ticket_id: "tk-existing",
+      agent: "sysadmin", tool: "delete_pod",
+      args: {}, rationale: "r", diff: null, requested_at: 1,
+    }]);
+    const resolve = vi.spyOn(api, "resolveApproval").mockResolvedValue({ resolved: "ap-1" });
+    renderChat("tk-existing");
+    const card = await screen.findByTestId("inline-approval-ap-1");
+    await userEvent.click(within(card).getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(resolve).toHaveBeenCalled());
+    expect(resolve.mock.calls[0][0]).toBe("ap-1");
+    expect(resolve.mock.calls[0][1].approved).toBe(true);
+  });
+
+  it("Decline button on inline card calls resolveApproval(false)", async () => {
+    vi.spyOn(api, "listApprovals").mockResolvedValue([{
+      approval_id: "ap-1", ticket_id: "tk-existing",
+      agent: "ansible", tool: "run_module",
+      args: {}, rationale: "r", diff: null, requested_at: 1,
+    }]);
+    const resolve = vi.spyOn(api, "resolveApproval").mockResolvedValue({ resolved: "ap-1" });
+    renderChat("tk-existing");
+    const card = await screen.findByTestId("inline-approval-ap-1");
+    await userEvent.click(within(card).getByRole("button", { name: /decline/i }));
+    await waitFor(() => expect(resolve).toHaveBeenCalled());
+    expect(resolve.mock.calls[0][1].approved).toBe(false);
   });
 
   it("does NOT re-navigate on subsequent sends (URL sync is one-shot)", async () => {

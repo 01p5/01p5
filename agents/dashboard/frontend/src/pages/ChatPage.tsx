@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2 } from "lucide-react";
+import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2, ShieldAlert, X, ChevronDown } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api";
+import { usePolling } from "../hooks/usePolling";
 import { useSSE } from "../hooks/useSSE";
-import type { TicketEventDTO } from "../types";
+import type { PendingApproval, TicketEventDTO } from "../types";
 
 /**
  * Chat — the group-chat ticket. The chat session IS a ticket: the human,
@@ -87,6 +88,18 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
         : [...prev, ev].sort((a, b) => a.seq - b.seq),
     );
   });
+
+  // AUD.5c: pending approvals for THIS ticket render inline at the end
+  // of the transcript — Claude Code style. The global ApprovalToastBroker
+  // (AUD.5d) reads the same /approvals data and suppresses its popup
+  // when the user is here, so the user sees exactly one surface per
+  // pending approval.
+  const { data: allApprovals, refresh: refreshApprovals } = usePolling(
+    api.listApprovals, 1500,
+  );
+  const inlineApprovals: PendingApproval[] = (allApprovals ?? [])
+    .filter((a) => a.ticket_id === ticketId)
+    .sort((a, b) => a.requested_at - b.requested_at);
 
   const submit = async (text: string): Promise<void> => {
     const trimmed = text.trim();
@@ -201,6 +214,9 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
             disabled submit button + cleared input already convey "sent". */}
         {events.length === 0 && <EmptyChat onPick={submit} />}
         {events.map((ev) => <EventView key={ev.event_id} event={ev} />)}
+        {inlineApprovals.map((a) => (
+          <InlineApprovalCard key={a.approval_id} approval={a} onResolved={refreshApprovals} />
+        ))}
       </div>
 
       {/* Composer */}
@@ -299,7 +315,12 @@ function EventView({ event }: { event: TicketEventDTO }): JSX.Element | null {
     case "tool_call":
       return <ToolCallLine event={event} />;
     case "approval_request":
-      return <NoticeLine text={`${event.actor} requested approval for ${String(p.tool ?? "a tool")} — see the right sidebar`} />;
+      // AUD.5c: pending approvals render as an inline ApprovalCard at
+      // the END of the transcript via ChatPage's polling, not as a
+      // transcript event. This case fires only if the runtime ever
+      // publishes approval_request to the bus (unused today). Show a
+      // muted notice so the timeline still shows when it was requested.
+      return <NoticeLine text={`${event.actor} requested approval for ${String(p.tool ?? "a tool")}`} />;
     case "approval_decision":
       return <NoticeLine text={`approval ${p.approved ? "granted" : "denied"} for ${event.actor}`} />;
     default:
@@ -420,6 +441,106 @@ function NoticeLine({ text }: { text: string }): JSX.Element {
       <div className="flex items-center gap-2 text-[11px] font-mono text-accent-yellow bg-accent-yellow/5 border border-accent-yellow/20 rounded px-3 py-1">
         <AlertCircle size={11} />
         {text}
+      </div>
+    </div>
+  );
+}
+
+
+/**
+ * AUD.5c — inline approval card rendered in the chat transcript for
+ * any pending /approvals whose ticket_id matches the current chat
+ * ticket. Claude-Code-style: full rationale + args + diff visible by
+ * default, three actions (Approve / Decline / Details toggle for the
+ * raw args dict). One-click approve/decline with a stock reason; users
+ * who want to write a longer reason can use the Approval queue in
+ * /auditing.
+ */
+export function InlineApprovalCard({
+  approval,
+  onResolved,
+}: {
+  approval: PendingApproval;
+  onResolved: () => void;
+}): JSX.Element {
+  const [showArgs, setShowArgs] = useState(false);
+  const [busy, setBusy] = useState<"approve" | "decline" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const resolve = async (approved: boolean): Promise<void> => {
+    setBusy(approved ? "approve" : "decline");
+    setErr(null);
+    try {
+      await api.resolveApproval(approval.approval_id, {
+        approved,
+        reason: approved ? "approved inline in chat" : "declined inline in chat",
+      });
+      onResolved();
+    } catch (e) {
+      setErr((e as Error).message);
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="flex">
+      <div className="max-w-[80%] flex items-start gap-2">
+        <div className="flex-shrink-0 w-7 h-7 rounded-full border border-accent-yellow/40 bg-accent-yellow/10 flex items-center justify-center">
+          <ShieldAlert size={14} className="text-accent-yellow" strokeWidth={2.25} />
+        </div>
+        <div className="flex-1">
+          <div className="text-[10px] font-mono uppercase tracking-[1.5px] mb-1 pl-1 text-accent-yellow">
+            Approval needed · {approval.agent} → {approval.tool}
+          </div>
+          <div
+            data-testid={`inline-approval-${approval.approval_id}`}
+            className="rounded-md rounded-tl-sm bg-accent-yellow/[0.06] border border-accent-yellow/30 px-4 py-3 space-y-2"
+          >
+            <p className="text-sm text-text-primary leading-snug">{approval.rationale}</p>
+            {approval.diff && (
+              <pre className="font-mono text-[11px] text-text-secondary bg-dark-primary/60 border border-border-subtle rounded p-2 overflow-auto max-h-60">
+                {approval.diff}
+              </pre>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowArgs((v) => !v)}
+              className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-[1.5px] text-text-muted hover:text-text-secondary"
+            >
+              <ChevronDown size={12} className={clsx("transition-transform", showArgs && "rotate-180")} />
+              {showArgs ? "Hide" : "Show"} raw args
+            </button>
+            {showArgs && (
+              <pre className="font-mono text-[11px] text-text-secondary bg-dark-primary/60 border border-border-subtle rounded p-2 overflow-auto max-h-40">
+                {JSON.stringify(approval.args, null, 2)}
+              </pre>
+            )}
+            {err && (
+              <div className="flex items-center gap-1 text-[11px] text-accent-red">
+                <AlertCircle size={11} />
+                {err}
+              </div>
+            )}
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => void resolve(true)}
+                disabled={busy !== null}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-green border border-accent-green/40 hover:bg-accent-green/10 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <CheckCircle2 size={14} strokeWidth={2.5} />
+                {busy === "approve" ? "Approving…" : "Approve"}
+              </button>
+              <button
+                onClick={() => void resolve(false)}
+                disabled={busy !== null}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-red border border-accent-red/40 hover:bg-accent-red/10 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <X size={14} strokeWidth={2.5} />
+                {busy === "decline" ? "Declining…" : "Decline"}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
