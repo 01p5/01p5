@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate, useParams } from "react-router-dom";
+import { Toaster } from "sonner";
 import { Layout } from "./components/Layout";
 import { RequireAuth } from "./components/RequireAuth";
 import { ChatPage } from "./pages/ChatPage";
@@ -20,23 +21,38 @@ function ChatRoute(): JSX.Element {
 
 export default function App(): JSX.Element {
   return (
-    <Routes>
-      {/* Public sign-in page — no RequireAuth wrapping. */}
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>
-        <Route index element={<Navigate to="/chat" replace />} />
-        <Route path="chat" element={<ChatRoute />} />
-        <Route path="chat/:ticketId" element={<ChatRoute />} />
-        <Route path="sessions" element={<SessionsPage />} />
-        <Route path="kubernetes" element={<KubernetesPage />} />
-        <Route path="terraform" element={<TerraformPage />} />
-        <Route path="ansible" element={<AnsiblePage />} />
-        <Route path="hosts" element={<HostsPage />} />
-        <Route path="programmer" element={<ProgrammerPage />} />
-        <Route path="mcp" element={<MCPPage />} />
-        {/* Catch-all → chat */}
-        <Route path="*" element={<Navigate to="/chat" replace />} />
-      </Route>
-    </Routes>
+    <>
+      {/* Global toast outlet — lives outside the Routes so toasts survive
+          navigation. ApprovalToastBroker (mounted in Layout) fires into
+          this Toaster for any new approval the user is NOT actively
+          looking at in the chat transcript. */}
+      <Toaster
+        richColors
+        position="top-right"
+        theme="dark"
+        toastOptions={{
+          // Match the rest of the dashboard's dark-panel look.
+          style: { fontFamily: "ui-monospace, monospace", fontSize: "12px" },
+        }}
+      />
+      <Routes>
+        {/* Public sign-in page — no RequireAuth wrapping. */}
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>
+          <Route index element={<Navigate to="/chat" replace />} />
+          <Route path="chat" element={<ChatRoute />} />
+          <Route path="chat/:ticketId" element={<ChatRoute />} />
+          <Route path="sessions" element={<SessionsPage />} />
+          <Route path="kubernetes" element={<KubernetesPage />} />
+          <Route path="terraform" element={<TerraformPage />} />
+          <Route path="ansible" element={<AnsiblePage />} />
+          <Route path="hosts" element={<HostsPage />} />
+          <Route path="programmer" element={<ProgrammerPage />} />
+          <Route path="mcp" element={<MCPPage />} />
+          {/* Catch-all → chat */}
+          <Route path="*" element={<Navigate to="/chat" replace />} />
+        </Route>
+      </Routes>
+    </>
   );
 }
