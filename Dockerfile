@@ -90,6 +90,21 @@ RUN pip install --no-cache-dir --no-deps -e ./libs/agentlib \
  && pip install --no-cache-dir wsproto \
  && pip install --no-cache-dir 'textual>=0.50'
 
+# Real HPC MCP servers, sourced from the public sibling repos. Pinned by SHA
+# so the image is reproducible (bump the SHAs to upgrade — bump is the only
+# way deps update). Each repo ships two interesting packages: a *lib (SSH +
+# data model) and an *-mcp (stdio MCP entry point built on the lib). The
+# entry points install onto PATH as `slurm-mcp` and `gpu-mcp` and are
+# spawned by the dashboard's MCP integration card. Both depend on paramiko
+# (SSH); pip pulls it transitively.
+ARG SLURM_MGR_SHA=df91ee9607378fd81c30e5cf8675f6b47863fd9b
+ARG GPU_WATCH_SHA=497190e6bbc04987eed3062a5f5edc65b00b0d3e
+RUN pip install --no-cache-dir \
+        "slurmlib    @ git+https://github.com/01p5/slurm-mgr.git@${SLURM_MGR_SHA}#subdirectory=packages/slurmlib"     \
+        "slurm-mcp   @ git+https://github.com/01p5/slurm-mgr.git@${SLURM_MGR_SHA}#subdirectory=packages/slurm-mcp"    \
+        "gpuwatchlib @ git+https://github.com/01p5/gpu-watch.git@${GPU_WATCH_SHA}#subdirectory=packages/gpuwatchlib"  \
+        "gpu-mcp     @ git+https://github.com/01p5/gpu-watch.git@${GPU_WATCH_SHA}#subdirectory=packages/gpu-mcp"
+
 # Drop the Vite-built SPA bundle on top of the python source tree.
 # DashboardServer auto-picks static/dist when present.
 COPY --from=frontend-build /spa /opt/olympus/agents/dashboard/static/dist
