@@ -901,17 +901,11 @@ class DashboardServer:
         if target is None:
             self._send_json(req, 404, {"error": f"unknown tool {tool_name!r} on agent {agent_name!r}"})
             return
-        # Optionally publish a bus event so the live feed shows the
-        # human-driven invocation too.
-        try:
-            from agentlib import new_message
-            self.bus.publish(new_message(
-                task_id=task_id, sender="human", recipient=agent_name,
-                kind="task",
-                payload={"natural_language": f"[direct] {tool_name}({args})", "inputs": args},
-            ))
-        except Exception:
-            pass  # bus publish is best-effort for UI feedback
+        # No bus publishes for UI-driven tool invocations — the audit log
+        # (recorded inside gate_tools via ctx.audit) is the real record,
+        # and the HTTP response carries the result. Publishing here just
+        # bloated bus.log + polluted the live feed with /tools polling
+        # noise (e.g. KubernetesPage auto-refresh).
         try:
             result = target.invoke(args)
         except Exception as exc:
@@ -921,16 +915,6 @@ class DashboardServer:
                 "error": f"{type(exc).__name__}: {exc}",
             })
             return
-        # Mirror the result back on the bus for the live feed.
-        try:
-            from agentlib import new_message
-            self.bus.publish(new_message(
-                task_id=task_id, sender=agent_name, recipient="human",
-                kind="result",
-                payload={"status": "success", "summary": str(result)[:500]},
-            ))
-        except Exception:
-            pass
         self._send_json(req, 200, {
             "task_id": task_id,
             "agent": agent_name,
@@ -1026,19 +1010,9 @@ class DashboardServer:
                 req, 404,
                 {"error": f"inverse tool {entry.inverse_tool!r} not on agent {entry.agent!r}"},
             )
-        # Surface the rollback on the bus so the live feed shows it.
-        try:
-            from agentlib import new_message
-            self.bus.publish(new_message(
-                task_id=task_id, sender="human", recipient=entry.agent,
-                kind="task",
-                payload={
-                    "natural_language": f"[rollback] {entry.description}",
-                    "inputs": entry.inverse_args,
-                },
-            ))
-        except Exception:
-            pass
+        # No bus publish for UI-driven rollback execution — same reason as
+        # the direct /tools handler above: audit log + HTTP response carry
+        # everything the UI needs, no need to bloat bus.log.
         try:
             result = target.invoke(entry.inverse_args)
         except Exception as exc:
@@ -1052,15 +1026,6 @@ class DashboardServer:
             store.mark_executed(rollback_id, result=result_str)
         except Exception as exc:
             logger.warning("rollback mark_executed failed: %s", exc)
-        try:
-            from agentlib import new_message
-            self.bus.publish(new_message(
-                task_id=task_id, sender=entry.agent, recipient="human",
-                kind="result",
-                payload={"status": "success", "summary": result_str},
-            ))
-        except Exception:
-            pass
         return self._send_json(req, 200, {
             "rollback_id": rollback_id,
             "task_id": task_id,
