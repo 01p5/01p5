@@ -142,7 +142,16 @@ export function TerminalSessionPage(): JSX.Element {
           )}
         </div>
         {sessionId && companionOpen && (
-          <CompanionPanel sessionId={sessionId} onClose={() => setCompanionOpen(false)} />
+          <CompanionPanel
+            sessionId={sessionId}
+            onClose={() => setCompanionOpen(false)}
+            onInject={(text) => {
+              const ws = wsRef.current;
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(new TextEncoder().encode(text));
+              }
+            }}
+          />
         )}
         {!companionOpen && (
           <button
@@ -172,9 +181,14 @@ export function TerminalSessionPage(): JSX.Element {
 function CompanionPanel({
   sessionId,
   onClose,
+  onInject,
 }: {
   sessionId: string;
   onClose: () => void;
+  /** TERM.5 — type the given text into the live pty via the WS.
+   *  No newline appended; the operator reviews on the prompt and
+   *  presses Enter themselves. The click is the approval. */
+  onInject: (text: string) => void;
 }): JSX.Element {
   type Entry = { question: string; answer?: string; suggestions?: string[]; error?: string };
   const [history, setHistory] = useState<Entry[]>([]);
@@ -241,7 +255,7 @@ function CompanionPanel({
           </div>
         )}
         {history.map((entry, i) => (
-          <CompanionEntry key={i} entry={entry} />
+          <CompanionEntry key={i} entry={entry} onInject={onInject} />
         ))}
         {busy && history.length > 0 && (
           <div className="text-[10px] font-mono text-text-muted italic">…thinking</div>
@@ -271,7 +285,13 @@ function CompanionPanel({
 }
 
 
-function CompanionEntry({ entry }: { entry: { question: string; answer?: string; suggestions?: string[]; error?: string } }): JSX.Element {
+function CompanionEntry({
+  entry,
+  onInject,
+}: {
+  entry: { question: string; answer?: string; suggestions?: string[]; error?: string };
+  onInject: (text: string) => void;
+}): JSX.Element {
   return (
     <div className="space-y-1.5">
       <div className="text-[11px] text-text-primary bg-accent-blue/[0.06] border border-accent-blue/20 rounded px-2.5 py-1.5">
@@ -290,17 +310,41 @@ function CompanionEntry({ entry }: { entry: { question: string; answer?: string;
       {entry.suggestions && entry.suggestions.length > 0 && (
         <div className="space-y-1">
           <div className="text-[10px] font-mono uppercase tracking-[1.5px] text-text-muted">
-            Suggested
+            Suggested · click to insert
           </div>
           {entry.suggestions.map((cmd, j) => (
-            <pre key={j}
-                 className="font-mono text-[11px] text-text-primary bg-dark-primary border border-border-subtle rounded px-2 py-1 overflow-auto whitespace-pre">
-              {cmd}
-            </pre>
+            <InjectButton key={j} command={cmd} onInject={onInject} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+
+/** TERM.5 — clickable suggested-command chip. On click, types the
+ *  command into the live pty via the WS bridge (no trailing newline —
+ *  the operator reviews + presses Enter). Hover state surfaces the
+ *  intent; cursor flips to text-input on hover so the affordance feels
+ *  like "I'm about to type for you." */
+function InjectButton({
+  command,
+  onInject,
+}: {
+  command: string;
+  onInject: (text: string) => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={() => onInject(command)}
+      data-testid={`companion-inject-${command}`}
+      title="Click to type this onto the prompt — review and press Enter to run"
+      className="w-full text-left font-mono text-[11px] text-text-primary bg-dark-primary border border-border-subtle hover:border-accent-green/50 hover:bg-accent-green/[0.04] rounded px-2 py-1 transition-colors overflow-auto whitespace-pre cursor-pointer flex items-center gap-2"
+    >
+      <span className="text-accent-green shrink-0">›</span>
+      <code className="flex-1 min-w-0">{command}</code>
+    </button>
   );
 }
 

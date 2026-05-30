@@ -179,6 +179,53 @@ describe("TerminalSessionPage", () => {
     expect(await screen.findByText(/LLM down/)).toBeInTheDocument();
   });
 
+  it("clicking a suggested command sends it through the WebSocket (TERM.5)", async () => {
+    vi.spyOn(api, "askTerminalCompanion").mockResolvedValue({
+      answer: "looks like the disk filled up",
+      suggested_commands: ["df -h", "ncdu /"],
+    });
+    renderAt("sess-1");
+    // Move WS to OPEN so the inject path actually sends.
+    const ws = MockWebSocket.instances[0];
+    ws.readyState = MockWebSocket.OPEN;
+    ws.onopen?.();
+
+    // Ask the companion so suggestions render.
+    await userEvent.type(screen.getByTestId("companion-input"), "what's up");
+    await userEvent.click(screen.getByTestId("companion-send"));
+    await waitFor(() => screen.getByTestId("companion-inject-df -h"));
+
+    // Click the first suggestion → WS receives the command bytes.
+    const sentBefore = ws.sentFrames.length;
+    await userEvent.click(screen.getByTestId("companion-inject-df -h"));
+
+    // One new BINARY frame was sent containing the command text. No
+    // trailing newline — the operator presses Enter themselves.
+    expect(ws.sentFrames.length).toBe(sentBefore + 1);
+    const lastFrame = ws.sentFrames[ws.sentFrames.length - 1];
+    const text = lastFrame instanceof Uint8Array
+      ? new TextDecoder().decode(lastFrame)
+      : String(lastFrame);
+    expect(text).toBe("df -h");
+  });
+
+  it("inject is a no-op when the WebSocket isn't OPEN", async () => {
+    vi.spyOn(api, "askTerminalCompanion").mockResolvedValue({
+      answer: "x", suggested_commands: ["ls"],
+    });
+    renderAt("sess-1");
+    // Leave WS in CONNECTING state.
+    await userEvent.type(screen.getByTestId("companion-input"), "?");
+    await userEvent.click(screen.getByTestId("companion-send"));
+    await waitFor(() => screen.getByTestId("companion-inject-ls"));
+
+    const ws = MockWebSocket.instances[0];
+    const beforeFrames = ws.sentFrames.length;
+    await userEvent.click(screen.getByTestId("companion-inject-ls"));
+    // Nothing sent — guard kicks in.
+    expect(ws.sentFrames.length).toBe(beforeFrames);
+  });
+
   it("closes the WebSocket on unmount", () => {
     const { unmount } = render(
       <MemoryRouter initialEntries={["/terminal/sess"]}>
