@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "olympus-terminal-companion"
+version = "0.1.0"
+description = "Olympus terminal_companion agent — read-only observer over a running terminal session's scrollback, answers operator questions on demand"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "agentlib",
+    "pydantic>=2.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
