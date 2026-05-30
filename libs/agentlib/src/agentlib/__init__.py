@@ -25,6 +25,18 @@ from .approval_webhook import WebhookApprovalHook
 from .budget import BudgetExceededError, BudgetGuard, BudgetState
 from .bus import Bus, BusMessage, InMemoryBus, new_message
 from .bus_redis import RedisStreamsBus
+from .inventory import (
+    FileBackedInventoryStore,
+    HostEntry,
+    InMemoryInventoryStore,
+    InventoryError,
+    InventoryStore,
+    MaterializedInventory,
+    SshKey,
+    materialize_run_dir,
+    render_ansible_inventory,
+    ssh_key_fingerprint,
+)
 from .mcp import (
     HttpTransport,
     MCPClient,
@@ -148,6 +160,16 @@ __all__ = [
     "InMemoryBus",
     "RedisStreamsBus",
     "new_message",
+    "HostEntry",
+    "SshKey",
+    "InventoryError",
+    "InventoryStore",
+    "InMemoryInventoryStore",
+    "FileBackedInventoryStore",
+    "MaterializedInventory",
+    "render_ansible_inventory",
+    "materialize_run_dir",
+    "ssh_key_fingerprint",
     "TicketEvent",
     "TicketKind",
     "TicketStore",
