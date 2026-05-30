@@ -134,6 +134,7 @@ from .auth import (
     public_status,
     set_cookie_header,
 )
+from .terminal import SessionManager, session_to_info
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ class DashboardServer:
         ticket_store: Optional[TicketStore] = None,
         auth: Optional[Authenticator] = None,
         inventory_store: Optional[InventoryStore] = None,
+        session_manager: Optional["SessionManager"] = None,
     ):
         self.orchestrator = orchestrator
         self.bus = bus
@@ -191,6 +193,12 @@ class DashboardServer:
         # construct DashboardServer without one); build_default_server
         # swaps in a FileBackedInventoryStore against the persistent volume.
         self.inventory_store: InventoryStore = inventory_store or InMemoryInventoryStore()
+        # TERM.2a — operator-driven SSH sessions hosted in this pod.
+        # Pool of PTY-wrapped ssh subprocesses, keyed by session_id +
+        # owner_email. The REST endpoints below + the WS bridge (TERM.2b)
+        # are thin transports over this. Default fresh SessionManager
+        # if the caller didn't pre-build one.
+        self.session_manager: SessionManager = session_manager or SessionManager()
         # Group-chat ticket transcript (Phase 2). The orchestrator writes
         # dispatch/result/tool_call/ask events here; the dashboard records
         # human + main-agent messages and streams the whole transcript per
@@ -395,6 +403,12 @@ class DashboardServer:
             self._server.server_close()
         if self._server_thread is not None and self._server_thread.is_alive():
             self._server_thread.join(timeout=2.0)
+        # TERM.2a — reap every live PTY + ssh subprocess so the
+        # dashboard pod doesn't leave orphaned children behind.
+        try:
+            self.session_manager.shutdown_all()
+        except Exception:
+            logger.warning("session_manager.shutdown_all raised", exc_info=True)
 
     def __enter__(self) -> "DashboardServer":
         self.serve()
@@ -478,6 +492,8 @@ class DashboardServer:
                     return outer._handle_list_keys(self)
                 if path == "/inventory/render":
                     return outer._handle_render_inventory(self)
+                if path == "/terminal/sessions":
+                    return outer._handle_list_terminal_sessions(self)
                 if path.startswith("/static/"):
                     return outer._serve_static(self, path[len("/static/"):])
                 # Vite-built hashed assets live under /assets/.
@@ -530,6 +546,8 @@ class DashboardServer:
                     return outer._handle_post_host(self)
                 if self.path == "/inventory/keys":
                     return outer._handle_post_key(self)
+                if self.path == "/terminal/sessions":
+                    return outer._handle_post_terminal_session(self)
                 self.send_response(404)
                 self.end_headers()
 
@@ -556,6 +574,9 @@ class DashboardServer:
                 if path.startswith("/inventory/keys/"):
                     key_id = path[len("/inventory/keys/"):]
                     return outer._handle_delete_key(self, key_id)
+                if path.startswith("/terminal/sessions/"):
+                    sid = path[len("/terminal/sessions/"):]
+                    return outer._handle_delete_terminal_session(self, sid)
                 self.send_response(404)
                 self.end_headers()
 
@@ -1557,6 +1578,106 @@ class DashboardServer:
         req.send_header("Content-Length", str(len(encoded)))
         req.end_headers()
         req.wfile.write(encoded)
+
+    # ---- terminal (TERM.2a) ----
+
+    @staticmethod
+    def _terminal_info_to_jsonable(info: Any) -> dict[str, Any]:
+        return dataclasses.asdict(info)
+
+    def _owner_email(self, req: BaseHTTPRequestHandler) -> Optional[str]:
+        """Resolve the requesting user's email via the existing session
+        cookie. Returns None only if the route was wrongly left ungated
+        (defense-in-depth — gated routes already 401 above)."""
+        sess = self.auth.session_from_request(req.headers)
+        return sess.email if sess is not None else None
+
+    def _handle_list_terminal_sessions(self, req: BaseHTTPRequestHandler) -> None:
+        owner = self._owner_email(req)
+        if owner is None:
+            return self._send_json(req, 401, {"error": "unauthenticated"})
+        # Reap stale sessions opportunistically so the list reflects truth.
+        self.session_manager.tick_expiry()
+        sessions = self.session_manager.list_for_user(owner)
+        payload = {
+            "sessions": [
+                self._terminal_info_to_jsonable(session_to_info(s))
+                for s in sessions
+            ],
+        }
+        return self._send_json(req, 200, payload)
+
+    def _handle_post_terminal_session(self, req: BaseHTTPRequestHandler) -> None:
+        """Create a new ssh-pty session.
+
+        Body: ``{host_alias, ssh_user?}``. Looks up the host in the
+        inventory store, materializes its key (if any), spawns the ssh
+        subprocess. Returns the SessionInfo + the WebSocket URL the
+        frontend will dial (TERM.2b owns the WS route)."""
+        owner = self._owner_email(req)
+        if owner is None:
+            return self._send_json(req, 401, {"error": "unauthenticated"})
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        if not isinstance(body, dict):
+            return self._send_json(req, 400, {"error": "body must be an object"})
+        alias = (body.get("host_alias") or "").strip()
+        if not alias:
+            return self._send_json(req, 400, {"error": "host_alias is required"})
+        host = self.inventory_store.get_host_by_name(alias)
+        if host is None:
+            return self._send_json(req, 404, {"error": f"unknown host alias {alias!r}"})
+
+        ssh_user_override = (body.get("ssh_user") or "").strip()
+        effective_user = ssh_user_override or host.ssh_user
+
+        # Pull key content if the host references one. A missing key
+        # body (host points at a deleted key) is a 422 — the operator's
+        # inventory is internally inconsistent.
+        key_content: Optional[str] = None
+        if host.key_id:
+            key_content = self.inventory_store.get_key_content(host.key_id)
+            if key_content is None:
+                return self._send_json(req, 422, {
+                    "error": f"host {alias!r} references key_id {host.key_id!r} "
+                             "but its content is missing from the store",
+                })
+
+        try:
+            session = self.session_manager.create(
+                owner_email=owner,
+                host_alias=host.name,
+                ssh_user=effective_user,
+                address=host.address,
+                key_content=key_content,
+                ssh_port=host.ssh_port,
+            )
+        except Exception as exc:
+            logger.exception("terminal session create failed")
+            return self._send_json(req, 500, {
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+
+        info = self._terminal_info_to_jsonable(session_to_info(session))
+        info["ws_url"] = f"/terminal/sessions/{session.session_id}/ws"
+        return self._send_json(req, 201, {"session": info})
+
+    def _handle_delete_terminal_session(
+        self, req: BaseHTTPRequestHandler, session_id: str,
+    ) -> None:
+        owner = self._owner_email(req)
+        if owner is None:
+            return self._send_json(req, 401, {"error": "unauthenticated"})
+        session = self.session_manager.get(session_id)
+        if session is None:
+            return self._send_json(req, 404, {"error": "session not found"})
+        if session.owner_email != owner:
+            # Don't leak existence to non-owners; mimic 404.
+            return self._send_json(req, 404, {"error": "session not found"})
+        self.session_manager.close(session_id)
+        return self._send_json(req, 200, {"ok": True})
 
     def _handle_list_ansible_playbooks(self, req: BaseHTTPRequestHandler) -> None:
         """Scan infra/ansible/ for top-level *.yml playbooks."""

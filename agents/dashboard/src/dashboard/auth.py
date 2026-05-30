@@ -230,17 +230,17 @@ def clear_cookie_header(name: str, *, secure: bool, path: str = "/") -> str:
 _GATED_GET_PREFIXES = (
     "/tasks", "/events", "/approvals", "/audit", "/tools",
     "/memory", "/rollback", "/telemetry", "/mcp", "/stacks", "/tickets",
-    "/inventory",
+    "/inventory", "/terminal",
 )
 _GATED_POST_PREFIXES = (
     "/tasks", "/approvals/", "/memory/", "/rollback/",
-    "/mcp/servers", "/tools/", "/tickets/", "/inventory/",
+    "/mcp/servers", "/tools/", "/tickets/", "/inventory/", "/terminal/",
 )
 _GATED_PUT_PREFIXES = (
     "/inventory/",
 )
 _GATED_DELETE_PREFIXES = (
-    "/inventory/", "/mcp/servers/",
+    "/inventory/", "/mcp/servers/", "/terminal/",
 )
 
 
