@@ -27,6 +27,11 @@ export function BusSidebar(): JSX.Element {
   const initialReplayDone = useRef(false);
 
   useSSE<BusEvent>("/events", (ev) => {
+    // Filter direct-tool traffic — every /tools/{agent}/{tool} POST from
+    // the dashboard's UI (e.g. KubernetesPage auto-refresh) publishes a
+    // human <-> agent bus pair that swamps the feed. Group-chat traffic
+    // uses "*" recipients and never has "human" as actor.
+    if (ev.sender === "human" || ev.recipient === "human") return;
     setEvents((prev) => {
       // Newest first, capped.
       const next = [ev, ...prev];
