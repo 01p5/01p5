@@ -134,6 +134,7 @@ from .auth import (
     public_status,
     set_cookie_header,
 )
+from .proxy import proxy_request
 from .terminal import SessionManager, session_to_info
 from .terminal_ws import WSHandshakeError, bridge_session_to_socket, perform_ws_handshake
 
@@ -232,6 +233,19 @@ class DashboardServer:
         self._server_thread: Optional[threading.Thread] = None
         self._host = host
         self._port = port
+
+        # S2.C2 — reverse-proxy targets for the sibling slurm-dashboard
+        # + gpu-dashboard pods (Stage 2 of the HPC integration). Path
+        # prefix → upstream base URL. Empty when unset means the prefix
+        # isn't a proxy route (do_GET/POST etc. will fall through to
+        # normal routing → 404 → SPA fallback). Env-driven so the chart
+        # values feed it without code changes.
+        self.proxy_targets: dict[str, str] = {}
+        for prefix, env_var in (("/slurm", "OLYMPUS_PROXY_SLURM_URL"),
+                                 ("/gpu",   "OLYMPUS_PROXY_GPU_URL")):
+            url = os.environ.get(env_var, "").strip()
+            if url:
+                self.proxy_targets[prefix] = url
 
         # Filter the router's catalog against whichever MCP servers
         # were wired at construction time (build_default_server
@@ -436,6 +450,13 @@ class DashboardServer:
                 # unauthenticated SPA can load its own /login route.
                 if outer.auth.requires_auth_get(path) and outer.auth.session_from_request(self.headers) is None:
                     return outer._send_json(self, 401, {"error": "unauthenticated"})
+                # S2.C2 — reverse-proxy /slurm/* and /gpu/* to sibling
+                # dashboards (only when configured via OLYMPUS_PROXY_*
+                # env vars). Auth gate above ran first, so the proxied
+                # surfaces inherit Olympus's session cookie.
+                for _pfx, _t in outer.proxy_targets.items():
+                    if path == _pfx or path.startswith(_pfx + "/"):
+                        return proxy_request(self, _t, _pfx)
                 if path == "/" or path == "/index.html":
                     return outer._serve_static(self, "index.html")
                 if path == "/healthz":
@@ -515,6 +536,9 @@ class DashboardServer:
                 path = self.path.partition("?")[0]
                 if outer.auth.requires_auth_post(path) and outer.auth.session_from_request(self.headers) is None:
                     return outer._send_json(self, 401, {"error": "unauthenticated"})
+                for _pfx, _t in outer.proxy_targets.items():
+                    if path == _pfx or path.startswith(_pfx + "/"):
+                        return proxy_request(self, _t, _pfx)
                 if path == "/auth/logout":
                     return outer._handle_auth_logout(self)
                 if path == "/auth/email/start":
@@ -562,6 +586,9 @@ class DashboardServer:
                 path = self.path.partition("?")[0]
                 if outer.auth.requires_auth_put(path) and outer.auth.session_from_request(self.headers) is None:
                     return outer._send_json(self, 401, {"error": "unauthenticated"})
+                for _pfx, _t in outer.proxy_targets.items():
+                    if path == _pfx or path.startswith(_pfx + "/"):
+                        return proxy_request(self, _t, _pfx)
                 if path.startswith("/inventory/hosts/"):
                     host_id = path[len("/inventory/hosts/"):]
                     return outer._handle_put_host(self, host_id)
@@ -572,6 +599,9 @@ class DashboardServer:
                 path = self.path.partition("?")[0]
                 if outer.auth.requires_auth_delete(path) and outer.auth.session_from_request(self.headers) is None:
                     return outer._send_json(self, 401, {"error": "unauthenticated"})
+                for _pfx, _t in outer.proxy_targets.items():
+                    if path == _pfx or path.startswith(_pfx + "/"):
+                        return proxy_request(self, _t, _pfx)
                 if path.startswith("/mcp/servers/"):
                     name = path[len("/mcp/servers/"):]
                     return outer._handle_delete_mcp_server(self, name)

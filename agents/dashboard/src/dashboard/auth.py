@@ -231,16 +231,24 @@ _GATED_GET_PREFIXES = (
     "/tasks", "/events", "/approvals", "/audit", "/tools",
     "/memory", "/rollback", "/telemetry", "/mcp", "/stacks", "/tickets",
     "/inventory", "/terminal",
+    # S2.C2 — reverse-proxied sibling dashboards. Even though they
+    # have their own (none, currently) auth surface, we want all proxied
+    # traffic to inherit Olympus's session so an unauth user can't see
+    # cluster state via /slurm/clusters or /gpu/nodes.
+    "/slurm", "/gpu",
 )
 _GATED_POST_PREFIXES = (
     "/tasks", "/approvals/", "/memory/", "/rollback/",
     "/mcp/servers", "/tools/", "/tickets/", "/inventory/", "/terminal/",
+    "/slurm", "/gpu",
 )
 _GATED_PUT_PREFIXES = (
     "/inventory/",
+    "/slurm", "/gpu",
 )
 _GATED_DELETE_PREFIXES = (
     "/inventory/", "/mcp/servers/", "/terminal/",
+    "/slurm", "/gpu",
 )
 
 
