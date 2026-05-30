@@ -26,7 +26,7 @@ from agentlib import (
     gpt55,
 )
 
-from .tools import ALL_TOOLS, DESTRUCTIVE_TOOLS, ROLLBACK_SNAPSHOTS
+from .tools import ALL_TOOLS, DESTRUCTIVE_TOOLS, ROLLBACK_SNAPSHOTS, make_ssh_run_tool
 
 
 SYSTEM_PROMPT = """You are the Olympus Sysadmin agent. You operate a Kubernetes cluster.
@@ -46,6 +46,12 @@ You can:
     no typed tool covers: kubectl --raw queries, jq over JSON, kubectl
     debug node/<n>, df/free/uptime on the pod itself. ALWAYS prefer a
     typed tool when one fits — typed calls are easier to audit.
+  - ssh_run(host_alias, command): run a shell command on a managed
+    inventory host over SSH (destructive — gated by approval). Hosts
+    are configured by the user via the /inventory/hosts endpoint or
+    the Hosts tab; ``host_alias`` is the host's display name there.
+    Only available when an inventory is configured; if you don't see
+    hosts the user added, mention that and ask them to add some.
 
 You CANNOT:
   - Change cluster configuration, edit deployments, scale resources, or
@@ -94,12 +100,23 @@ class SysadminAgent(AgentSpec):
     name = "sysadmin"
     domain = "Kubernetes runtime operations: pods, logs, events, controlled pod deletion"
     tools: Sequence[Any] = ALL_TOOLS
-    destructive_verbs = {t.name for t in DESTRUCTIVE_TOOLS}
+    # ssh_run is declared destructive here (class-scoped) even though
+    # the tool is injected per-handle — so when it IS present, gate_tools
+    # routes it through the approval queue. When the inventory store is
+    # not wired, ssh_run is never even added to the toolset.
+    destructive_verbs = {t.name for t in DESTRUCTIVE_TOOLS} | {"ssh_run"}
     rollback_snapshots = ROLLBACK_SNAPSHOTS
     model = gpt55
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
-        gated = gate_tools(self, ctx, task.task_id, ticket_id=task.ticket_id)
+        extra_tools: list[Any] = []
+        inventory_store = getattr(ctx, "inventory_store", None)
+        if inventory_store is not None:
+            extra_tools.append(make_ssh_run_tool(inventory_store))
+        gated = gate_tools(
+            self, ctx, task.task_id, ticket_id=task.ticket_id,
+            extra_tools=extra_tools,
+        )
         agent = StructuralAgent(
             task_id=task.task_id,
             ticket_id=task.ticket_id,

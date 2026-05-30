@@ -138,6 +138,11 @@ class AgentContext:
     # agents pass it to their StructuralAgent so .invoke() gates on the
     # cost ceiling. None => unbounded (the dev default).
     budget_guard: Optional[Any] = None  # agentlib.BudgetGuard | None
+    # User-managed inventory + ssh keys (Phase INV). Ansible reads from
+    # this at run time to render an inventory.ini + materialize keys;
+    # Sysadmin's ssh_run tool resolves host aliases against it. None =>
+    # agents fall back to their bundled/default inventory.
+    inventory_store: Optional[Any] = None  # agentlib.InventoryStore | None
 
 
 class AgentSpec(ABC):

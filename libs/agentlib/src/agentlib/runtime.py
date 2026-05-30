@@ -41,6 +41,7 @@ def gate_tools(
     ctx: AgentContext,
     task_id: str,
     ticket_id: Optional[str] = None,
+    extra_tools: Optional[list[Any]] = None,
 ) -> list[BaseTool]:
     """Wrap every tool in ``spec.tools`` so the runtime can:
 
@@ -53,14 +54,23 @@ def gate_tools(
 
     When ``ctx.agent_resolver`` is set, the read-only ``ask_agent`` tool is
     appended so the agent can ask sibling participants directed questions.
-    ``ticket_id`` falls back to ``task_id`` for standalone tasks."""
-    declared = {_tool_name(t) for t in spec.tools}
+    ``ticket_id`` falls back to ``task_id`` for standalone tasks.
+
+    ``extra_tools`` allows the agent's handle() to inject context-bound
+    tools (e.g. closures over ``ctx.inventory_store``) without mutating
+    the AgentSpec at class scope. They go through the same wrapping
+    pipeline; their destructive-or-not classification still consults
+    ``spec.destructive_verbs`` by name, so the agent must declare them
+    there statically if they should be gated."""
+    extras = list(extra_tools or [])
+    all_tools = list(spec.tools) + extras
+    declared = {_tool_name(t) for t in all_tools}
     wrapped: list[BaseTool] = []
 
     effective_ticket_id = ticket_id or task_id
     ticket_store = getattr(ctx, "ticket_store", None)
 
-    for tool in spec.tools:
+    for tool in all_tools:
         base = tool if isinstance(tool, BaseTool) else _as_structured(tool)
         if base.name not in declared:
             raise ToolGateError(

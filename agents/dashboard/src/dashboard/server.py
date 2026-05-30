@@ -1809,11 +1809,20 @@ def build_default_server(
                 logger.info("BudgetGuard active — daily cap $%.2f", cap)
         except ValueError:
             logger.warning("Invalid OLYMPUS_DAILY_COST_CAP_USD=%r — ignoring", daily_cap_raw)
+    # Inventory store: file-backed on disk, default sibling of the audit log.
+    # The chart mounts /var/lib/olympus as the audit volume; inventory.json
+    # lands there too so a single PVC handles both. Construct it BEFORE
+    # the AgentContext so the agents see it.
+    inventory_path = os.environ.get("OLYMPUS_INVENTORY_PATH", "").strip() or str(
+        Path(audit_log_path).with_name("inventory.json")
+    )
+    inventory_store: InventoryStore = FileBackedInventoryStore(inventory_path)
     ctx = AgentContext(
         approval=approval_hook,
         audit=JsonlAuditLogger(audit_log_path),
         rollback=rollback,
         budget_guard=budget_guard,
+        inventory_store=inventory_store,
     )
     if memory is None:
         mode = os.environ.get("OLYMPUS_MEMORY", "").lower()
@@ -1848,13 +1857,6 @@ def build_default_server(
     # + ALLOWED_DOMAINS + SESSION_SECRET via the olympus-secrets secret.
     auth_cfg = AuthConfig.from_env()
     authenticator = Authenticator(auth_cfg)
-    # Inventory store: file-backed on disk, default sibling of the audit log.
-    # The chart mounts /var/lib/olympus as the audit volume; inventory.json
-    # lands there too so a single PVC handles both.
-    inventory_path = os.environ.get("OLYMPUS_INVENTORY_PATH", "").strip() or str(
-        Path(audit_log_path).with_name("inventory.json")
-    )
-    inventory_store: InventoryStore = FileBackedInventoryStore(inventory_path)
     return DashboardServer(
         orchestrator=orch,
         bus=bus,

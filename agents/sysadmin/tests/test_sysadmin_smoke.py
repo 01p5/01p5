@@ -44,7 +44,12 @@ def test_sysadmin_declares_destructive_verbs_correctly():
     # rollback inverse and is destructive too (a misused apply could
     # create or replace anything). shell_exec runs arbitrary bash, so
     # destructive by construction even when the command is read-only.
-    assert spec.destructive_verbs == {"delete_pod", "apply_manifest", "shell_exec"}
+    # ssh_run is added per-handle from the inventory store, but its
+    # destructive classification is declared at class scope so the
+    # approval gate fires whenever it IS present.
+    assert spec.destructive_verbs == {
+        "delete_pod", "apply_manifest", "shell_exec", "ssh_run",
+    }
     declared = {t.name for t in spec.tools}
     assert "delete_pod" in declared
     assert "apply_manifest" in declared

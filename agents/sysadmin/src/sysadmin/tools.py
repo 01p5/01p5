@@ -279,3 +279,114 @@ ALL_TOOLS = READ_ONLY_TOOLS + DESTRUCTIVE_TOOLS
 ROLLBACK_SNAPSHOTS = {
     "delete_pod": _snapshot_delete_pod,
 }
+
+
+# ---------------------------------------------------------------------
+# ssh_run — context-bound tool over the user-managed inventory.
+# ---------------------------------------------------------------------
+#
+# Built per-handle via ``make_ssh_run_tool(inventory_store)`` so the
+# tool closure captures the store; the sysadmin agent injects it through
+# ``gate_tools(extra_tools=[...])`` only when an inventory_store is
+# wired on the AgentContext. Declared in SysadminAgent.destructive_verbs
+# so the approval gate fires regardless of whether the call is
+# read-only-looking — ssh execution can do anything.
+
+_SSH_RUN_TIMEOUT_SECONDS = 60
+
+
+def make_ssh_run_tool(inventory_store: Any) -> Any:
+    """Return a ``ssh_run`` @tool closure bound to ``inventory_store``.
+
+    Resolves a host by its inventory alias, materializes the referenced
+    key to a 0600 tempfile, and runs ``ssh -i <key> <user>@<addr>
+    <command>`` with a hard timeout. Hosts without a key still attempt
+    the connection (ssh-agent / default identity may apply).
+    """
+    import os as _os
+    import tempfile as _tempfile
+
+    from langchain_core.tools import tool as _tool
+
+    @_tool
+    def ssh_run(host_alias: str, command: str, timeout_sec: int = _SSH_RUN_TIMEOUT_SECONDS) -> str:
+        """Run a shell command over SSH on a managed inventory host.
+
+        ``host_alias`` is the host's ``name`` in the inventory (see
+        list_managed_hosts via the dashboard's /inventory endpoint).
+        DESTRUCTIVE — every call goes through the approval queue.
+        """
+        if not host_alias or not isinstance(host_alias, str):
+            return "ERROR: host_alias required"
+        if not command or not command.strip():
+            return "ERROR: empty command"
+
+        host = inventory_store.get_host_by_name(host_alias.strip())
+        if host is None:
+            return f"ERROR: unknown host alias {host_alias!r} (check /inventory/hosts)"
+
+        # Materialize the key to a private tempfile per invocation. We
+        # don't keep these around — ssh reads the file once and we
+        # unlink in the finally so a crashed handler doesn't leak.
+        key_arg: list[str] = []
+        tmp_key: Optional[str] = None
+        if host.key_id:
+            content = inventory_store.get_key_content(host.key_id)
+            if content is None:
+                return (
+                    f"ERROR: host {host.name!r} references key_id "
+                    f"{host.key_id!r} but its content is missing from the store"
+                )
+            fd, tmp_key = _tempfile.mkstemp(prefix="olympus-ssh-", suffix=".pem")
+            try:
+                with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                    if not content.endswith("\n"):
+                        fh.write("\n")
+                _os.chmod(tmp_key, 0o600)
+            except OSError as exc:
+                # Best-effort cleanup on a write failure.
+                try:
+                    _os.unlink(tmp_key)
+                except OSError:
+                    pass
+                return f"ERROR: failed to materialize key for {host.name!r}: {exc}"
+            key_arg = ["-i", tmp_key]
+
+        target = f"{host.ssh_user}@{host.address}"
+        try:
+            port_arg = ["-p", str(host.ssh_port)] if host.ssh_port and host.ssh_port != 22 else []
+            cmd = [
+                "ssh",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "BatchMode=yes",
+                *key_arg,
+                *port_arg,
+                target,
+                "--",
+                command,
+            ]
+            try:
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    timeout=max(1, int(timeout_sec)),
+                )
+            except FileNotFoundError:
+                return "ERROR: ssh not found on PATH"
+            except subprocess.TimeoutExpired:
+                return (
+                    f"ERROR: ssh timeout after {timeout_sec}s "
+                    f"for {target} command: {command!r}"
+                )
+            out = f"EXIT={proc.returncode}\nSTDOUT:\n{proc.stdout}"
+            if proc.stderr:
+                out += f"\nSTDERR:\n{proc.stderr}"
+            return out
+        finally:
+            if tmp_key:
+                try:
+                    _os.unlink(tmp_key)
+                except OSError:
+                    pass
+
+    return ssh_run
