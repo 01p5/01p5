@@ -270,4 +270,4 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 
 ## License
 
-Academic / personal — built for CS 153 at the University of Chicago.
+Academic / personal — built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford University.
