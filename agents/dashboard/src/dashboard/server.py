@@ -552,6 +552,9 @@ class DashboardServer:
                     return outer._handle_post_key(self)
                 if self.path == "/terminal/sessions":
                     return outer._handle_post_terminal_session(self)
+                if self.path.startswith("/terminal/sessions/") and self.path.endswith("/ask"):
+                    sid = self.path[len("/terminal/sessions/"):-len("/ask")]
+                    return outer._handle_ask_terminal_session(self, sid)
                 self.send_response(404)
                 self.end_headers()
 
@@ -1704,6 +1707,63 @@ class DashboardServer:
             )
         except Exception:
             logger.exception("terminal ws bridge crashed for %s", session_id)
+
+    def _handle_ask_terminal_session(
+        self, req: BaseHTTPRequestHandler, session_id: str,
+    ) -> None:
+        """TERM.4b — one-shot Q&A with the terminal_companion agent
+        scoped to a single live session. Body: ``{question}``.
+        Returns ``{answer, suggested_commands}``.
+
+        Owner check applies — non-owners get 404, not 403, so session
+        ids stay un-probable. terminal_companion's tool re-checks
+        ownership inside the closure too, but defense-in-depth.
+        """
+        owner = self._owner_email(req)
+        if owner is None:
+            return self._send_json(req, 401, {"error": "unauthenticated"})
+        session = self.session_manager.get(session_id)
+        if session is None or session.owner_email != owner:
+            return self._send_json(req, 404, {"error": "session not found"})
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        if not isinstance(body, dict):
+            return self._send_json(req, 400, {"error": "body must be an object"})
+        question = (body.get("question") or "").strip()
+        if not question:
+            return self._send_json(req, 400, {"error": "question is required"})
+
+        # Build a minimal AgentContext on demand. terminal_companion has
+        # no destructive verbs so the approval hook never fires; we
+        # still pass the dashboard's QueueApprovalHook + JsonlAuditLogger
+        # so tool calls land in the same audit stream as every other
+        # gated tool call.
+        from agentlib import JsonlAuditLogger
+        from terminal_companion import ask as companion_ask
+
+        ctx = AgentContext(
+            approval=self.approval_hook,
+            audit=JsonlAuditLogger(self.audit_log_path),
+        )
+        try:
+            resp = companion_ask(
+                question=question,
+                session_manager=self.session_manager,
+                session_id=session_id,
+                owner_email=owner,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            logger.exception("terminal_companion ask failed")
+            return self._send_json(req, 500, {
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+        return self._send_json(req, 200, {
+            "answer": resp.answer,
+            "suggested_commands": list(resp.suggested_commands),
+        })
 
     def _handle_delete_terminal_session(
         self, req: BaseHTTPRequestHandler, session_id: str,

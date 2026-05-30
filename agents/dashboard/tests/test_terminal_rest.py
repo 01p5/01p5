@@ -279,6 +279,68 @@ def test_create_with_no_key_host_still_works(server):
     assert payload["session"]["host_alias"] == "nokey"
 
 
+def test_ask_endpoint_returns_companion_answer(server):
+    """TERM.4b — POST /terminal/sessions/{id}/ask runs the
+    terminal_companion in single-shot mode against the session's
+    scrollback and surfaces a structured answer."""
+    # Create a session first.
+    _, created = _request(server, "POST", "/terminal/sessions",
+                          {"host_alias": "cp"})
+    sid = created["session"]["session_id"]
+
+    # Mock the companion's ask() to skip the real LLM call.
+    from terminal_companion.agent import TerminalCompanionResponse
+    fake_resp = TerminalCompanionResponse(
+        answer="the working directory looks like /opt/olympus",
+        suggested_commands=["pwd", "ls -la"],
+    )
+    with __import__("unittest.mock").mock.patch(
+        "terminal_companion.ask", return_value=fake_resp,
+    ):
+        status, payload = _request(
+            server, "POST", f"/terminal/sessions/{sid}/ask",
+            {"question": "where are we?"},
+        )
+    assert status == 200
+    assert payload["answer"] == "the working directory looks like /opt/olympus"
+    assert payload["suggested_commands"] == ["pwd", "ls -la"]
+
+
+def test_ask_endpoint_404_for_foreign_session(server):
+    """Non-owners get 404 (not 403) so session ids stay un-probable.
+    Same posture as DELETE."""
+    foreign = server.session_manager.create(
+        owner_email="foreign@x", host_alias="w1", ssh_user="root",
+        address="10.0.0.2",
+    )
+    status, payload = _request(
+        server, "POST", f"/terminal/sessions/{foreign.session_id}/ask",
+        {"question": "anything"},
+    )
+    assert status == 404
+
+
+def test_ask_endpoint_400_when_question_missing(server):
+    _, created = _request(server, "POST", "/terminal/sessions",
+                          {"host_alias": "cp"})
+    sid = created["session"]["session_id"]
+    status, payload = _request(
+        server, "POST", f"/terminal/sessions/{sid}/ask",
+        {"question": "   "},
+    )
+    assert status == 400
+    assert "question" in payload["error"]
+
+
+def test_ask_endpoint_requires_auth(auth_required_server):
+    """Auth gate covers /terminal/ — POST .../ask is included."""
+    status, _ = _request(
+        auth_required_server, "POST", "/terminal/sessions/sid/ask",
+        {"question": "hi"},
+    )
+    assert status == 401
+
+
 def test_dashboard_shutdown_reaps_terminal_sessions(inventory):
     """Closing the dashboard should SIGHUP every live pty so we don't
     leave orphan children when the pod restarts."""

@@ -18,6 +18,8 @@ dependencies = [
     # (TERM.2b). Tiny lib (only depends on h11), drives both server and
     # client handshake + frame parsing.
     "wsproto>=1.2",
+    # Pull-based LLM observer over terminal scrollback (TERM.4).
+    "olympus-terminal-companion",
 ]
 
 [project.scripts]
