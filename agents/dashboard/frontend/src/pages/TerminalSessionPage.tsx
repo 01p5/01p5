@@ -47,8 +47,9 @@ export function TerminalSessionPage(): JSX.Element {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(containerRef.current);
-    fit.fit();
+    const containerEl = containerRef.current;
+    term.open(containerEl);
+    safeFit(term, fit, containerEl);
     termRef.current = term;
     fitRef.current = fit;
 
@@ -104,7 +105,9 @@ export function TerminalSessionPage(): JSX.Element {
     // Fit on window resize so a maximized window uses every column.
     // Also observe the terminal's own container so collapsing the
     // companion panel (which widens us) triggers a refit.
-    const onResize = (): void => { try { fit.fit(); } catch { /* ignore */ } };
+    const onResize = (): void => {
+      try { safeFit(term, fit, containerEl); } catch { /* ignore */ }
+    };
     window.addEventListener("resize", onResize);
     let ro: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined" && containerRef.current) {
@@ -141,8 +144,8 @@ export function TerminalSessionPage(): JSX.Element {
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0 relative bg-[#0a0e14]">
-          <div ref={containerRef} data-testid="xterm-container" className="absolute inset-0 p-2" />
+        <div className="flex-1 min-w-0 relative bg-[#0a0e14] overflow-hidden">
+          <div ref={containerRef} data-testid="xterm-container" className="absolute inset-0 p-2 overflow-hidden" />
           {(state === "closed" || state === "error") && (
             <div className="absolute inset-0 flex items-center justify-center bg-dark-primary/70 backdrop-blur-sm">
               <div className="bg-dark-panel border border-accent-red/40 rounded-md px-4 py-3 max-w-md text-center space-y-2">
@@ -366,6 +369,32 @@ function InjectButton({
       <code className="flex-1 min-w-0">{command}</code>
     </button>
   );
+}
+
+
+/** FitAddon over-allocates by one row when the container height isn't
+ *  a clean multiple of cell height: it rounds the row count UP and the
+ *  last row's bottom pixels get visually chopped at the container edge.
+ *  Workaround: fit, then check whether xterm's rendered element ended
+ *  up taller than the container, and if so step the row count down by
+ *  one. Idempotent; safe to call as often as we want.
+ *
+ *  Exported for tests. */
+export function safeFit(term: Terminal, fit: FitAddon, container: HTMLElement): void {
+  try {
+    fit.fit();
+  } catch { return; }
+  // Step down at most a few times so we converge even if multiple
+  // pixels of overflow accumulate from CSS quirks. After that, give
+  // up — we've done the best we can.
+  for (let i = 0; i < 3; i += 1) {
+    const termEl = term.element;
+    if (!termEl) return;
+    const termH = termEl.getBoundingClientRect().height;
+    const containerH = container.getBoundingClientRect().height;
+    if (termH <= containerH || term.rows <= 1) return;
+    term.resize(term.cols, term.rows - 1);
+  }
 }
 
 
