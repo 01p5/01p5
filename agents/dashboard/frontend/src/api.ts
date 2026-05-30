@@ -6,6 +6,8 @@ import type {
   AddMCPServerRequest,
   AuditRecord,
   HealthResponse,
+  InventoryHost,
+  InventorySshKey,
   MCPServerCatalog,
   MCPServerSummary,
   MemoryEntry,
@@ -40,6 +42,16 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return jsonOrThrow<T>(
     await fetch(url, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+async function putJson<T>(url: string, body: unknown): Promise<T> {
+  return jsonOrThrow<T>(
+    await fetch(url, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
@@ -201,4 +213,61 @@ export const api = {
    *  target agent + closes the transport. 404 if no such server. */
   deleteMcpServer: (name: string): Promise<{ removed: true; name: string }> =>
     deleteJson(`/mcp/servers/${encodeURIComponent(name)}`),
+
+  // ---- Inventory (Phase INV) — user-managed hosts + ssh keys.
+  // Keys are write-only via the API: list returns id+name+fingerprint;
+  // the PEM body is paste-once and never returned.
+  listHosts: async (): Promise<InventoryHost[]> => {
+    const body = await getJson<{ hosts: InventoryHost[] }>("/inventory/hosts");
+    return body.hosts;
+  },
+  addHost: async (body: {
+    name: string;
+    address: string;
+    ssh_user?: string;
+    ssh_port?: number;
+    key_id?: string | null;
+    groups?: string[];
+    vars?: Record<string, string>;
+    description?: string;
+  }): Promise<InventoryHost> => {
+    const r = await postJson<{ host: InventoryHost }>("/inventory/hosts", body);
+    return r.host;
+  },
+  updateHost: async (id: string, patch: Partial<{
+    name: string;
+    address: string;
+    ssh_user: string;
+    ssh_port: number;
+    key_id: string | null;
+    groups: string[];
+    vars: Record<string, string>;
+    description: string;
+  }>): Promise<InventoryHost> => {
+    const r = await putJson<{ host: InventoryHost }>(
+      `/inventory/hosts/${encodeURIComponent(id)}`, patch,
+    );
+    return r.host;
+  },
+  removeHost: (id: string): Promise<{ ok: true }> =>
+    deleteJson(`/inventory/hosts/${encodeURIComponent(id)}`),
+
+  listKeys: async (): Promise<InventorySshKey[]> => {
+    const body = await getJson<{ keys: InventorySshKey[] }>("/inventory/keys");
+    return body.keys;
+  },
+  addKey: async (name: string, content: string): Promise<InventorySshKey> => {
+    const r = await postJson<{ key: InventorySshKey }>("/inventory/keys",
+      { name, content });
+    return r.key;
+  },
+  removeKey: (id: string): Promise<{ ok: true }> =>
+    deleteJson(`/inventory/keys/${encodeURIComponent(id)}`),
+
+  /** Plain-text ansible inventory preview (text/plain, not JSON). */
+  renderInventory: async (): Promise<string> => {
+    const r = await fetch("/inventory/render");
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.text();
+  },
 };

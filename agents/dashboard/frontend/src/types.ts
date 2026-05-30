@@ -224,6 +224,27 @@ export interface MemoryEntry {
   };
 }
 
+export interface InventoryHost {
+  id: string;
+  name: string;
+  address: string;
+  ssh_user: string;
+  ssh_port: number;
+  key_id: string | null;
+  groups: string[];
+  vars: Record<string, string>;
+  description: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface InventorySshKey {
+  id: string;
+  name: string;
+  fingerprint: string;
+  created_at: number;
+}
+
 export interface RollbackEntry {
   rollback_id: string;
   task_id: string;

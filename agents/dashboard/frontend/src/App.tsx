@@ -7,6 +7,7 @@ import { SessionsPage } from "./pages/SessionsPage";
 import { KubernetesPage } from "./pages/KubernetesPage";
 import { TerraformPage } from "./pages/TerraformPage";
 import { AnsiblePage } from "./pages/AnsiblePage";
+import { HostsPage } from "./pages/HostsPage";
 import { ProgrammerPage } from "./pages/ProgrammerPage";
 import { MCPPage } from "./pages/MCPPage";
 
@@ -30,6 +31,7 @@ export default function App(): JSX.Element {
         <Route path="kubernetes" element={<KubernetesPage />} />
         <Route path="terraform" element={<TerraformPage />} />
         <Route path="ansible" element={<AnsiblePage />} />
+        <Route path="hosts" element={<HostsPage />} />
         <Route path="programmer" element={<ProgrammerPage />} />
         <Route path="mcp" element={<MCPPage />} />
         {/* Catch-all → chat */}

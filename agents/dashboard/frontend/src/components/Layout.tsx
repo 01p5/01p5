@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History } from "lucide-react";
+import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History, Network } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
@@ -16,6 +16,7 @@ const TABS = [
   { to: "/kubernetes", label: "Kubernetes", icon: Server },
   { to: "/terraform",  label: "Terraform",  icon: Layers },
   { to: "/ansible",    label: "Ansible",    icon: ListChecks },
+  { to: "/hosts",      label: "Hosts",      icon: Network },
   { to: "/programmer", label: "Programmer", icon: Hammer },
   { to: "/mcp",        label: "MCP",        icon: Plug },
 ];
