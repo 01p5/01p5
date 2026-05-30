@@ -13,6 +13,8 @@ import { AnsiblePage } from "./pages/AnsiblePage";
 import { HostsPage } from "./pages/HostsPage";
 import { ProgrammerPage } from "./pages/ProgrammerPage";
 import { HPCPage } from "./pages/HPCPage";
+import { SlurmPortalPage } from "./pages/SlurmPortalPage";
+import { GpuPortalPage } from "./pages/GpuPortalPage";
 import { MCPPage } from "./pages/MCPPage";
 import { TerminalPage, TerminalSessionPage } from "./pages/TerminalPage";
 
@@ -57,6 +59,8 @@ export default function App(): JSX.Element {
             <Route path="ansible" element={<AnsiblePage />} />
             <Route path="programmer" element={<ProgrammerPage />} />
             <Route path="hpc" element={<HPCPage />} />
+            <Route path="slurm" element={<SlurmPortalPage />} />
+            <Route path="gpu" element={<GpuPortalPage />} />
           </Route>
           {/* Backwards-compat: the legacy top-level paths Navigate-
               redirect to the nested form so bookmarks + in-app links

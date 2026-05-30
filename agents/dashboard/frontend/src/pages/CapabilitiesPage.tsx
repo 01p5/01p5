@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Server, Layers, ListChecks, Hammer, Wrench, Cpu } from "lucide-react";
+import { Server, Layers, ListChecks, Hammer, Wrench, Cpu, Activity, Database } from "lucide-react";
 import clsx from "clsx";
 
 const SUBTABS = [
@@ -8,6 +8,13 @@ const SUBTABS = [
   { to: "ansible",    label: "Ansible",    icon: ListChecks },
   { to: "programmer", label: "Programmer", icon: Hammer },
   { to: "hpc",        label: "HPC",        icon: Cpu },
+  // S2.D1 — embedded sibling portals. Each iframes the standalone
+  // slurm-mgr / gpu-watch dashboard via Olympus's reverse proxy.
+  // Health-gated at the page level (the nudge shows when the sub-pod
+  // isn't deployed), but the chip itself stays visible — gating its
+  // visibility would need a separate /healthz poll in the CapabilitiesPage.
+  { to: "slurm",      label: "Slurm",      icon: Database },
+  { to: "gpu",        label: "GPU",        icon: Activity },
 ];
 
 /**
