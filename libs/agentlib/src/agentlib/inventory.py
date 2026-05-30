@@ -34,15 +34,12 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import tempfile
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Protocol
-
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 _RESERVED_VARS = frozenset({
@@ -217,7 +214,7 @@ def _validate_port(port: Any) -> int:
     try:
         p = int(port)
     except (TypeError, ValueError):
-        raise InventoryError("ssh_port must be an integer")
+        raise InventoryError("ssh_port must be an integer") from None
     if p < 1 or p > 65535:
         raise InventoryError("ssh_port must be in 1..65535")
     return p

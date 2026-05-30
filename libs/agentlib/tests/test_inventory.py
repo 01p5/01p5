@@ -15,7 +15,6 @@ Coverage:
 from __future__ import annotations
 
 import json
-import os
 import textwrap
 from pathlib import Path
 
@@ -31,7 +30,6 @@ from agentlib import (
     render_ansible_inventory,
     ssh_key_fingerprint,
 )
-
 
 # Minimal valid-looking PEM bodies. We don't verify cryptographically;
 # the heuristic only checks for the BEGIN ... PRIVATE KEY----- header.
