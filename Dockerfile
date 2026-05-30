@@ -87,7 +87,8 @@ RUN pip install --no-cache-dir --no-deps -e ./libs/agentlib \
  && pip install --no-cache-dir --no-deps -e ./agents/olympus_cli \
  && pip install --no-cache-dir --no-deps -e ./agents/terminal_companion \
  && pip install --no-cache-dir --no-deps -e ./agents/dashboard \
- && pip install --no-cache-dir wsproto
+ && pip install --no-cache-dir wsproto \
+ && pip install --no-cache-dir 'textual>=0.50'
 
 # Drop the Vite-built SPA bundle on top of the python source tree.
 # DashboardServer auto-picks static/dist when present.

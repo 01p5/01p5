@@ -1615,12 +1615,19 @@ class DashboardServer:
         return self._send_json(req, 200, payload)
 
     def _handle_post_terminal_session(self, req: BaseHTTPRequestHandler) -> None:
-        """Create a new ssh-pty session.
+        """Create a new pty session — two shapes:
 
-        Body: ``{host_alias, ssh_user?}``. Looks up the host in the
-        inventory store, materializes its key (if any), spawns the ssh
-        subprocess. Returns the SessionInfo + the WebSocket URL the
-        frontend will dial (TERM.2b owns the WS route)."""
+        SSH (default): ``{host_alias, ssh_user?}``. Looks up the host
+        in the inventory store, materializes its key (if any), spawns
+        the ssh subprocess.
+
+        Local CLI (TERM.9a): ``{kind: "olympus-tui"}`` (or another
+        allowed kind). Spawns the local CLI inside the dashboard pod —
+        no ssh, no host lookup, no key. Useful for driving Olympus
+        itself from a terminal session.
+
+        Returns SessionInfo + the WebSocket URL the frontend will dial.
+        """
         owner = self._owner_email(req)
         if owner is None:
             return self._send_json(req, 401, {"error": "unauthenticated"})
@@ -1630,6 +1637,30 @@ class DashboardServer:
             return self._send_json(req, 400, {"error": "invalid JSON"})
         if not isinstance(body, dict):
             return self._send_json(req, 400, {"error": "body must be an object"})
+
+        kind = (body.get("kind") or "").strip() or None
+        if kind is not None:
+            # Local CLI path. host_alias becomes a display label;
+            # ssh_user / address get sentinel values.
+            try:
+                session = self.session_manager.create(
+                    owner_email=owner,
+                    host_alias=kind,
+                    ssh_user="",
+                    address="(local)",
+                    kind=kind,
+                )
+            except (ValueError, FileNotFoundError) as exc:
+                return self._send_json(req, 400, {"error": str(exc)})
+            except Exception as exc:
+                logger.exception("terminal session (local kind=%s) create failed", kind)
+                return self._send_json(req, 500, {
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            info = self._terminal_info_to_jsonable(session_to_info(session))
+            info["ws_url"] = f"/terminal/sessions/{session.session_id}/ws"
+            return self._send_json(req, 201, {"session": info})
+
         alias = (body.get("host_alias") or "").strip()
         if not alias:
             return self._send_json(req, 400, {"error": "host_alias is required"})

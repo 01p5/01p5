@@ -96,11 +96,13 @@ def server(inventory):
     real_create = real_mgr.create
 
     def fake_create(**kwargs):
-        # Force benign subprocess regardless of what the REST layer asked.
-        kwargs["executable"] = "/bin/cat"
-        kwargs["args"] = []
-        # Drop key_content so we don't write tempfiles we forget to clean.
-        kwargs.pop("key_content", None)
+        # Force benign subprocess for ssh-mode REST tests (kind unset).
+        # For local-CLI (kind set), let real_create's own validation run
+        # so tests of the kind path exercise the validation branch.
+        if kwargs.get("kind") is None:
+            kwargs["executable"] = "/bin/cat"
+            kwargs["args"] = []
+            kwargs.pop("key_content", None)
         return real_create(**kwargs)
     real_mgr.create = fake_create  # type: ignore[method-assign]
 
@@ -339,6 +341,38 @@ def test_ask_endpoint_requires_auth(auth_required_server):
         {"question": "hi"},
     )
     assert status == 401
+
+
+def test_post_with_kind_creates_local_session_no_host_lookup(server, monkeypatch):
+    """TERM.9a — body ``{kind: "olympus-tui"}`` spawns a local CLI
+    instead of doing the ssh + inventory dance. host_alias becomes
+    the kind label; address becomes "(local)"."""
+    # Pretend olympus-tui resolves to /bin/cat so we don't need the
+    # real (textual-based) CLI installed in the test env. Also swap
+    # the registry so the fake "olympus-tui" is just `cat`.
+    monkeypatch.setattr("dashboard.terminal.shutil.which",
+                        lambda name: "/bin/cat" if name == "olympus-tui" else None)
+    import dashboard.terminal as _term
+    monkeypatch.setitem(_term._LOCAL_KINDS, "olympus-tui", ("olympus-tui",))
+
+    status, payload = _request(server, "POST", "/terminal/sessions",
+                               {"kind": "olympus-tui"})
+    assert status == 201, payload
+    s = payload["session"]
+    assert s["kind"] == "olympus-tui"
+    assert s["host_alias"] == "olympus-tui"
+    assert s["address"] == "(local)"
+    assert s["ssh_user"] == ""
+    assert s["alive"] is True
+
+
+def test_post_with_unknown_kind_returns_400(server):
+    """Unknown kinds get rejected at the REST layer (ValueError from
+    SessionManager.create surfaces as 400)."""
+    status, payload = _request(server, "POST", "/terminal/sessions",
+                               {"kind": "not-a-real-kind"})
+    assert status == 400
+    assert "unknown terminal session kind" in payload["error"]
 
 
 def test_dashboard_shutdown_reaps_terminal_sessions(inventory):

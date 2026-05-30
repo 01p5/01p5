@@ -303,6 +303,82 @@ def test_session_to_info_projects_wire_fields(mgr):
     assert "_scrollback" not in field_names
 
 
+def test_local_kinds_registry_includes_olympus_tui():
+    """TERM.9a — closed allowlist of local-CLI session kinds. Adding
+    a new one should be a one-line registry edit; removing
+    olympus-tui without updating the frontend would break the new-
+    session modal."""
+    from dashboard.terminal import _LOCAL_KINDS
+    assert "olympus-tui" in _LOCAL_KINDS
+    # First entry of the argv is the executable; everything after is
+    # CLI args passed to it.
+    assert _LOCAL_KINDS["olympus-tui"][0] == "olympus-tui"
+
+
+def test_create_with_unknown_kind_raises_valueerror(mgr):
+    with pytest.raises(ValueError, match="unknown terminal session kind"):
+        mgr.create(owner_email="u@x", host_alias="x", ssh_user="",
+                   address="(local)", kind="not-a-real-kind")
+
+
+def test_create_with_kind_when_executable_missing_raises(monkeypatch, mgr):
+    """If the local kind's executable isn't on PATH (e.g. textual
+    not installed → no olympus-tui), create() fails fast with a
+    FileNotFoundError instead of silently hanging."""
+    monkeypatch.setattr("dashboard.terminal.shutil.which", lambda _: None)
+    with pytest.raises(FileNotFoundError, match="not on PATH"):
+        mgr.create(owner_email="u@x", host_alias="x", ssh_user="",
+                   address="(local)", kind="olympus-tui")
+
+
+def test_create_with_kind_skips_key_path_and_ssh(monkeypatch, mgr):
+    """Local-kind sessions don't materialize an ssh key or build an
+    ssh command. Test seam: pretend ``echo`` is on PATH and verify
+    the Popen call uses it as argv[0] (no ssh, no -i flag)."""
+    captured = {}
+
+    real_popen = __import__("subprocess").Popen
+
+    def fake_popen(*args, **kwargs):
+        captured["argv"] = list(args[0])
+        return real_popen(*args, **kwargs)
+
+    # Pretend `olympus-tui` resolves to /bin/cat so create() can
+    # actually spawn something benign — keeps the test hermetic.
+    monkeypatch.setattr("dashboard.terminal.shutil.which",
+                        lambda name: "/bin/cat" if name == "olympus-tui" else None)
+    monkeypatch.setattr("dashboard.terminal.subprocess.Popen", fake_popen)
+    # Local registry temporarily points at cat with no args.
+    monkeypatch.setitem(__import__("dashboard.terminal", fromlist=["_LOCAL_KINDS"])._LOCAL_KINDS,
+                        "olympus-tui", ("olympus-tui",))
+
+    s = mgr.create(owner_email="u@x", host_alias="olympus-tui", ssh_user="",
+                   address="(local)", kind="olympus-tui",
+                   key_content="-----BEGIN ... PRIVATE KEY----- shouldnotbeused")
+    try:
+        argv = captured["argv"]
+        # Resolved path is what shutil.which returned, not "ssh".
+        assert argv[0] == "/bin/cat"
+        assert "ssh" not in argv[0]
+        # No ``-i {keyfile}`` in the argv — local mode bypasses key materialization.
+        assert "-i" not in argv
+        # Session metadata records the kind.
+        assert s.kind == "olympus-tui"
+        # No key tempfile created.
+        assert s._key_path is None  # noqa: SLF001
+    finally:
+        mgr.close(s.session_id)
+
+
+def test_session_to_info_carries_kind(mgr):
+    s = mgr.create(owner_email="u@x", host_alias="local",
+                   ssh_user="", address="(local)",
+                   executable="/bin/cat", args=[])
+    # Default ssh path → kind None.
+    assert session_to_info(s).kind is None
+    mgr.close(s.session_id)
+
+
 def test_module_constants_match_spec():
     """Quick smoke check that the module-level knobs match the design
     docs (30 min detached expiry, 100KB scrollback)."""

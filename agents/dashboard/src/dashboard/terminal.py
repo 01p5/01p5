@@ -96,10 +96,28 @@ _SSH_ENV_OVERRIDES = {
     "LC_ALL": "C.UTF-8",
 }
 
+# TERM.9a — registry of local CLI session kinds. ``create(kind=...)``
+# looks up the argv here instead of building an ssh command. Keeping
+# this as a closed allowlist (rather than a free-form executable) is
+# defense-in-depth: even a buggy / malicious POST to /terminal/sessions
+# can't launch arbitrary binaries. Add new kinds by registering them
+# here + (optionally) surfacing a button in the frontend new-session
+# modal.
+_LOCAL_KINDS: dict[str, tuple[str, ...]] = {
+    "olympus-tui": ("olympus-tui", "--router", "manual"),
+}
+
 
 @dataclasses.dataclass
 class TerminalSession:
-    """One live PTY-wrapped ssh subprocess.
+    """One live PTY-wrapped subprocess.
+
+    Two flavours — distinguished by ``kind``:
+      - ``kind=None`` (default): ssh session to a remote inventory host.
+        ``host_alias`` / ``ssh_user`` / ``address`` describe the target.
+      - ``kind="olympus-tui"`` (or another entry in ``_LOCAL_KINDS``):
+        local CLI hosted inside the dashboard pod. ``host_alias``
+        is just a display label; ``address`` is ``(local)``.
 
     Owned by ``SessionManager``; callers must not mutate ``_master_fd``
     or ``_proc`` directly. ``write_input`` / ``read_scrollback`` /
@@ -127,6 +145,10 @@ class TerminalSession:
     last_detached_at: Optional[float] = None
     last_active_at: float = dataclasses.field(default_factory=time.time)
     closed: bool = False
+    # TERM.9a — None for ssh sessions, one of ``_LOCAL_KINDS`` keys for
+    # local CLI sessions. Surfaced on the wire so the UI can label them
+    # differently in the rail / list.
+    kind: Optional[str] = None
 
     # ---- public API ----
 
@@ -230,6 +252,10 @@ class SessionInfo:
     attached: bool
     last_active_at: float
     alive: bool
+    # TERM.9a — None for ssh sessions, else the local-CLI kind label
+    # (e.g. "olympus-tui"). Frontend uses it to pick the right
+    # row icon + skip the host-picker for local sessions.
+    kind: Optional[str] = None
 
 
 class SessionManager:
@@ -261,23 +287,27 @@ class SessionManager:
         address: str,
         key_content: Optional[str] = None,
         ssh_port: int = 22,
+        kind: Optional[str] = None,
         executable: Optional[str] = None,
         args: Optional[list[str]] = None,
         cwd: Optional[str] = None,
     ) -> TerminalSession:
-        """Spawn a new ssh session as a pty-wrapped subprocess.
+        """Spawn a new pty-wrapped subprocess.
 
-        ``key_content``: PEM body of the private key the ssh subprocess
-        should use. Written to a 0600 tempfile that lives as long as
-        the session does (cleanup on ``close``). Pass ``None`` to omit
-        ``-i`` entirely (ssh falls back to agent / default identities).
+        Two modes:
+          - **SSH (default, ``kind=None``):** builds an ssh command
+            against ``ssh_user@address`` with ``key_content`` (if any)
+            materialized to a 0600 tempfile. Cleanup on ``close``.
+          - **Local CLI (``kind`` set):** looks up ``kind`` in
+            ``_LOCAL_KINDS`` and spawns that argv directly. No ssh,
+            no key. ``host_alias`` becomes the display label.
 
-        ``executable`` + ``args``: test seam. Defaults to ``ssh`` with
-        ``-i {key} -p {port} {user}@{address}``; tests pass ``cat`` or
-        similar to exercise the pty plumbing without a real ssh daemon.
+        ``executable`` + ``args`` is a test seam — overrides both
+        modes. Tests pass ``cat`` or similar to exercise the pty
+        plumbing without a real ssh daemon or TUI.
         """
         key_path: Optional[str] = None
-        if key_content:
+        if key_content and kind is None:
             fd, key_path = tempfile.mkstemp(prefix="olympus-term-", suffix=".pem")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -294,13 +324,30 @@ class SessionManager:
                 raise
 
         if executable is None:
-            executable = shutil.which("ssh") or "ssh"
-            cmd = [executable, *_SSH_DEFAULT_ARGS]
-            if key_path:
-                cmd += ["-i", key_path]
-            if ssh_port and ssh_port != 22:
-                cmd += ["-p", str(ssh_port)]
-            cmd += [f"{ssh_user}@{address}"]
+            if kind is not None:
+                local = _LOCAL_KINDS.get(kind)
+                if local is None:
+                    raise ValueError(
+                        f"unknown terminal session kind {kind!r} "
+                        f"(known: {sorted(_LOCAL_KINDS)})"
+                    )
+                # ``shutil.which`` resolves the executable on PATH so
+                # we fail fast with a clear log if (e.g.) olympus-tui
+                # wasn't installed in the image.
+                resolved = shutil.which(local[0])
+                if resolved is None:
+                    raise FileNotFoundError(
+                        f"{local[0]!r} not on PATH — local kind {kind!r} can't launch"
+                    )
+                cmd = [resolved, *local[1:]]
+            else:
+                executable = shutil.which("ssh") or "ssh"
+                cmd = [executable, *_SSH_DEFAULT_ARGS]
+                if key_path:
+                    cmd += ["-i", key_path]
+                if ssh_port and ssh_port != 22:
+                    cmd += ["-p", str(ssh_port)]
+                cmd += [f"{ssh_user}@{address}"]
         else:
             cmd = [executable, *(args or [])]
 
@@ -346,6 +393,7 @@ class SessionManager:
             _key_path=key_path,
             last_detached_at=self._clock(),  # starts detached until WS attaches
             last_active_at=self._clock(),
+            kind=kind,
         )
         with self._lock:
             self._sessions[session.session_id] = session
@@ -482,6 +530,7 @@ def session_to_info(session: TerminalSession) -> SessionInfo:
         attached=session.attached,
         last_active_at=session.last_active_at,
         alive=session.is_alive(),
+        kind=session.kind,
     )
 
 
