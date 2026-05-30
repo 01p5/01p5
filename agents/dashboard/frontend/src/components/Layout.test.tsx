@@ -29,6 +29,10 @@ beforeEach(() => {
     by_status: {},
     recent: [],
   });
+  vi.spyOn(api, "me").mockResolvedValue({
+    authenticated: true, email: "test@stanford.edu",
+    auth: { bypass: true, google_oauth: false, email_otp: false, allowed_domains: ["stanford.edu"], cookie_secure: false },
+  });
 });
 afterEach(() => {
   vi.unstubAllGlobals();

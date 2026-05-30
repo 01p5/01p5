@@ -18,6 +18,11 @@ beforeEach(() => {
     totals: { tasks: 0, settled: 0, usd: 0, input_tokens: 0, output_tokens: 0, wall_seconds: 0 },
     by_agent: {}, by_status: {}, recent: [],
   });
+  // RequireAuth + Layout call /me on mount; stub a bypass-style authed user.
+  vi.spyOn(api, "me").mockResolvedValue({
+    authenticated: true, email: "test@stanford.edu",
+    auth: { bypass: true, google_oauth: false, email_otp: false, allowed_domains: ["stanford.edu"], cookie_secure: false },
+  });
   vi.spyOn(api, "terraformStacks").mockResolvedValue([]);
   vi.spyOn(api, "ansiblePlaybooks").mockResolvedValue([]);
   vi.spyOn(api, "listMcpServers").mockResolvedValue([]);

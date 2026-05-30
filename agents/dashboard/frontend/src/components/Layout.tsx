@@ -1,6 +1,8 @@
-import { NavLink, Outlet } from "react-router-dom";
-import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History } from "lucide-react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History, LogOut, User } from "lucide-react";
 import clsx from "clsx";
+import { api } from "../api";
+import { useAuth } from "../hooks/useAuth";
 import { StatusDot } from "./StatusDot";
 import { BusSidebar } from "./BusSidebar";
 import { ApprovalsPanel } from "./ApprovalsPanel";
@@ -19,6 +21,12 @@ const TABS = [
 ];
 
 export function Layout(): JSX.Element {
+  const { auth } = useAuth();
+  const navigate = useNavigate();
+  const onLogout = async () => {
+    try { await api.logout(); } catch { /* ignore */ }
+    navigate("/login", { replace: true });
+  };
   return (
     <div className="h-full grid grid-rows-[auto_1fr_auto]">
       {/* Topnav */}
@@ -53,6 +61,22 @@ export function Layout(): JSX.Element {
             ))}
           </nav>
           <div className="flex-1" />
+          {auth.state === "authed" && (
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono text-text-secondary border border-border-subtle rounded">
+                <User size={12} className="text-accent-green" />
+                <span>{auth.email}</span>
+              </div>
+              <button
+                onClick={() => void onLogout()}
+                title="Sign out"
+                className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-accent-red border border-border-subtle hover:border-accent-red/40 rounded transition-colors"
+              >
+                <LogOut size={13} className="text-accent-red" strokeWidth={2.25} />
+                Logout
+              </button>
+            </div>
+          )}
           <StatusDot />
         </div>
       </header>

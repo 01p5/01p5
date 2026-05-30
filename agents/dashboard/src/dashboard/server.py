@@ -603,14 +603,18 @@ class DashboardServer:
 
     def _handle_me(self, req: BaseHTTPRequestHandler) -> None:
         """Return the authenticated user — or 401 if unauthenticated.
-        The SPA's RequireAuth gate polls this on mount."""
+
+        Always includes the public ``auth`` status so the unauthenticated
+        SPA's /login page can show only the methods that are actually
+        wired (Google + email). The SPA's RequireAuth polls this on mount."""
+        status = public_status(self.auth.config)
         session = self.auth.session_from_request(req.headers)
         if session is None:
-            return self._send_json(req, 401, {"authenticated": False})
+            return self._send_json(req, 401, {"authenticated": False, "auth": status})
         return self._send_json(req, 200, {
             "authenticated": True,
             "email": session.email,
-            "auth": public_status(self.auth.config),
+            "auth": status,
         })
 
     def _handle_auth_google_start(self, req: BaseHTTPRequestHandler) -> None:

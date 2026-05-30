@@ -11,6 +11,7 @@ import type {
   MemoryEntry,
   PendingApproval,
   RollbackEntry,
+  MeResponse,
   TaskRecord,
   TelemetryResponse,
   TicketEventDTO,
@@ -51,6 +52,24 @@ async function deleteJson<T>(url: string): Promise<T> {
 
 export const api = {
   health: (): Promise<HealthResponse> => getJson("/healthz"),
+
+  // Auth — /me returns the authenticated user or 401 (RequireAuth treats
+  // the 401 as "redirect to /login"); the email-OTP routes return
+  // structured errors (rate_limited / email_not_allowed) so the UI can
+  // surface them.
+  me: async (): Promise<MeResponse> => {
+    const r = await fetch("/me");
+    if (r.status === 401 || r.status === 200) {
+      return (await r.json()) as MeResponse;
+    }
+    throw new Error(`${r.status} ${r.statusText}`);
+  },
+  logout: (): Promise<{ ok: true }> => postJson("/auth/logout", {}),
+  googleStartUrl: (): string => "/auth/google/start",
+  emailStart: (email: string): Promise<{ sent: true; email: string }> =>
+    postJson("/auth/email/start", { email }),
+  emailVerify: (email: string, code: string): Promise<{ authenticated: true; email: string }> =>
+    postJson("/auth/email/verify", { email, code }),
 
   // Tasks
   listTasks: (): Promise<TaskRecord[]> => getJson("/tasks"),

@@ -1,6 +1,8 @@
 import { Routes, Route, Navigate, useParams } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { RequireAuth } from "./components/RequireAuth";
 import { ChatPage } from "./pages/ChatPage";
+import { LoginPage } from "./pages/LoginPage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { KubernetesPage } from "./pages/KubernetesPage";
 import { TerraformPage } from "./pages/TerraformPage";
@@ -18,7 +20,9 @@ function ChatRoute(): JSX.Element {
 export default function App(): JSX.Element {
   return (
     <Routes>
-      <Route path="/" element={<Layout />}>
+      {/* Public sign-in page — no RequireAuth wrapping. */}
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>
         <Route index element={<Navigate to="/chat" replace />} />
         <Route path="chat" element={<ChatRoute />} />
         <Route path="chat/:ticketId" element={<ChatRoute />} />

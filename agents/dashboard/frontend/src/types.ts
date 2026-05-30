@@ -126,6 +126,20 @@ export type TicketKind =
   | "approval_decision"
   | "mcp_event";
 
+export interface AuthStatus {
+  bypass: boolean;
+  google_oauth: boolean;
+  email_otp: boolean;
+  allowed_domains: string[];
+  cookie_secure: boolean;
+}
+
+export interface MeResponse {
+  authenticated: boolean;
+  email?: string;
+  auth: AuthStatus;
+}
+
 export interface TicketSummary {
   ticket_id: string;
   event_count: number;
