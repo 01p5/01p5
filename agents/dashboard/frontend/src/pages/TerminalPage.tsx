@@ -275,14 +275,4 @@ function Field({ label, hint, children }: {
 }
 
 
-/** TERM.3a placeholder — TERM.3b wires xterm.js + the WS client here. */
-export function TerminalSessionPage(): JSX.Element {
-  return (
-    <section className="flex flex-col min-h-0 h-full bg-dark-primary items-center justify-center">
-      <div className="text-center text-text-muted text-sm space-y-2">
-        <TerminalSquare size={32} className="mx-auto text-text-muted" strokeWidth={2.25} />
-        <p>Session terminal renders here in TERM.3b (xterm.js + WS client).</p>
-      </div>
-    </section>
-  );
-}
+export { TerminalSessionPage } from "./TerminalSessionPage";
