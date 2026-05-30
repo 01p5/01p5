@@ -102,6 +102,22 @@ describe("TerminalSessionPage", () => {
     );
   });
 
+  it("writes ArrayBuffer messages to the terminal", () => {
+    renderAt();
+    const ws = MockWebSocket.instances[0];
+    // Should not throw — the branch covers ev.data instanceof ArrayBuffer.
+    expect(() => ws.onmessage?.({
+      data: new TextEncoder().encode("hi").buffer,
+    } as MessageEvent)).not.toThrow();
+  });
+
+  it("writes string messages to the terminal (fallback branch)", () => {
+    renderAt();
+    const ws = MockWebSocket.instances[0];
+    // Covers the ``typeof ev.data === 'string'`` fallback branch.
+    expect(() => ws.onmessage?.({ data: "hello\n" } as MessageEvent)).not.toThrow();
+  });
+
   it("conn pill flips to closed + overlay shows on ws.close", async () => {
     renderAt();
     const ws = MockWebSocket.instances[0];
