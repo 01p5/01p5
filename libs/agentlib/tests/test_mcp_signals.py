@@ -26,11 +26,17 @@ def _ok_handler(_msg):
 
 def test_mcp_event_bus_kind_projects_to_transcript():
     # event_from_bus maps the new mcp_event bus kind onto the transcript.
-    msg = new_message("slurm-mcp", "slurm-mcp", "*", "mcp_event", {"method": "notifications/resources/updated"})
+    # ticket_id is required (the sink now skips messages without it); the
+    # MCPSignalReader sets ticket_id=server_name so each server gets a
+    # natural per-server "ticket".
+    msg = new_message("slurm-mcp", "slurm-mcp", "*", "mcp_event",
+                      {"method": "notifications/resources/updated"},
+                      ticket_id="slurm-mcp")
     ev = event_from_bus(msg)
     assert ev is not None
     assert ev.kind == "mcp_event"
     assert ev.actor == "slurm-mcp"
+    assert ev.ticket_id == "slurm-mcp"
 
 
 def test_poll_once_publishes_pushed_notifications():

@@ -269,16 +269,23 @@ _BUS_KIND_TO_TICKET: dict[str, TicketKind] = {
 
 
 def event_from_bus(msg: Any) -> Optional[TicketEvent]:
-    """Project a ``BusMessage`` onto a ``TicketEvent``, or ``None`` if the
-    message kind isn't part of the transcript.
+    """Project a ``BusMessage`` onto a ``TicketEvent``, or ``None`` if it
+    doesn't belong in a group-chat transcript.
 
     Duck-typed on purpose so this module needs no import from ``bus`` — the
-    bus is the source of truth, the ticket log is a view of it. ``ticket_id``
-    falls back to ``task_id`` for standalone (router) tasks."""
+    bus is the source of truth, the ticket log is a view of it.
+
+    Skips messages without an explicit ``ticket_id`` — direct ``/tools/*``
+    invocations and the legacy router path publish bus traffic that isn't
+    part of any group chat, and projecting them would pollute the Sessions
+    list with empty tickets keyed by ``task_id``.
+    """
     kind = _BUS_KIND_TO_TICKET.get(getattr(msg, "kind", None))
     if kind is None:
         return None
-    ticket_id = getattr(msg, "ticket_id", None) or msg.task_id
+    ticket_id = getattr(msg, "ticket_id", None)
+    if not ticket_id:
+        return None
     return TicketEvent(
         ticket_id=ticket_id,
         actor=msg.sender,

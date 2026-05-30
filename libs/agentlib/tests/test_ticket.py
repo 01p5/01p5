@@ -144,17 +144,25 @@ def test_jsonl_after_seq_filter(tmp_path):
 # Bus → ticket projection
 # ---------------------------------------------------------------------------
 
-def test_event_from_bus_maps_known_kinds():
-    msg = new_message("task-1", "orchestrator", "sysadmin", "task", {"x": 1})
+def test_event_from_bus_maps_known_kinds_when_ticket_id_set():
+    msg = new_message("task-1", "orchestrator", "sysadmin", "task", {"x": 1}, ticket_id="T")
     ev = event_from_bus(msg)
     assert ev is not None
     assert ev.kind == "dispatch"
     assert ev.actor == "orchestrator"
-    assert ev.ticket_id == "task-1"  # falls back to task_id
+    assert ev.ticket_id == "T"
     assert ev.task_id == "task-1"
 
-    result_msg = new_message("task-1", "sysadmin", "orchestrator", "result", "done")
+    result_msg = new_message("task-1", "sysadmin", "orchestrator", "result", "done", ticket_id="T")
     assert event_from_bus(result_msg).kind == "agent_result"
+
+
+def test_event_from_bus_skips_messages_without_ticket_id():
+    # Direct /tools invocations + the router path publish without a
+    # ticket_id; projecting them would pollute the Sessions list with
+    # empty tickets keyed by task_id.
+    msg = new_message("task-1", "orchestrator", "sysadmin", "task", {"x": 1})
+    assert event_from_bus(msg) is None
 
 
 def test_event_from_bus_uses_explicit_ticket_id():
@@ -174,9 +182,11 @@ def test_ticket_bus_sink_records_projectable_traffic():
     store = InMemoryTicketStore()
     bus.subscribe("*", ticket_bus_sink(store))
 
-    bus.publish(new_message("T1", "orchestrator", "sysadmin", "task", {"do": "x"}))
-    bus.publish(new_message("T1", "sysadmin", "*", "log", "ignored"))
-    bus.publish(new_message("T1", "sysadmin", "orchestrator", "result", "ok"))
+    bus.publish(new_message("task-1", "orchestrator", "sysadmin", "task", {"do": "x"}, ticket_id="T1"))
+    bus.publish(new_message("task-1", "sysadmin", "*", "log", "ignored", ticket_id="T1"))
+    bus.publish(new_message("task-1", "sysadmin", "orchestrator", "result", "ok", ticket_id="T1"))
+    # Also publish a non-ticketed message — should NOT land in the transcript.
+    bus.publish(new_message("untracked", "orchestrator", "sysadmin", "task", {"do": "y"}))
 
     out = store.transcript("T1")
     assert [e.kind for e in out] == ["dispatch", "agent_result"]

@@ -562,6 +562,10 @@ class MCPSignalReader:
                     recipient="*",
                     kind="mcp_event",
                     payload=note,
+                    # Explicit ticket per server — the bus->ticket sink now
+                    # requires a non-empty ticket_id (so /tools direct
+                    # invocations don't pollute the Sessions list).
+                    ticket_id=self.server_name,
                 )
             )
             published += 1
