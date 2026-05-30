@@ -62,10 +62,12 @@ describe("Layout", () => {
   it("renders every tab in the nav and the Olympus brand", () => {
     renderLayout();
     expect(screen.getByText(/^olympus$/i)).toBeInTheDocument();
-    ["Chat", "Sessions", "Auditing", "Kubernetes", "Terraform", "Ansible",
+    // CHAT.1: Sessions moved off the topnav into the chat-page rail.
+    ["Chat", "Auditing", "Kubernetes", "Terraform", "Ansible",
      "Hosts", "Programmer", "MCP"].forEach((label) => {
       expect(screen.getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
     });
+    expect(screen.queryByRole("link", { name: /sessions/i })).toBeNull();
   });
 
   it("renders the Outlet content for the active route", async () => {

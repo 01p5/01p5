@@ -4,6 +4,7 @@ import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, Check
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { SessionsRail } from "../components/SessionsRail";
 import { api } from "../api";
 import { usePolling } from "../hooks/usePolling";
 import { useSSE } from "../hooks/useSSE";
@@ -164,7 +165,11 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
   const participants = new Set(events.map((e) => e.actor).filter((a) => a !== "human"));
 
   return (
-    <section className="flex flex-col min-h-0 h-full bg-dark-primary">
+    <section className="flex min-h-0 h-full bg-dark-primary">
+      {/* CHAT.1: sessions rail on the left (ChatGPT/Claude-style).
+          Click to switch tickets, "+ New" creates a fresh local id. */}
+      <SessionsRail currentTicketId={ticketId} onNew={resetConversation} />
+      <div className="flex flex-col min-h-0 flex-1 bg-dark-primary">
       {/* Header */}
       <div className="px-6 py-3 border-b border-border-subtle flex items-center justify-between bg-dark-secondary/40">
         <div className="flex items-baseline gap-3">
@@ -246,9 +251,10 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
           </button>
         </div>
         <div className="max-w-4xl mx-auto text-[11px] font-mono text-text-muted mt-2 px-1">
-          ↵ submits · destructive tools surface an approval card in the right sidebar
+          ↵ submits · destructive tools surface an inline approval card
         </div>
       </form>
+      </div>
     </section>
   );
 }

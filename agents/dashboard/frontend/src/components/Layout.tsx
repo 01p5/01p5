@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, History, Network, ClipboardList } from "lucide-react";
+import { MessageSquare, Server, Layers, ListChecks, Hammer, Plug, Network, ClipboardList } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
@@ -7,9 +7,11 @@ import { ApprovalToastBroker } from "./ApprovalToastBroker";
 import { StatusDot } from "./StatusDot";
 import { TelemetryFooter } from "./TelemetryFooter";
 
+// CHAT.1: /sessions is no longer a top-nav tab — past tickets live in
+// the SessionsRail rendered inside ChatPage (ChatGPT-style). The route
+// stays registered in App.tsx for backwards-compatible deep-links.
 const TABS = [
   { to: "/chat",       label: "Chat",       icon: MessageSquare },
-  { to: "/sessions",   label: "Sessions",   icon: History },
   { to: "/auditing",   label: "Auditing",   icon: ClipboardList },
   { to: "/kubernetes", label: "Kubernetes", icon: Server },
   { to: "/terraform",  label: "Terraform",  icon: Layers },

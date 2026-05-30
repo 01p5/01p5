@@ -70,6 +70,10 @@ beforeEach(() => {
   // unrelated tests don't see surprise UI; tests that need approvals
   // mock listApprovals explicitly.
   vi.spyOn(api, "listApprovals").mockResolvedValue([]);
+  // CHAT.1: ChatPage now embeds SessionsRail which polls /tickets.
+  // Default to empty so existing tests don't see surprise rail rows;
+  // CHAT.1-specific tests override this.
+  vi.spyOn(api, "listTickets").mockResolvedValue([]);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
