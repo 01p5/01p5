@@ -93,9 +93,10 @@ function ConnectionStatus({ gpuOk, slurmOk }: { gpuOk: boolean; slurmOk: boolean
 function SlurmSection(): JSX.Element {
   return (
     <Section title="Slurm scheduler" icon={Server} accent="text-accent-blue" testId="hpc-slurm-section">
-      <ToolCard label="Nodes"               tool="slurm-mcp_nodes_list"         testId="hpc-slurm-nodes" />
-      <ToolCard label="Jobs (queue)"        tool="slurm-mcp_jobs_list"          testId="hpc-slurm-jobs" />
-      <ToolCard label="Accounting (24h)"    tool="slurm-mcp_accounting_summary" testId="hpc-slurm-accounting" />
+      <ToolCard label="Nodes"            tool="slurm-mcp_nodes_list"       testId="hpc-slurm-nodes" />
+      <ToolCard label="Jobs (queue)"     tool="slurm-mcp_jobs_list"        testId="hpc-slurm-jobs" />
+      <ToolCard label="Partitions"       tool="slurm-mcp_partitions_list"  testId="hpc-slurm-partitions" />
+      <ToolCard label="Diagnostics"      tool="slurm-mcp_diagnostics_show" testId="hpc-slurm-diagnostics" />
     </Section>
   );
 }
@@ -109,6 +110,7 @@ function SlurmSection(): JSX.Element {
 function GpuSection(): JSX.Element {
   return (
     <Section title="GPU health" icon={Activity} accent="text-accent-green" testId="hpc-gpu-section">
+      <ToolCard label="Nodes"          tool="gpu-mcp_nodes_list"     testId="hpc-gpu-nodes" />
       <ToolCard label="Fleet summary"  tool="gpu-mcp_fleet_summary"  testId="hpc-gpu-fleet" />
       <ToolCard label="Drain advisor"  tool="gpu-mcp_drain_advisor"  testId="hpc-gpu-drain" />
       <NodeStatusCard />

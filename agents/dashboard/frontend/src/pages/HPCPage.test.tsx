@@ -58,7 +58,9 @@ describe("HPCPage", () => {
       const calls = (api.invokeTool as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]);
       expect(calls).toContain("slurm-mcp_nodes_list");
       expect(calls).toContain("slurm-mcp_jobs_list");
-      expect(calls).toContain("slurm-mcp_accounting_summary");
+      expect(calls).toContain("slurm-mcp_partitions_list");
+      expect(calls).toContain("slurm-mcp_diagnostics_show");
+      expect(calls).toContain("gpu-mcp_nodes_list");
       expect(calls).toContain("gpu-mcp_fleet_summary");
       expect(calls).toContain("gpu-mcp_drain_advisor");
       expect(calls).toContain("gpu-mcp_node_status");
