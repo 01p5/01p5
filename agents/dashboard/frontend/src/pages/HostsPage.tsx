@@ -104,7 +104,7 @@ export function HostsPage(): JSX.Element {
               onClick={() => { setEditingHost(null); setHostModalOpen(true); }}
               className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-blue hover:text-text-primary border border-accent-blue/40 hover:bg-accent-blue/10 rounded transition-colors"
             >
-              <Plus size={14} strokeWidth={2.25} />
+              <Plus size={18} strokeWidth={2.5} />
               Add host
             </button>
           </div>
@@ -156,7 +156,7 @@ export function HostsPage(): JSX.Element {
                   className="text-text-muted hover:text-accent-red p-1"
                   aria-label="Delete host"
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={16} strokeWidth={2.25} />
                 </button>
               </div>
             </div>
@@ -173,7 +173,7 @@ export function HostsPage(): JSX.Element {
               onClick={() => setKeyModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-green hover:text-text-primary border border-accent-green/40 hover:bg-accent-green/10 rounded transition-colors"
             >
-              <Key size={14} strokeWidth={2.25} />
+              <Key size={18} strokeWidth={2.5} />
               Add key
             </button>
           </div>
@@ -187,7 +187,7 @@ export function HostsPage(): JSX.Element {
               key={k.id}
               className="bg-dark-panel border border-border-subtle rounded-md px-4 py-3 flex items-center gap-3"
             >
-              <Key size={14} className="text-accent-green/70" />
+              <Key size={16} strokeWidth={2.25} className="text-accent-green/80" />
               <div className="flex-1 min-w-0">
                 <div className="font-mono text-sm font-semibold text-text-primary">{k.name}</div>
                 <div className="font-mono text-[10px] text-text-muted truncate">{k.fingerprint}</div>
@@ -200,12 +200,12 @@ export function HostsPage(): JSX.Element {
                 className="text-text-muted hover:text-accent-red p-1"
                 aria-label="Delete key"
               >
-                <Trash2 size={14} />
+                <Trash2 size={16} strokeWidth={2.25} />
               </button>
             </div>
           ))}
-          <p className="text-[10px] font-mono text-text-muted">
-            <EyeOff size={10} className="inline mr-1" />
+          <p className="text-[10px] font-mono text-text-muted flex items-center gap-1.5">
+            <EyeOff size={13} strokeWidth={2.25} />
             Private keys are paste-once. They are stored 0600 on the dashboard pod and never returned by the API.
           </p>
         </div>
@@ -402,7 +402,7 @@ function KeyModal({
         </Field>
         <Field label="Private key (PEM)" hint={
           <span className="inline-flex items-center gap-1">
-            <EyeOff size={10} /> Paste-once. Never displayed back. Stored 0600 on disk.
+            <EyeOff size={13} strokeWidth={2.25} /> Paste-once. Never displayed back. Stored 0600 on disk.
           </span>
         }>
           <textarea
@@ -419,7 +419,7 @@ function KeyModal({
           onClick={() => setShowContent(!showContent)}
           className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-[1.5px] text-text-muted hover:text-text-secondary"
         >
-          {showContent ? <EyeOff size={11} /> : <Eye size={11} />}
+          {showContent ? <EyeOff size={14} strokeWidth={2.25} /> : <Eye size={14} strokeWidth={2.25} />}
           {showContent ? "Hide" : "Show"} content
         </button>
         {err && <div className="text-sm text-accent-red font-mono">{err}</div>}
