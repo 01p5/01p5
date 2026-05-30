@@ -125,7 +125,7 @@ export function TerraformPage(): JSX.Element {
   return (
     <section className="flex flex-col min-h-0 h-full">
       <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40 flex items-baseline gap-3">
-        <Layers size={14} className="text-accent-blue self-center" />
+        <Layers size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
         <h1 className="font-display text-base font-semibold text-text-primary">Terraform</h1>
         <span className="text-[11px] font-mono text-text-muted">
           {stacks?.length ?? "…"} stack{stacks?.length === 1 ? "" : "s"} discovered

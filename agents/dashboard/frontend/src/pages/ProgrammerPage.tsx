@@ -14,7 +14,7 @@ export function ProgrammerPage(): JSX.Element {
   return (
     <section className="flex flex-col min-h-0 h-full">
       <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40 flex items-baseline gap-3">
-        <Hammer size={14} className="text-accent-blue self-center" />
+        <Hammer size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
         <h1 className="font-display text-base font-semibold text-text-primary">Programmer</h1>
         <span className="text-[11px] font-mono text-text-muted">
           generate Dockerfile / compose / helm values; save through the gated write_file
@@ -68,7 +68,7 @@ function DockerfileGenerator(): JSX.Element {
   return (
     <Card className="p-5 space-y-4">
       <div className="flex items-baseline gap-2">
-        <Container size={14} className="text-accent-orange self-center" />
+        <Container size={16} className="text-accent-orange self-center" strokeWidth={2.25} />
         <h3 className="font-display text-sm font-semibold text-text-primary">Dockerfile</h3>
       </div>
       <div className="grid grid-cols-3 gap-3">
@@ -144,7 +144,7 @@ function ComposeGenerator(): JSX.Element {
   return (
     <Card className="p-5 space-y-4">
       <div className="flex items-baseline gap-2">
-        <FileCode size={14} className="text-accent-blue self-center" />
+        <FileCode size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
         <h3 className="font-display text-sm font-semibold text-text-primary">docker-compose service</h3>
       </div>
       <div className="grid grid-cols-3 gap-3">
@@ -212,7 +212,7 @@ function HelmGenerator(): JSX.Element {
   return (
     <Card className="p-5 space-y-4">
       <div className="flex items-baseline gap-2">
-        <Anchor size={14} className="text-accent-green self-center" />
+        <Anchor size={16} className="text-accent-green self-center" strokeWidth={2.25} />
         <h3 className="font-display text-sm font-semibold text-text-primary">Helm values.yaml</h3>
       </div>
       <div className="grid grid-cols-4 gap-3">
