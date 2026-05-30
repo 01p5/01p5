@@ -40,6 +40,69 @@ spec:
                   name: {{ include "olympus.secretName" . }}
                   key:  {{ .Values.secrets.openaiApiKeyKey }}
                   optional: true
+            # --- Auth (Phases A-C) ---
+            - name: OLYMPUS_AUTH_BYPASS
+              value: {{ .Values.auth.bypass | quote }}
+            - name: OLYMPUS_AUTH_ALLOWED_DOMAINS
+              value: {{ .Values.auth.allowedDomains | quote }}
+            - name: OLYMPUS_AUTH_REDIRECT_BASE_URL
+              value: {{ .Values.auth.redirectBaseUrl | quote }}
+            - name: OLYMPUS_AUTH_COOKIE_SECURE
+              value: {{ .Values.auth.cookieSecure | quote }}
+            - name: OLYMPUS_AUTH_SESSION_TTL_SECONDS
+              value: {{ .Values.auth.sessionTtlSeconds | quote }}
+            {{- if .Values.secrets.sessionSecretKey }}
+            - name: OLYMPUS_AUTH_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "olympus.secretName" . }}
+                  key:  {{ .Values.secrets.sessionSecretKey }}
+                  optional: true
+            {{- end }}
+            {{- if .Values.secrets.googleClientIdKey }}
+            - name: OLYMPUS_AUTH_GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "olympus.secretName" . }}
+                  key:  {{ .Values.secrets.googleClientIdKey }}
+                  optional: true
+            {{- end }}
+            {{- if .Values.secrets.googleClientSecretKey }}
+            - name: OLYMPUS_AUTH_GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "olympus.secretName" . }}
+                  key:  {{ .Values.secrets.googleClientSecretKey }}
+                  optional: true
+            {{- end }}
+            # --- Email-OTP (Phase B) ---
+            - name: OLYMPUS_AUTH_SMTP_HOST
+              value: {{ .Values.auth.smtpHost | quote }}
+            - name: OLYMPUS_AUTH_SMTP_PORT
+              value: {{ .Values.auth.smtpPort | quote }}
+            - name: OLYMPUS_AUTH_SMTP_USERNAME
+              value: {{ .Values.auth.smtpUsername | quote }}
+            - name: OLYMPUS_AUTH_SMTP_FROM
+              value: {{ .Values.auth.smtpFrom | quote }}
+            - name: OLYMPUS_AUTH_SMTP_STARTTLS
+              value: {{ .Values.auth.smtpStarttls | quote }}
+            - name: OLYMPUS_AUTH_OTP_TTL_SECONDS
+              value: {{ .Values.auth.otpTtlSeconds | quote }}
+            - name: OLYMPUS_AUTH_OTP_RATE_LIMIT_SECONDS
+              value: {{ .Values.auth.otpRateLimitSeconds | quote }}
+            {{- if .Values.secrets.smtpPasswordKey }}
+            - name: OLYMPUS_AUTH_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "olympus.secretName" . }}
+                  key:  {{ .Values.secrets.smtpPasswordKey }}
+                  optional: true
+            {{- end }}
+            # --- Hardening (Phase D) ---
+            - name: OLYMPUS_DEMO_MODE
+              value: {{ .Values.hardening.demoMode | quote }}
+            - name: OLYMPUS_DAILY_COST_CAP_USD
+              value: {{ .Values.hardening.dailyCostCapUsd | quote }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 5

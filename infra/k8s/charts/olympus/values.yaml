@@ -33,6 +33,34 @@ secrets:
   openaiApiKeyKey:    openai_api_key
   sshPrivateKeyKey:   ssh_k8s_pem
   sshPrivateKeyMount: /etc/olympus/ssh/k8s.pem
+  # Auth secrets — looked up by key in the same olympus-secrets Secret.
+  # Leave a key empty to omit it (the corresponding env stays unset).
+  sessionSecretKey:        session_secret          # OLYMPUS_AUTH_SESSION_SECRET
+  googleClientIdKey:       google_client_id        # OLYMPUS_AUTH_GOOGLE_CLIENT_ID
+  googleClientSecretKey:   google_client_secret    # OLYMPUS_AUTH_GOOGLE_CLIENT_SECRET
+  smtpPasswordKey:         smtp_password           # OLYMPUS_AUTH_SMTP_PASSWORD
+
+# Auth (Phases A-C). Non-secret values; the secret-backed pieces live in
+# `secrets` above. Leave allowedDomains empty + bypass=true for local dev.
+auth:
+  bypass: false                  # OLYMPUS_AUTH_BYPASS — true skips auth entirely
+  allowedDomains: ""             # OLYMPUS_AUTH_ALLOWED_DOMAINS — csv: "stanford.edu,tianleyu.com"
+  redirectBaseUrl: ""            # OLYMPUS_AUTH_REDIRECT_BASE_URL — e.g. https://0lympu5.com
+  cookieSecure: true             # OLYMPUS_AUTH_COOKIE_SECURE — keep true behind TLS
+  sessionTtlSeconds: 604800      # 7 days
+  smtpHost: ""                   # OLYMPUS_AUTH_SMTP_HOST — empty disables email-OTP
+  smtpPort: 587
+  smtpUsername: ""
+  smtpFrom: ""
+  smtpStarttls: true
+  otpTtlSeconds: 600
+  otpRateLimitSeconds: 60
+
+# Hardening (Phase D). Both default-off so dev runs aren't surprised.
+hardening:
+  demoMode: false                # OLYMPUS_DEMO_MODE — auto-rejects destructive verbs
+  dailyCostCapUsd: ""            # OLYMPUS_DAILY_COST_CAP_USD — empty disables the cap
+
 
 # Persistent audit log volume. emptyDir by default for the smoke deploy;
 # a real cluster should swap in a PVC.
