@@ -39,7 +39,7 @@ jobs:
         # coverage thresholds below.
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pytest pytest-cov pydantic 'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0' fakeredis textual
+          pip install ruff pytest pytest-cov pydantic 'langchain>=0.3,<2.0' 'langchain-core>=0.3,<2.0' fakeredis textual wsproto
 
       - name: Lint (ruff)
         run: ruff check src tests
@@ -79,6 +79,10 @@ jobs:
 
       - name: Test orchestrator CLI wiring (pytest + 80% coverage gate)
         working-directory: agents/olympus_cli
+        run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
+
+      - name: Test terminal_companion agent (pytest + 80% coverage gate)
+        working-directory: agents/terminal_companion
         run: pytest -v --cov=src --cov-report=term --cov-fail-under=80
 
       - name: Test dashboard backend (pytest + 80% coverage gate)
