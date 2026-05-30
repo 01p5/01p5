@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import clsx from "clsx";
 import { api } from "../api";
+import { TerminalSessionsRail } from "../components/TerminalSessionsRail";
 
 
 type ConnState = "connecting" | "open" | "closed" | "error";
@@ -144,6 +145,7 @@ export function TerminalSessionPage(): JSX.Element {
       </div>
 
       <div className="flex-1 min-h-0 flex">
+        {sessionId && <TerminalSessionsRail currentSessionId={sessionId} />}
         <div className="flex-1 min-w-0 relative bg-[#0a0e14] overflow-hidden">
           <div ref={containerRef} data-testid="xterm-container" className="absolute inset-0 p-2 overflow-hidden" />
           {(state === "closed" || state === "error") && (

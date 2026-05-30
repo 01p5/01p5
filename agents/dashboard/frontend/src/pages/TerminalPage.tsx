@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { TerminalSquare, Plus, Trash2, ArrowRight, Circle } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { usePolling } from "../hooks/usePolling";
-import { Modal } from "../components/Modal";
-import type { InventoryHost, TerminalSession } from "../types";
+import { NewTerminalSessionModal } from "../components/TerminalSessionsRail";
+import type { TerminalSession } from "../types";
 
 /**
  * TERM.3a — Terminal landing page.
@@ -74,7 +74,7 @@ export function TerminalPage(): JSX.Element {
         ))}
       </div>
 
-      <NewSessionModal
+      <NewTerminalSessionModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         onCreated={(s) => {
@@ -149,127 +149,6 @@ function SessionRow({
       >
         <Trash2 size={16} strokeWidth={2.25} />
       </button>
-    </div>
-  );
-}
-
-
-function NewSessionModal({
-  open, onClose, onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (s: TerminalSession) => void;
-}): JSX.Element {
-  const [hosts, setHosts] = useState<InventoryHost[]>([]);
-  const [selectedHost, setSelectedHost] = useState<string>("");
-  const [sshUserOverride, setSshUserOverride] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setErr(null);
-    setBusy(false);
-    api.listHosts()
-      .then((h) => {
-        setHosts(h);
-        if (h.length > 0 && !selectedHost) setSelectedHost(h[0].name);
-      })
-      .catch((e) => setErr((e as Error).message));
-  }, [open, selectedHost]);
-
-  const onCreate = async (): Promise<void> => {
-    if (!selectedHost) {
-      setErr("pick a host");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const s = await api.createTerminalSession({
-        host_alias: selectedHost,
-        ssh_user: sshUserOverride.trim() || undefined,
-      });
-      onCreated(s);
-    } catch (e) {
-      setErr((e as Error).message);
-      setBusy(false);
-    }
-  };
-
-  const hostObj = hosts.find((h) => h.name === selectedHost);
-
-  return (
-    <Modal open={open} onClose={onClose} title="Open new terminal session">
-      <div className="space-y-3">
-        <Field label="Host (from inventory)" hint="open /hosts to add more">
-          {hosts.length === 0 ? (
-            <div className="text-[11px] font-mono text-text-muted italic px-2 py-3 border border-dashed border-border-subtle rounded">
-              No hosts in the inventory yet — add one in the Hosts tab first.
-            </div>
-          ) : (
-            <select
-              value={selectedHost}
-              onChange={(e) => setSelectedHost(e.target.value)}
-              data-testid="terminal-host-select"
-              className={inputCls}
-            >
-              {hosts.map((h) => (
-                <option key={h.id} value={h.name}>
-                  {h.name} — {h.ssh_user}@{h.address}
-                </option>
-              ))}
-            </select>
-          )}
-        </Field>
-        <Field label="SSH user override"
-               hint={hostObj
-                 ? `leave blank → use ${hostObj.ssh_user} from the host`
-                 : "leave blank for the host's default"}>
-          <input
-            value={sshUserOverride}
-            onChange={(e) => setSshUserOverride(e.target.value)}
-            placeholder={hostObj?.ssh_user ?? "ubuntu"}
-            data-testid="terminal-ssh-user-override"
-            className={inputCls}
-          />
-        </Field>
-        {err && <div className="text-sm text-accent-red font-mono">{err}</div>}
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose}
-                  className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-text-primary">
-            Cancel
-          </button>
-          <button
-            onClick={() => void onCreate()}
-            disabled={busy || hosts.length === 0}
-            data-testid="terminal-create-confirm"
-            className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-green border border-accent-green/40 hover:bg-accent-green/10 rounded disabled:opacity-40"
-          >
-            {busy ? "Opening…" : "Open"}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-
-const inputCls = "w-full bg-dark-primary border border-border-subtle rounded px-2.5 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent-green/60";
-
-function Field({ label, hint, children }: {
-  label: string;
-  hint?: React.ReactNode;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <div className="space-y-1">
-      <label className="block text-[10px] font-mono uppercase tracking-[1.5px] text-text-secondary">
-        {label}
-        {hint && <span className="ml-2 normal-case tracking-normal text-text-muted">— {hint}</span>}
-      </label>
-      {children}
     </div>
   );
 }

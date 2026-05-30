@@ -34,6 +34,10 @@ beforeEach(() => {
   vi.restoreAllMocks();
   MockWebSocket.instances = [];
   vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
+  // TERM.8: TerminalSessionsRail is mounted inside the page now; mock
+  // the APIs it polls so tests don't fall through to real fetches.
+  vi.spyOn(api, "listTerminalSessions").mockResolvedValue([]);
+  vi.spyOn(api, "listHosts").mockResolvedValue([]);
 });
 afterEach(() => { vi.unstubAllGlobals(); cleanup(); });
 
@@ -80,7 +84,10 @@ describe("wsUrlFor", () => {
 describe("TerminalSessionPage", () => {
   it("renders the header with session id slice + Back link", () => {
     renderAt("abcdef123456789");
-    expect(screen.getByText(/sessions/i)).toBeInTheDocument();
+    // The header's "Sessions" back-link is a router <Link>; scoping by
+    // role disambiguates it from the rail's "no live sessions" copy
+    // (TERM.8 made that more crowded).
+    expect(screen.getByRole("link", { name: /sessions/i })).toBeInTheDocument();
     expect(screen.getByText("abcdef123456")).toBeInTheDocument();
   });
 
