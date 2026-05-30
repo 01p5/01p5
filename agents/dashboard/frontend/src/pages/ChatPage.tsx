@@ -175,11 +175,13 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
         id="chat-stream"
         className="flex-1 overflow-auto px-6 py-8 space-y-4"
       >
-        {events.length === 0 && !sending && <EmptyChat onPick={submit} />}
+        {/* Keep EmptyChat mounted until the first transcript event arrives.
+            Previously this also hid on ``sending``, so the first send would
+            swap the big welcome for a tiny "opening ticket…" line until the
+            SSE delivered the human-message echo — a visible blink. The
+            disabled submit button + cleared input already convey "sent". */}
+        {events.length === 0 && <EmptyChat onPick={submit} />}
         {events.map((ev) => <EventView key={ev.event_id} event={ev} />)}
-        {sending && events.length === 0 && (
-          <div className="text-center text-[11px] font-mono text-text-muted">opening ticket…</div>
-        )}
       </div>
 
       {/* Composer */}
