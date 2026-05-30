@@ -308,3 +308,47 @@ def test_module_constants_match_spec():
     docs (30 min detached expiry, 100KB scrollback)."""
     assert DETACHED_EXPIRY_SECONDS == 1800
     assert SCROLLBACK_BYTES == 100 * 1024
+
+
+def test_ssh_default_args_include_force_pty_and_keepalive():
+    """``-tt`` forces remote pty allocation so TUIs (htop, top, vim,
+    less) don't fail with 'Error opening terminal: unknown.'."""
+    from dashboard.terminal import _SSH_DEFAULT_ARGS
+    assert "-tt" in _SSH_DEFAULT_ARGS
+    # Spot-check the other hardening flags are still present.
+    assert "StrictHostKeyChecking=accept-new" in _SSH_DEFAULT_ARGS
+    assert "ServerAliveInterval=30" in _SSH_DEFAULT_ARGS
+
+
+def test_ssh_env_overrides_set_xterm_256color():
+    """The remote shell's TERM is what ssh forwards from our local env.
+    Pod's env almost never has TERM set, so we explicitly inject
+    xterm-256color (+ utf-8 locale) before launching ssh."""
+    from dashboard.terminal import _SSH_ENV_OVERRIDES
+    assert _SSH_ENV_OVERRIDES["TERM"] == "xterm-256color"
+    assert _SSH_ENV_OVERRIDES["LANG"] == "C.UTF-8"
+    assert _SSH_ENV_OVERRIDES["LC_ALL"] == "C.UTF-8"
+
+
+def test_create_passes_env_overrides_to_subprocess(mgr, monkeypatch):
+    """End-to-end: create() must layer the TERM / LANG / LC_ALL
+    overrides on top of the inherited env when spawning the
+    subprocess. Catches a regression where someone drops the
+    ``env.update(_SSH_ENV_OVERRIDES)`` call."""
+    captured: dict = {}
+
+    real_popen = __import__("subprocess").Popen
+
+    def fake_popen(*args, **kwargs):
+        captured["env"] = dict(kwargs.get("env", {}))
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr("dashboard.terminal.subprocess.Popen", fake_popen)
+    s = mgr.create(owner_email="u@x", host_alias="h", ssh_user="u",
+                   address="a", executable="/bin/cat", args=[])
+    assert captured["env"].get("TERM") == "xterm-256color"
+    assert captured["env"].get("LANG") == "C.UTF-8"
+    assert captured["env"].get("LC_ALL") == "C.UTF-8"
+    # We didn't *replace* the env — pod env still flows through.
+    assert "PATH" in captured["env"]
+    mgr.close(s.session_id)

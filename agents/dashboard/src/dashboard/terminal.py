@@ -72,7 +72,26 @@ _SSH_DEFAULT_ARGS = (
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "ServerAliveInterval=30",
     "-o", "BatchMode=no",     # interactive: allow password prompts if key auth fails
+    # Force remote pty allocation. Without ``-tt`` (double -t) ssh
+    # won't allocate a tty when its own stdin isn't *itself* a tty —
+    # which can happen depending on how the parent's pty is wired —
+    # and TUIs like htop / top / vim / less fail with "Error opening
+    # terminal: unknown.". The forced pty ensures the remote shell
+    # has full job control + signal handling.
+    "-tt",
 )
+
+
+# Environment overrides we apply on top of the dashboard pod's env when
+# launching ssh. ``TERM`` is the load-bearing one: ssh forwards it to
+# the remote shell on pty allocation, and the remote shell sets it as
+# its own TERM. Default the pod's env almost never has it, and ssh
+# falls back to "dumb" which breaks every curses-based TUI.
+_SSH_ENV_OVERRIDES = {
+    "TERM": "xterm-256color",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+}
 
 
 @dataclasses.dataclass
@@ -283,6 +302,12 @@ class SessionManager:
             cmd = [executable, *(args or [])]
 
         master_fd, slave_fd = pty.openpty()
+        # Inherit the dashboard pod's env, then layer TERM / LANG / LC_ALL
+        # so the remote shell ssh allocates gets a sensible terminal
+        # type (xterm-256color) — without this, htop/top/vim/less all
+        # fail with "Error opening terminal: unknown.".
+        env = os.environ.copy()
+        env.update(_SSH_ENV_OVERRIDES)
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -290,7 +315,7 @@ class SessionManager:
                 stdout=slave_fd,
                 stderr=slave_fd,
                 cwd=cwd,
-                env=os.environ.copy(),
+                env=env,
                 close_fds=True,
                 preexec_fn=os.setsid,  # detach from dashboard's pgroup
             )
