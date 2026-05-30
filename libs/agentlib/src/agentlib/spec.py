@@ -134,6 +134,10 @@ class AgentContext:
     # clear it on cleanup. ``None`` => agent owns a private InMemorySaver
     # (the unchanged router path).
     checkpointer: Optional[Any] = None  # langgraph BaseCheckpointSaver | None
+    # Shared BudgetGuard for cost-capping LLM calls (Phase D). When set,
+    # agents pass it to their StructuralAgent so .invoke() gates on the
+    # cost ceiling. None => unbounded (the dev default).
+    budget_guard: Optional[Any] = None  # agentlib.BudgetGuard | None
 
 
 class AgentSpec(ABC):

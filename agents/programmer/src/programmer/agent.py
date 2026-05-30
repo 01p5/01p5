@@ -105,6 +105,7 @@ class ProgrammerAgent(AgentSpec):
             tools=gated,
             agent_type=self.name,
             checkpointer=getattr(ctx, "checkpointer", None),
+            budget_guard=getattr(ctx, "budget_guard", None),
         )
 
         started = time.monotonic()

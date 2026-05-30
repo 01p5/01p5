@@ -92,6 +92,8 @@ from typing import Any, Optional
 
 from agentlib import (
     AgentContext,
+    AlwaysReject,
+    BudgetGuard,
     Bus,
     BusMessage,
     EmbeddingMemoryStore,
@@ -109,6 +111,7 @@ from agentlib import (
     TicketEvent,
     TicketStore,
     gate_tools,
+    get_cost_for_type,
 )
 from langchain_core.tools import BaseTool
 
@@ -1658,16 +1661,41 @@ def build_default_server(
 
     bus = InMemoryBus()
     ticket_store = InMemoryTicketStore()
-    approval_hook = QueueApprovalHook()
+    # DEMO_MODE (Phase D): on a public demo, every destructive verb is
+    # auto-rejected so a curious reviewer can't `delete_pod` / `tf_apply`
+    # even if they try to approve. AlwaysReject ships in agentlib.
+    demo_mode = (os.environ.get("OLYMPUS_DEMO_MODE", "").strip().lower() in ("1", "true", "yes", "on"))
+    if demo_mode:
+        logger.warning("OLYMPUS_DEMO_MODE=1 — destructive tools are auto-rejected.")
+        approval_hook = AlwaysReject()
+    else:
+        approval_hook = QueueApprovalHook()
     if rollback is None and os.environ.get("OLYMPUS_ROLLBACK", "").lower() != "disabled":
         rollback_log_path = rollback_log_path or str(
             Path(audit_log_path).with_name("rollback.jsonl")
         )
         rollback = JsonlRollbackStore(rollback_log_path)
+    # Daily LLM-cost cap (Phase D). When OLYMPUS_DAILY_COST_CAP_USD is set,
+    # build a BudgetGuard the agents pass to StructuralAgent; .invoke()
+    # gates on the cumulative cost across the process via cost_getter.
+    budget_guard = None
+    daily_cap_raw = os.environ.get("OLYMPUS_DAILY_COST_CAP_USD", "").strip()
+    if daily_cap_raw:
+        try:
+            cap = float(daily_cap_raw)
+            if cap > 0:
+                budget_guard = BudgetGuard(
+                    max_budget=cap,
+                    cost_getter=lambda: float(get_cost_for_type("all")[0] or 0.0),
+                )
+                logger.info("BudgetGuard active — daily cap $%.2f", cap)
+        except ValueError:
+            logger.warning("Invalid OLYMPUS_DAILY_COST_CAP_USD=%r — ignoring", daily_cap_raw)
     ctx = AgentContext(
         approval=approval_hook,
         audit=JsonlAuditLogger(audit_log_path),
         rollback=rollback,
+        budget_guard=budget_guard,
     )
     if memory is None:
         mode = os.environ.get("OLYMPUS_MEMORY", "").lower()

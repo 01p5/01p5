@@ -170,6 +170,7 @@ class MainAgent(AgentSpec):
             model=self.model,
             tools=tools,
             agent_type=self.name,
+            budget_guard=getattr(ctx, "budget_guard", None),
         )
 
         started = time.monotonic()
