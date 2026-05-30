@@ -78,7 +78,8 @@ def gate_tools(
                 "this is a programming error in the agent definition"
             )
         wrapped.append(
-            _wrap_one(base, spec, ctx, task_id, effective_ticket_id, ticket_store)
+            _wrap_one(base, spec, ctx, task_id, effective_ticket_id,
+                      ticket_store, approval_ticket_id=ticket_id)
         )
 
     resolver = getattr(ctx, "agent_resolver", None)
@@ -107,7 +108,17 @@ def _wrap_one(
     task_id: str,
     ticket_id: Optional[str] = None,
     ticket_store: Optional[Any] = None,
+    *,
+    approval_ticket_id: Optional[str] = None,
 ) -> BaseTool:
+    """``ticket_id`` is the *effective* ticket id used for the
+    transcript projection (falls back to task_id for standalone runs so
+    the ticket store still has a key). ``approval_ticket_id`` is the
+    *original* ticket id passed to gate_tools — None when there's no
+    real ticket — so the dashboard's /approvals can distinguish
+    "approval inside a group chat" from "approval for a standalone
+    /tasks run" and the chat-page filter / toast suppression works
+    correctly."""
     is_destructive = inner.name in spec.destructive_verbs
     audit = ctx.audit
     approval = ctx.approval
@@ -154,6 +165,13 @@ def _wrap_one(
                 args=kwargs,
                 rationale=f"{spec.name} requesting {inner.name}",
                 diff=_preview_diff(inner.name, kwargs),
+                # Thread the *original* ticket id so the dashboard's
+                # /approvals response carries None for standalone /tasks
+                # runs and the real ticket id for group-chat dispatches.
+                # The chat page uses this to render the card inline; the
+                # global toast broker uses it to suppress the popup when
+                # the user is already on /chat/{ticket_id}.
+                ticket_id=approval_ticket_id,
             )
             audit.log_tool_call(
                 task_id=task_id,
@@ -365,6 +383,8 @@ class ConsoleApprovalHook:
         args: dict[str, Any],
         rationale: str,
         diff: Optional[str] = None,
+        *,
+        ticket_id: Optional[str] = None,  # noqa: ARG002 — CLI doesn't surface this
     ) -> ApprovalDecision:
         print(f"\n[approval] {agent} → {tool}")
         print(f"  args: {json.dumps(args, indent=2, default=str)}")

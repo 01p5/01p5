@@ -30,6 +30,11 @@ class PendingApproval:
     rationale: str
     diff: Optional[str]
     requested_at: float
+    # Group-chat ticket this approval belongs to. Used by the dashboard
+    # to (a) render the approval card inline in the matching chat
+    # transcript, and (b) suppress the global toast notification while
+    # the user is already viewing that ticket.
+    ticket_id: Optional[str] = None
     decision: Optional[ApprovalDecision] = None
     event: threading.Event = field(default_factory=threading.Event)
 
@@ -55,6 +60,8 @@ class QueueApprovalHook:
         args: dict[str, Any],
         rationale: str,
         diff: Optional[str] = None,
+        *,
+        ticket_id: Optional[str] = None,
     ) -> ApprovalDecision:
         approval = PendingApproval(
             approval_id=str(uuid.uuid4()),
@@ -64,6 +71,7 @@ class QueueApprovalHook:
             rationale=rationale,
             diff=diff,
             requested_at=time.time(),
+            ticket_id=ticket_id,
         )
         with self._lock:
             self._pending[approval.approval_id] = approval

@@ -88,6 +88,8 @@ class ApprovalHook(Protocol):
         args: dict[str, Any],
         rationale: str,
         diff: Optional[str] = None,
+        *,
+        ticket_id: Optional[str] = None,
     ) -> ApprovalDecision: ...
 
 

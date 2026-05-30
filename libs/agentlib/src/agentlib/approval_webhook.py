@@ -150,6 +150,8 @@ class WebhookApprovalHook:
         args: dict[str, Any],
         rationale: str,
         diff: Optional[str] = None,
+        *,
+        ticket_id: Optional[str] = None,  # noqa: ARG002 — webhook payload doesn't carry this yet
     ) -> ApprovalDecision:
         approval_id = str(uuid.uuid4())
         pending = _PendingApproval(approval_id=approval_id)

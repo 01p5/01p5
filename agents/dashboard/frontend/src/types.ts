@@ -168,6 +168,12 @@ export interface PendingApproval {
   rationale: string;
   diff: string | null;
   requested_at: number;
+  /** Group-chat ticket this approval belongs to. The chat page uses
+   *  this to render the approval card inline in the matching transcript;
+   *  the global toast broker uses it to suppress the cross-page popup
+   *  when the user is already on /chat/{ticket_id}. May be null for
+   *  approvals raised outside any ticket (legacy /tasks path). */
+  ticket_id: string | null;
 }
 
 export interface AuditRecord {

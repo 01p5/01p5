@@ -122,6 +122,86 @@ def test_gate_tools_rejects_undeclared_tool_at_construction():
     assert {t.name for t in gated} == {"impostor"}
 
 
+def test_gate_tools_forwards_ticket_id_to_approval_request():
+    """AUD.5a: gate_tools must pass its ticket_id kwarg into
+    approval.request(...) so the dashboard's /approvals endpoint can
+    expose it. Without this, the chat page can't tell which approvals
+    belong to its session, and the global toast can't suppress itself
+    when the user is already viewing the matching chat."""
+
+    class CapturingApproval:
+        def __init__(self) -> None:
+            self.seen_ticket_id: Any = "<unset>"
+
+        def request(self, **kwargs):
+            self.seen_ticket_id = kwargs.get("ticket_id", "<missing>")
+            from agentlib import ApprovalDecision
+            return ApprovalDecision(approved=True, reason="captured")
+
+    cap = CapturingApproval()
+    ctx, _ = _ctx(cap)
+    gated = gate_tools(_StubAgent(), ctx, task_id="t-ticket-1",
+                       ticket_id="tk-abc-123")
+    by_name = {t.name: t for t in gated}
+    by_name["dangerous_delete"].invoke({"target": "pod-z"})
+
+    assert cap.seen_ticket_id == "tk-abc-123"
+
+
+def test_gate_tools_passes_none_ticket_id_when_unset():
+    """Standalone /tasks path (no ticket): ticket_id default flows
+    through as None rather than the task id."""
+
+    class CapturingApproval:
+        def __init__(self) -> None:
+            self.seen_ticket_id: Any = "<unset>"
+
+        def request(self, **kwargs):
+            self.seen_ticket_id = kwargs.get("ticket_id", "<missing>")
+            from agentlib import ApprovalDecision
+            return ApprovalDecision(approved=True, reason="captured")
+
+    cap = CapturingApproval()
+    ctx, _ = _ctx(cap)
+    gated = gate_tools(_StubAgent(), ctx, task_id="t-solo")
+    by_name = {t.name: t for t in gated}
+    by_name["dangerous_delete"].invoke({"target": "pod-q"})
+
+    assert cap.seen_ticket_id is None
+
+
+def test_queue_approval_hook_stores_ticket_id_on_pending_approval():
+    """The QueueApprovalHook's PendingApproval record gains a ticket_id
+    field so the dashboard's /approvals serializer can surface it."""
+    from agentlib import QueueApprovalHook
+
+    hook = QueueApprovalHook(approval_timeout_seconds=0.1)
+    import threading
+
+    seen: dict[str, Any] = {}
+
+    def fire():
+        seen["decision"] = hook.request(
+            agent="sysadmin", tool="delete_pod",
+            args={"name": "p"}, rationale="r",
+            ticket_id="tk-queue-789",
+        )
+
+    t = threading.Thread(target=fire)
+    t.start()
+    # Spin until the pending record shows up (request is blocking).
+    import time as _time
+    deadline = _time.monotonic() + 1.0
+    pending = []
+    while _time.monotonic() < deadline:
+        pending = list(hook.pending())
+        if pending:
+            break
+        _time.sleep(0.01)
+    assert pending and pending[0].ticket_id == "tk-queue-789"
+    t.join(timeout=1.0)
+
+
 def test_approval_can_modify_args():
     class SnoopApproval:
         def __init__(self) -> None:

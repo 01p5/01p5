@@ -14,6 +14,7 @@ const APPROVALS: PendingApproval[] = [
     rationale: "Remove a stuck pod.",
     diff: null,
     requested_at: 1_700_000_000,
+    ticket_id: null,
   },
   {
     approval_id: "ap-2",
@@ -23,6 +24,7 @@ const APPROVALS: PendingApproval[] = [
     rationale: "Apply infra change.",
     diff: "--- a\n+++ b\n+new line\n",
     requested_at: 1_700_000_100,
+    ticket_id: null,
   },
 ];
 

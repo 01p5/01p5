@@ -858,6 +858,11 @@ class DashboardServer:
                 "rationale": a.rationale,
                 "diff": a.diff,
                 "requested_at": a.requested_at,
+                # AUD.5a: ticket linkage. Lets the chat page render the
+                # approval card inline in the matching transcript and
+                # the global toast broker suppress the popup when the
+                # user is already viewing that ticket.
+                "ticket_id": getattr(a, "ticket_id", None),
             }
             for a in self.approval_hook.pending()
         ]
