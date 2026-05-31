@@ -7,6 +7,7 @@ export function GpuPortalPage(): JSX.Element {
       title="GPU dashboard"
       enableHint="gpuDashboard.enabled=true"
       testIdPrefix="gpu-portal"
+      parentRoute="/capabilities/gpu"
     />
   );
 }

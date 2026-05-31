@@ -59,8 +59,11 @@ export default function App(): JSX.Element {
             <Route path="ansible" element={<AnsiblePage />} />
             <Route path="programmer" element={<ProgrammerPage />} />
             <Route path="hpc" element={<HPCPage />} />
-            <Route path="slurm" element={<SlurmPortalPage />} />
-            <Route path="gpu" element={<GpuPortalPage />} />
+            {/* S2.F3: wildcards so the parent URL preserves the
+                embedded SPA's inner path (e.g. /capabilities/slurm/jobs).
+                A hard refresh restores the user's place inside the iframe. */}
+            <Route path="slurm/*" element={<SlurmPortalPage />} />
+            <Route path="gpu/*" element={<GpuPortalPage />} />
           </Route>
           {/* Backwards-compat: the legacy top-level paths Navigate-
               redirect to the nested form so bookmarks + in-app links

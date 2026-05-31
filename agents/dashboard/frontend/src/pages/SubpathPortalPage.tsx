@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertCircle, ExternalLink } from "lucide-react";
 
 
@@ -17,6 +17,18 @@ import { AlertCircle, ExternalLink } from "lucide-react";
  * Auth: the iframe loads under Olympus's domain + session cookie,
  * so a logged-in Olympus session protects the embedded portal too
  * (the reverse proxy enforces this at the request layer).
+ *
+ * S2.F3 — refresh-safe deep linking:
+ *   - Route is `slurm/*` / `gpu/*` (wildcard). Parent URL is
+ *     /capabilities/slurm/<inner> and is passed through to the
+ *     iframe's initial src as `${path}<inner>`. Hard refresh
+ *     restores the user's place inside the iframe.
+ *   - The embedded SPA posts {type:"embedded-nav", path:"/slurm/foo"}
+ *     to the parent on every internal navigation; we listen and call
+ *     navigate(replace:true) so the parent URL bar always matches
+ *     what's actually visible in the iframe.
+ *   - iframe src is set ONCE on mount (useState init). We never
+ *     re-set it from prop changes — that would reload the iframe.
  */
 interface PortalProps {
   /** URL path the portal lives at, with trailing slash. e.g. "/slurm/" */
@@ -27,11 +39,21 @@ interface PortalProps {
   enableHint: string;
   /** Test ID prefix so each instantiation gets unique selectors. */
   testIdPrefix: string;
+  /** Olympus's outer route, e.g. "/capabilities/slurm" — used to
+   *  mirror inner-iframe nav events back into the parent URL bar. */
+  parentRoute: string;
 }
 
 
-export function SubpathPortalPage({ path, title, enableHint, testIdPrefix }: PortalProps): JSX.Element {
+export function SubpathPortalPage({ path, title, enableHint, testIdPrefix, parentRoute }: PortalProps): JSX.Element {
   const [health, setHealth] = useState<"unknown" | "ok" | "down">("unknown");
+  // Wildcard segment: when the route is "slurm/*" and the URL is
+  // /capabilities/slurm/jobs, params["*"] is "jobs".
+  const params = useParams();
+  const innerPath = params["*"] ?? "";
+  // Compute iframe src once on mount — recomputing on subsequent
+  // navigations would force a reload and wipe the iframe's state.
+  const [initialSrc] = useState(() => `${path}${innerPath}`);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +67,30 @@ export function SubpathPortalPage({ path, title, enableHint, testIdPrefix }: Por
     })();
     return () => { cancelled = true; };
   }, [path]);
+
+  // Listen for navigation events from the embedded SPA. Each one
+  // becomes a `replace` (not `push`) so the back button still does
+  // what the user expects — one back = leave the portal, not undo
+  // a single in-portal click.
+  const navigate = useNavigate();
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if (e.origin !== window.location.origin) return;
+      if (!e.data || typeof e.data !== "object") return;
+      if (e.data.type !== "embedded-nav") return;
+      const childPath = typeof e.data.path === "string" ? e.data.path : "";
+      if (!childPath.startsWith(path)) return;          // not our iframe
+      const inner = childPath.slice(path.length);
+      const target = `${parentRoute}${inner ? "/" + inner : ""}`;
+      // Avoid a redundant navigate that would itself fire another
+      // postMessage round-trip.
+      if (window.location.pathname !== target) {
+        navigate(target, { replace: true });
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [navigate, path, parentRoute]);
 
   if (health === "unknown") {
     return (
@@ -95,7 +141,7 @@ export function SubpathPortalPage({ path, title, enableHint, testIdPrefix }: Por
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
       <iframe
-        src={path}
+        src={initialSrc}
         title={title}
         data-testid={`${testIdPrefix}-iframe`}
         className="flex-1 w-full border-0"

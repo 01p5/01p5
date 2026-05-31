@@ -7,6 +7,7 @@ export function SlurmPortalPage(): JSX.Element {
       title="Slurm dashboard"
       enableHint="slurmDashboard.enabled=true"
       testIdPrefix="slurm-portal"
+      parentRoute="/capabilities/slurm"
     />
   );
 }
