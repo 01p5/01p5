@@ -97,8 +97,8 @@ RUN pip install --no-cache-dir --no-deps -e ./libs/agentlib \
 # entry points install onto PATH as `slurm-mcp` and `gpu-mcp` and are
 # spawned by the dashboard's MCP integration card. Both depend on paramiko
 # (SSH); pip pulls it transitively.
-ARG SLURM_MGR_SHA=df91ee9607378fd81c30e5cf8675f6b47863fd9b
-ARG GPU_WATCH_SHA=497190e6bbc04987eed3062a5f5edc65b00b0d3e
+ARG SLURM_MGR_SHA=c50ee0efe80e0afd59d65fe706f8157496e11d77
+ARG GPU_WATCH_SHA=7298647118e46dce41757697626bcef5072e322c
 RUN pip install --no-cache-dir \
         "slurmlib    @ git+https://github.com/01p5/slurm-mgr.git@${SLURM_MGR_SHA}#subdirectory=packages/slurmlib"     \
         "slurm-mcp   @ git+https://github.com/01p5/slurm-mgr.git@${SLURM_MGR_SHA}#subdirectory=packages/slurm-mcp"    \

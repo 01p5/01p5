@@ -119,8 +119,17 @@ function GpuSection(): JSX.Element {
 }
 
 
+// Common GPU node names. The picker lets the operator inspect a
+// specific node without needing an autocomplete against the (possibly
+// hundreds-large) cluster registry. The list is per-deploy stable —
+// the gpu-mcp catalog itself is what authoritatively says which nodes
+// are registered; this is just a convenience for the most-watched
+// few. gpu-n177 is included for the 0lympu5-demo's drain-advisor
+// story (the demo's only registered node).
+const GPU_NODE_CHOICES = ["gpu-n177", "gpu-n01", "gpu-n02", "gpu-n03", "gpu-n04"];
+
 function NodeStatusCard(): JSX.Element {
-  const [node, setNode] = useState("gpu-n01");
+  const [node, setNode] = useState(GPU_NODE_CHOICES[0]);
   return (
     <ToolCard
       label="Per-node detail"
@@ -134,7 +143,7 @@ function NodeStatusCard(): JSX.Element {
           data-testid="hpc-gpu-node-select"
           className="bg-dark-primary border border-border-subtle rounded px-2 py-0.5 text-[11px] font-mono text-text-primary focus:outline-none focus:border-accent-green/60"
         >
-          {["gpu-n01", "gpu-n02", "gpu-n03", "gpu-n04"].map((n) => (
+          {GPU_NODE_CHOICES.map((n) => (
             <option key={n} value={n}>{n}</option>
           ))}
         </select>
