@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { BusSidebar } from "./BusSidebar";
 
 // Mocked EventSource — captures the latest instance so tests can push
@@ -97,5 +97,44 @@ describe("BusSidebar", () => {
     });
     expect(container.querySelectorAll(".event").length).toBe(0);
     expect(screen.getByText("no events yet")).toBeInTheDocument();
+  });
+
+  it("opens a detail modal with full event fields on row click", () => {
+    const { container } = render(<BusSidebar />);
+    const src = MockEventSource.last!;
+    act(() => {
+      src.onmessage?.({
+        data: makeEvent({
+          msg_id: "m-detail", task_id: "task-42", sender: "main",
+          recipient: "sysadmin", kind: "result",
+          payload: { summary: "did the thing", nested: { ok: true } },
+        }),
+      } as MessageEvent<string>);
+    });
+    // No modal until a row is clicked.
+    expect(screen.queryByTestId("event-detail")).not.toBeInTheDocument();
+
+    fireEvent.click(container.querySelector(".event") as HTMLElement);
+
+    const detail = screen.getByTestId("event-detail");
+    expect(detail).toBeInTheDocument();
+    expect(detail.textContent).toContain("task-42");
+    expect(detail.textContent).toContain("m-detail");
+    expect(detail.textContent).toContain("sysadmin");
+    // Payload pretty-printed (multi-line JSON) into the modal.
+    expect(detail.querySelector("pre")?.textContent).toContain("did the thing");
+    expect(detail.querySelector("pre")?.textContent).toContain("nested");
+  });
+
+  it("closes the detail modal on Escape", () => {
+    const { container } = render(<BusSidebar />);
+    const src = MockEventSource.last!;
+    act(() => {
+      src.onmessage?.({ data: makeEvent({ msg_id: "m-esc" }) } as MessageEvent<string>);
+    });
+    fireEvent.click(container.querySelector(".event") as HTMLElement);
+    expect(screen.getByTestId("event-detail")).toBeInTheDocument();
+    act(() => { fireEvent.keyDown(window, { key: "Escape" }); });
+    expect(screen.queryByTestId("event-detail")).not.toBeInTheDocument();
   });
 });
