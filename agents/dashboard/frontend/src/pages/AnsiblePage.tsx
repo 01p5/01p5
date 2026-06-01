@@ -73,7 +73,7 @@ export function AnsiblePage(): JSX.Element {
       <div className="flex-1 overflow-auto px-6 py-5 space-y-5">
         {error && (
           <Card className="p-4 text-accent-red font-mono text-sm">
-            <AlertTriangle size={14} className="inline mr-2" />
+            <AlertTriangle size={14} strokeWidth={2.25} className="inline mr-2" />
             {error}
           </Card>
         )}
@@ -95,9 +95,8 @@ export function AnsiblePage(): JSX.Element {
             />
           </div>
           <div>
-            <Button
-              size="sm"
-              icon={<Network size={12} />}
+            <Button size="sm"
+              icon={<Network size={14} strokeWidth={2.25} />}
               loading={busyKey === "listInv"}
               onClick={listInv}
             >
@@ -122,18 +121,16 @@ export function AnsiblePage(): JSX.Element {
                     /opt/olympus/infra/{p}
                   </div>
                   <div className="grid grid-cols-2 gap-1.5">
-                    <Button
-                      size="sm"
-                      icon={<Eye size={12} />}
+                    <Button size="sm"
+                      icon={<Eye size={14} strokeWidth={2.25} />}
                       loading={busyKey === `${p}:check_playbook`}
                       onClick={() => run(p, "check_playbook", "Check")}
                     >
                       check
                     </Button>
-                    <Button
-                      size="sm"
+                    <Button size="sm"
                       variant="primary"
-                      icon={<Play size={12} />}
+                      icon={<Play size={14} strokeWidth={2.25} />}
                       loading={busyKey === `${p}:run_playbook`}
                       onClick={() => run(p, "run_playbook", "Run")}
                     >
@@ -158,7 +155,7 @@ export function AnsiblePage(): JSX.Element {
         )}
         {modal && (
           <div className="flex items-center gap-2 mt-3 text-xs text-text-muted">
-            <FileText size={12} />
+            <FileText size={14} strokeWidth={2.25} />
             ansible output. Failed hosts: search the output for "FAILED".
           </div>
         )}

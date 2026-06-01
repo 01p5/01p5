@@ -339,7 +339,7 @@ function HumanBubble({ text }: { text: string }): JSX.Element {
     <div className="flex justify-end">
       <div className="max-w-[80%] flex items-start gap-2 flex-row-reverse">
         <div className="flex-shrink-0 w-7 h-7 rounded-full bg-dark-control border border-border-subtle flex items-center justify-center">
-          <User size={14} className="text-text-secondary" />
+          <User size={14} strokeWidth={2.25} className="text-text-secondary" />
         </div>
         <div className="bg-accent-blue/[0.08] border border-accent-blue/20 rounded-md rounded-tr-sm px-4 py-2.5 text-sm text-text-primary whitespace-pre-wrap break-words">
           {text}
@@ -356,7 +356,7 @@ function AgentBubble({ actor, text, status, artifacts }: { actor: string; text: 
     <div className="flex">
       <div className="max-w-[80%] flex items-start gap-2">
         <div className={clsx("flex-shrink-0 w-7 h-7 rounded-full border flex items-center justify-center", accent.ring)}>
-          <Bot size={14} className={accent.text} />
+          <Bot size={14} strokeWidth={2.25} className={accent.text} />
         </div>
         <div className="flex-1">
           <div className={clsx("text-[10px] font-mono uppercase tracking-[1.5px] mb-1 pl-1", accent.text)}>
@@ -513,7 +513,7 @@ export function InlineApprovalCard({
               onClick={() => setShowArgs((v) => !v)}
               className="flex items-center gap-1 text-[10px] font-mono uppercase tracking-[1.5px] text-text-muted hover:text-text-secondary"
             >
-              <ChevronDown size={12} className={clsx("transition-transform", showArgs && "rotate-180")} />
+              <ChevronDown size={14} strokeWidth={2.25} className={clsx("transition-transform", showArgs && "rotate-180")} />
               {showArgs ? "Hide" : "Show"} raw args
             </button>
             {showArgs && (

@@ -78,10 +78,9 @@ export function KubernetesPage(): JSX.Element {
             onChange={(e) => setNamespace(e.target.value)}
             className="bg-dark-panel border border-border-subtle rounded px-2 py-1 text-sm font-mono w-32 focus:outline-none focus:border-accent-blue/60"
           />
-          <Button
-            variant="ghost"
+          <Button variant="ghost"
             size="sm"
-            icon={<RefreshCw size={12} />}
+            icon={<RefreshCw size={14} strokeWidth={2.25} />}
             onClick={() => setTick((t) => t + 1)}
           >
             refresh
@@ -263,28 +262,25 @@ function PodsTable({
       align: "right",
       cell: (r) => (
         <div className="flex items-center gap-1 justify-end">
-          <Button
-            size="sm"
+          <Button size="sm"
             variant="ghost"
-            icon={<FileText size={12} />}
+            icon={<FileText size={14} strokeWidth={2.25} />}
             loading={actionLoading === `logs:${r.name}`}
             onClick={(e) => { e.stopPropagation(); void fetchLogs(r.name); }}
           >
             logs
           </Button>
-          <Button
-            size="sm"
+          <Button size="sm"
             variant="ghost"
-            icon={<Eye size={12} />}
+            icon={<Eye size={14} strokeWidth={2.25} />}
             loading={actionLoading === `describe:${r.name}`}
             onClick={(e) => { e.stopPropagation(); void fetchDescribe(r.name); }}
           >
             describe
           </Button>
-          <Button
-            size="sm"
+          <Button size="sm"
             variant="danger"
-            icon={<Trash2 size={12} />}
+            icon={<Trash2 size={14} strokeWidth={2.25} />}
             loading={actionLoading === `delete:${r.name}`}
             onClick={(e) => { e.stopPropagation(); void deletePod(r.name); }}
           >

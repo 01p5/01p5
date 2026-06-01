@@ -82,13 +82,13 @@ function DockerfileGenerator(): JSX.Element {
         <Field label="cmd (space-separated)" value={cmdText} onChange={setCmdText} placeholder="python app.py" />
       </div>
       <div className="flex gap-2">
-        <Button variant="primary" icon={<Sparkles size={12} />} loading={busy} onClick={generate}>
+        <Button variant="primary" icon={<Sparkles size={14} strokeWidth={2.25} />} loading={busy} onClick={generate}>
           Generate
         </Button>
         {out && (
           <>
             <Field label="" value={savePath} onChange={setSavePath} placeholder="/tmp/Dockerfile" className="flex-1" />
-            <Button variant="danger" icon={<Save size={12} />} loading={saving} onClick={save}>
+            <Button variant="danger" icon={<Save size={14} strokeWidth={2.25} />} loading={saving} onClick={save}>
               Save (gated)
             </Button>
           </>
@@ -159,13 +159,13 @@ function ComposeGenerator(): JSX.Element {
         placeholder={"FOO=bar\nDEBUG=1"}
       />
       <div className="flex gap-2">
-        <Button variant="primary" icon={<Sparkles size={12} />} loading={busy} onClick={generate}>
+        <Button variant="primary" icon={<Sparkles size={14} strokeWidth={2.25} />} loading={busy} onClick={generate}>
           Generate
         </Button>
         {out && (
           <>
             <Field label="" value={savePath} onChange={setSavePath} placeholder="/tmp/docker-compose.yml" className="flex-1" />
-            <Button variant="danger" icon={<Save size={12} />} loading={saving} onClick={save}>
+            <Button variant="danger" icon={<Save size={14} strokeWidth={2.25} />} loading={saving} onClick={save}>
               Save (gated)
             </Button>
           </>
@@ -222,13 +222,13 @@ function HelmGenerator(): JSX.Element {
         <Field label="replicas" value={String(replicas)} onChange={(v) => setReplicas(Number.parseInt(v || "0", 10))} />
       </div>
       <div className="flex gap-2">
-        <Button variant="primary" icon={<Sparkles size={12} />} loading={busy} onClick={generate}>
+        <Button variant="primary" icon={<Sparkles size={14} strokeWidth={2.25} />} loading={busy} onClick={generate}>
           Generate
         </Button>
         {out && (
           <>
             <Field label="" value={savePath} onChange={setSavePath} placeholder="/tmp/values.yaml" className="flex-1" />
-            <Button variant="danger" icon={<Save size={12} />} loading={saving} onClick={save}>
+            <Button variant="danger" icon={<Save size={14} strokeWidth={2.25} />} loading={saving} onClick={save}>
               Save (gated)
             </Button>
           </>

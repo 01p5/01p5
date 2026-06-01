@@ -37,19 +37,17 @@ export function MCPPage(): JSX.Element {
             {servers.length} wired · third-party tool providers
           </span>
           <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant={showAddForm ? "secondary" : "primary"}
+            <Button variant={showAddForm ? "secondary" : "primary"}
               size="sm"
-              icon={showAddForm ? <X size={12} /> : <Plus size={12} />}
+              icon={showAddForm ? <X size={14} strokeWidth={2.25} /> : <Plus size={14} strokeWidth={2.25} />}
               onClick={() => setShowAddForm((v) => !v)}
               aria-expanded={showAddForm}
             >
               {showAddForm ? "cancel" : "add server"}
             </Button>
-            <Button
-              variant="ghost"
+            <Button variant="ghost"
               size="sm"
-              icon={<RefreshCw size={12} />}
+              icon={<RefreshCw size={14} strokeWidth={2.25} />}
               onClick={refresh}
             >
               refresh
@@ -425,11 +423,10 @@ function NetDBCard({ onConnected }: NetDBCardProps): JSX.Element {
             className="netdb-host-input mt-0.5 w-full bg-dark-panel border border-border-subtle rounded px-2 py-1 text-[12px] font-mono text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-blue/60 disabled:opacity-50"
           />
         </label>
-        <Button
-          type="submit"
+        <Button type="submit"
           variant="primary"
           size="sm"
-          icon={<Plug size={14} />}
+          icon={<Plug size={14} strokeWidth={2.25} />}
           loading={submitting}
           className="netdb-connect-btn"
         >
@@ -587,11 +584,10 @@ function HPCIntegrationCard({ servers, onConnected }: HPCCardProps): JSX.Element
       </div>
 
       <div className="flex items-center gap-2">
-        <Button
-          type="submit"
+        <Button type="submit"
           variant="primary"
           size="sm"
-          icon={<Plug size={14} />}
+          icon={<Plug size={14} strokeWidth={2.25} />}
           loading={submitting}
           className="hpc-connect-btn"
         >
@@ -719,7 +715,7 @@ function AddServerForm({ onAdded, onCancel }: AddFormProps): JSX.Element {
       className="add-mcp-form rounded-md border border-accent-blue/40 bg-dark-secondary/60 p-4 space-y-3"
     >
       <div className="flex items-center gap-2">
-        <Plus size={14} className="text-accent-blue" />
+        <Plus size={14} strokeWidth={2.25} className="text-accent-blue" />
         <h3 className="font-display text-sm font-semibold text-text-primary">
           Add MCP server
         </h3>

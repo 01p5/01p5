@@ -70,7 +70,7 @@ export function CodeBlock({
         className="absolute top-2 right-2 p-1.5 bg-dark-control/80 hover:bg-border-active border border-border-subtle rounded text-text-secondary hover:text-text-primary opacity-0 group-hover:opacity-100 transition-opacity"
         title={copied ? "copied" : "copy"}
       >
-        {copied ? <Check size={12} className="text-accent-green" /> : <Copy size={12} />}
+        {copied ? <Check size={14} strokeWidth={2.25} className="text-accent-green" /> : <Copy size={14} strokeWidth={2.25} />}
       </button>
     </div>
   );

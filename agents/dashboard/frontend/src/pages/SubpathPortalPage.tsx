@@ -130,7 +130,7 @@ export function SubpathPortalPage({ path, title, enableHint, testIdPrefix, paren
               to="/mcp"
               className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-blue border border-accent-blue/40 hover:bg-accent-blue/10 rounded"
             >
-              <ExternalLink size={12} /> MCP integration card
+              <ExternalLink size={14} strokeWidth={2.25} /> MCP integration card
             </Link>
           </div>
         </div>

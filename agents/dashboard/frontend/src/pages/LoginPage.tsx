@@ -79,7 +79,7 @@ export function LoginPage(): JSX.Element {
 
         {error && (
           <div className="flex items-start gap-2 text-[12px] font-mono text-accent-red bg-accent-red/10 border border-accent-red/30 rounded px-3 py-2">
-            <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+            <AlertCircle size={14} strokeWidth={2.25} className="mt-0.5 flex-shrink-0" />
             <span>{error}</span>
           </div>
         )}

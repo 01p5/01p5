@@ -135,7 +135,7 @@ export function TerraformPage(): JSX.Element {
       <div className="flex-1 overflow-auto px-6 py-5 space-y-5">
         {error && (
           <Card className="p-4 text-accent-red font-mono text-sm">
-            <AlertTriangle size={14} className="inline mr-2" />
+            <AlertTriangle size={14} strokeWidth={2.25} className="inline mr-2" />
             {error}
           </Card>
         )}
@@ -177,10 +177,9 @@ export function TerraformPage(): JSX.Element {
         wide
         headerAction={
           modal?.primaryAction && (
-            <Button
-              variant="primary"
+            <Button variant="primary"
               size="sm"
-              icon={<CheckCircle2 size={12} />}
+              icon={<CheckCircle2 size={14} strokeWidth={2.25} />}
               onClick={() => {
                 modal.primaryAction!.onClick();
                 setModal(null);
@@ -217,33 +216,29 @@ function StackCard({
         /opt/olympus/infra/{stack}
       </div>
       <div className="grid grid-cols-2 gap-1.5">
-        <Button
-          size="sm"
-          icon={<Wand2 size={12} />}
+        <Button size="sm"
+          icon={<Wand2 size={14} strokeWidth={2.25} />}
           loading={isBusy("tf_init")}
           onClick={() => onReadOnly(stack, "tf_init", "Init")}
         >
           init
         </Button>
-        <Button
-          size="sm"
-          icon={<CheckCircle2 size={12} />}
+        <Button size="sm"
+          icon={<CheckCircle2 size={14} strokeWidth={2.25} />}
           loading={isBusy("tf_validate")}
           onClick={() => onReadOnly(stack, "tf_validate", "Validate")}
         >
           validate
         </Button>
-        <Button
-          size="sm"
-          icon={<FileSearch size={12} />}
+        <Button size="sm"
+          icon={<FileSearch size={14} strokeWidth={2.25} />}
           loading={isBusy("tf_plan")}
           onClick={() => onReadOnly(stack, "tf_plan", "Plan")}
         >
           plan
         </Button>
-        <Button
-          size="sm"
-          icon={<ListTree size={12} />}
+        <Button size="sm"
+          icon={<ListTree size={14} strokeWidth={2.25} />}
           loading={isBusy("tf_show")}
           onClick={() => onReadOnly(stack, "tf_show", "Show")}
         >
@@ -251,19 +246,17 @@ function StackCard({
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-border-subtle">
-        <Button
-          size="sm"
+        <Button size="sm"
           variant="primary"
-          icon={<Play size={12} />}
+          icon={<Play size={14} strokeWidth={2.25} />}
           loading={isBusy("tf_apply")}
           onClick={() => onApply(stack)}
         >
           apply
         </Button>
-        <Button
-          size="sm"
+        <Button size="sm"
           variant="danger"
-          icon={<AlertTriangle size={12} />}
+          icon={<AlertTriangle size={14} strokeWidth={2.25} />}
           loading={isBusy("tf_destroy")}
           onClick={() => onDestroy(stack)}
         >
