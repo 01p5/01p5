@@ -64,7 +64,8 @@ auth:
 # Hardening (Phase D). Both default-off so dev runs aren't surprised.
 hardening:
   demoMode: false                # OLYMPUS_DEMO_MODE — auto-rejects destructive verbs
-  dailyCostCapUsd: ""            # OLYMPUS_DAILY_COST_CAP_USD — empty disables the cap
+  dailyCostCapUsd: ""            # OLYMPUS_DAILY_COST_CAP_USD — empty disables the global (all-users) cap
+  defaultUserDailyLimitUsd: ""   # OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD — per-user daily cap when an admin hasn't set one. empty = none
 
 
 # Persistent audit log volume. emptyDir by default for the smoke deploy;

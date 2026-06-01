@@ -151,12 +151,14 @@ export interface AdminUserAccounting {
   output_tokens: number;
   wall_seconds: number;
   spent_today_usd: number;
-  daily_limit_usd: number | null;
+  daily_limit_usd: number | null;       // explicit override; null = uses the default
+  effective_limit_usd: number | null;   // what's actually enforced
 }
 
 export interface AdminAccountingResponse {
   users: AdminUserAccounting[];
   day_start_utc: number;
+  default_daily_limit_usd: number | null;
 }
 
 export interface AdminActivityItem {

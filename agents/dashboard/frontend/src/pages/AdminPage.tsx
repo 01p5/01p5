@@ -56,6 +56,12 @@ export function AdminPage(): JSX.Element {
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-5 space-y-6 max-w-6xl w-full mx-auto">
+        {accounting?.default_daily_limit_usd != null && (
+          <div data-testid="admin-default-limit" className="text-[11px] font-mono text-text-muted">
+            default daily limit: <span className="text-text-secondary">{formatUsd(accounting.default_daily_limit_usd)}</span> / user
+            <span className="ml-1">— applies unless an explicit override is set below</span>
+          </div>
+        )}
         <UsersTable users={users} onChanged={refresh} />
         <ActivityFeed items={activity?.activity ?? []} />
       </div>
@@ -106,7 +112,7 @@ function UserRow({ user, onChanged }: { user: AdminUserAccounting; onChanged: ()
   );
   const [saving, setSaving] = useState(false);
 
-  const overLimit = user.daily_limit_usd != null && user.spent_today_usd >= user.daily_limit_usd;
+  const overLimit = user.effective_limit_usd != null && user.spent_today_usd >= user.effective_limit_usd;
   const tokens = user.input_tokens + user.output_tokens;
 
   const save = useCallback(async () => {
@@ -162,7 +168,15 @@ function UserRow({ user, onChanged }: { user: AdminUserAccounting; onChanged: ()
             data-testid="admin-limit-edit"
             className="inline-flex items-center gap-1.5 text-text-secondary hover:text-accent-purple group"
           >
-            <span className="font-mono">{user.daily_limit_usd != null ? formatUsd(user.daily_limit_usd) : "—"}</span>
+            {/* Explicit override shows the value; otherwise show the
+                effective (default) limit with a hint, or — if neither. */}
+            {user.daily_limit_usd != null ? (
+              <span className="font-mono">{formatUsd(user.daily_limit_usd)}</span>
+            ) : user.effective_limit_usd != null ? (
+              <span className="font-mono text-text-muted">{formatUsd(user.effective_limit_usd)} <span className="text-[10px]">(default)</span></span>
+            ) : (
+              <span className="font-mono">—</span>
+            )}
             <Pencil size={12} strokeWidth={2.25} className="opacity-0 group-hover:opacity-100 transition-opacity" />
           </button>
         )}

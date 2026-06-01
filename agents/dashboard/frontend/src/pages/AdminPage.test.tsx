@@ -14,17 +14,20 @@ vi.mock("../api", () => ({
 const ACCT = {
   users: [
     {
+      // explicit $10 override
       email: "alice@x.com", tasks: 3, settled: 3, usd: 5.25,
       input_tokens: 1000, output_tokens: 400, wall_seconds: 12,
-      spent_today_usd: 5.25, daily_limit_usd: 10,
+      spent_today_usd: 5.25, daily_limit_usd: 10, effective_limit_usd: 10,
     },
     {
+      // no explicit override → falls back to the $10 default; over it
       email: "bob@x.com", tasks: 1, settled: 1, usd: 9.9,
       input_tokens: 200, output_tokens: 80, wall_seconds: 4,
-      spent_today_usd: 9.9, daily_limit_usd: 5,  // over limit
+      spent_today_usd: 9.9, daily_limit_usd: null, effective_limit_usd: 10,
     },
   ],
   day_start_utc: 1719792000,
+  default_daily_limit_usd: 10,
 };
 
 const ACTIVITY = {
@@ -52,6 +55,16 @@ describe("AdminPage", () => {
     });
     const emails = screen.getAllByTestId("admin-user-row").map((r) => r.getAttribute("data-email"));
     expect(emails).toEqual(["alice@x.com", "bob@x.com"]);
+  });
+
+  it("shows the default daily limit + (default) hint for non-overridden users", async () => {
+    render(<AdminPage />);
+    await waitFor(() => expect(screen.getByTestId("admin-default-limit")).toBeInTheDocument());
+    // bob has no explicit override → his row shows "(default)".
+    const bobRow = screen.getAllByTestId("admin-user-row").find(
+      (r) => r.getAttribute("data-email") === "bob@x.com",
+    )!;
+    expect(bobRow.textContent).toContain("(default)");
   });
 
   it("renders the activity feed", async () => {

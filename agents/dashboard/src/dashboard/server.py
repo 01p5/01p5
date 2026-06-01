@@ -134,6 +134,7 @@ from .auth import (
     public_status,
     set_cookie_header,
 )
+from .accounting import SqliteAccountingStore
 from .proxy import proxy_request
 from .terminal import SessionManager, session_to_info
 from .user_limits import (
@@ -190,6 +191,8 @@ class DashboardServer:
         inventory_store: Optional[InventoryStore] = None,
         session_manager: Optional["SessionManager"] = None,
         user_limit_store: Optional["UserLimitStore"] = None,
+        accounting_store: Optional[SqliteAccountingStore] = None,
+        default_user_daily_limit_usd: Optional[float] = None,
     ):
         self.orchestrator = orchestrator
         self.bus = bus
@@ -208,6 +211,14 @@ class DashboardServer:
         # In-memory default (tests + ephemeral deploys); build_default_server
         # swaps in a FileBackedUserLimitStore on the persistent volume.
         self.user_limit_store: UserLimitStore = user_limit_store or InMemoryUserLimitStore()
+        # ACCT-SQL.1 — durable per-task cost ledger. Default :memory:
+        # (ephemeral; tests + dev). build_default_server points it at
+        # accounting.db on the audit volume.
+        self.accounting: SqliteAccountingStore = accounting_store or SqliteAccountingStore(":memory:")
+        # Per-user daily cap that applies when an admin hasn't set an
+        # explicit one. None = no default (unlimited unless set). The
+        # demo sets this to $10 so every user is capped out of the box.
+        self.default_user_daily_limit_usd: Optional[float] = default_user_daily_limit_usd
         # TERM.2a — operator-driven SSH sessions hosted in this pod.
         # Pool of PTY-wrapped ssh subprocesses, keyed by session_id +
         # owner_email. The REST endpoints below + the WS bridge (TERM.2b)
@@ -312,6 +323,13 @@ class DashboardServer:
                     rec.wall_seconds = getattr(cost, "wall_seconds", None)
             # Sender of the "result" message is the agent that handled it.
             rec.agent = msg.sender or rec.agent
+        # Mirror the settled cost into the durable ledger (outside the
+        # tasks lock — the accounting store has its own).
+        self.accounting.record_result(
+            msg.task_id, status=rec.status, cost_usd=rec.cost_usd,
+            input_tokens=rec.input_tokens, output_tokens=rec.output_tokens,
+            wall_seconds=rec.wall_seconds, agent=rec.agent,
+        )
 
     # ---- task submission (worker thread) ----
 
@@ -325,6 +343,10 @@ class DashboardServer:
         )
         with self._tasks_lock:
             self._tasks[task_id] = rec
+        self.accounting.record_submitted(
+            task_id, owner_email=owner_email, natural_language=natural_language,
+            submitted_at=rec.submitted_at, status="pending",
+        )
 
         def worker():
             rec.status = "running"
@@ -383,6 +405,10 @@ class DashboardServer:
         )
         with self._tasks_lock:
             self._tasks[inner_task_id] = rec
+        self.accounting.record_submitted(
+            inner_task_id, owner_email=owner_email, natural_language=message,
+            submitted_at=rec.submitted_at, agent="main", status="running",
+        )
 
         def worker():
             task = TaskMessage(
@@ -412,11 +438,21 @@ class DashboardServer:
                         rec.input_tokens = getattr(cost, "input_tokens", None)
                         rec.output_tokens = getattr(cost, "output_tokens", None)
                         rec.wall_seconds = getattr(cost, "wall_seconds", None)
+                self.accounting.record_result(
+                    inner_task_id, status=rec.status, cost_usd=rec.cost_usd,
+                    input_tokens=rec.input_tokens, output_tokens=rec.output_tokens,
+                    wall_seconds=rec.wall_seconds, agent="main",
+                )
             except Exception as exc:
                 logger.exception("ticket %s main-agent turn failed", ticket_id)
                 with self._tasks_lock:
                     rec.status = "failed"
                     rec.error = f"{type(exc).__name__}: {exc}"
+                self.accounting.record_result(
+                    inner_task_id, status="failed", cost_usd=rec.cost_usd,
+                    input_tokens=rec.input_tokens, output_tokens=rec.output_tokens,
+                    wall_seconds=rec.wall_seconds, agent="main",
+                )
                 payload = {
                     "text": f"main agent error: {type(exc).__name__}: {exc}",
                     "status": "failed",
@@ -1359,33 +1395,27 @@ class DashboardServer:
         t = time.time() if now is None else now
         return t - (t % 86400.0)
 
-    def _spend_today_by_user(self) -> dict[str, float]:
-        """Sum each user's cost_usd for tasks submitted since 00:00 UTC.
-        Keyed by lowercased owner_email. Tasks with no owner (bypass /
-        system) bucket under '' and are excluded from per-user views."""
-        day_start = self._utc_day_start()
-        out: dict[str, float] = {}
-        with self._tasks_lock:
-            tasks = list(self._tasks.values())
-        for t in tasks:
-            if t.submitted_at < day_start:
-                continue
-            owner = (t.owner_email or "").lower()
-            if not owner:
-                continue
-            out[owner] = out.get(owner, 0.0) + (t.cost_usd or 0.0)
-        return out
+    def _effective_limit(self, email: str) -> Optional[float]:
+        """The daily cap actually enforced for a user: their explicit
+        per-user limit if set, else the server-wide default (if any),
+        else None (unlimited)."""
+        explicit = self.user_limit_store.get(email)
+        if explicit is not None:
+            return explicit
+        return self.default_user_daily_limit_usd
 
     def _user_over_limit(self, email: Optional[str]) -> tuple[bool, dict]:
-        """Return (over, detail). A user is over when they have a
-        configured daily cap AND today's spend already meets/exceeds it.
-        No cap configured ⇒ never over. No email (bypass) ⇒ never over."""
+        """Return (over, detail). Over when the user's effective daily
+        cap (explicit override, else the server default) is set AND
+        today's spend already meets/exceeds it. No email (bypass) ⇒
+        never over. Reads spend from the durable ledger so the cap
+        holds across restarts."""
         if not email:
             return False, {}
-        cap = self.user_limit_store.get(email)
+        cap = self._effective_limit(email)
         if cap is None:
             return False, {}
-        spent = self._spend_today_by_user().get(email.lower(), 0.0)
+        spent = self.accounting.spend_today(email, self._utc_day_start())
         if spent >= cap:
             return True, {"spent_today_usd": round(spent, 4), "daily_limit_usd": cap}
         return False, {}
@@ -1402,83 +1432,56 @@ class DashboardServer:
         return email
 
     def _handle_admin_accounting(self, req: BaseHTTPRequestHandler) -> None:
-        """Per-user accounting rollup. Admin-only.
+        """Per-user accounting rollup, read from the durable ledger.
+        Admin-only.
 
         {
           "users": [
             {"email", "tasks", "settled", "usd", "input_tokens",
              "output_tokens", "wall_seconds", "spent_today_usd",
-             "daily_limit_usd": float|null}, ...
+             "daily_limit_usd": float|null,        # explicit override, null = uses default
+             "effective_limit_usd": float|null}, ...# what's actually enforced
           ],
-          "day_start_utc": float
+          "day_start_utc": float,
+          "default_daily_limit_usd": float|null    # applies when no explicit override
         }
         """
         if self._require_admin(req) is None:
             return
-        settled_statuses = {"success", "failed", "rejected", "cancelled"}
-        spend_today = self._spend_today_by_user()
+        day_start = self._utc_day_start()
+        rows = self.accounting.per_user(day_start)
         limits = self.user_limit_store.all()
-        with self._tasks_lock:
-            tasks = list(self._tasks.values())
 
-        users: dict[str, dict] = {}
-
-        def _bucket(email: str) -> dict:
-            return users.setdefault(email, {
-                "email": email, "tasks": 0, "settled": 0, "usd": 0.0,
-                "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0,
-            })
-
-        for t in tasks:
-            owner = (t.owner_email or "").lower()
-            if not owner:
-                continue
-            b = _bucket(owner)
-            b["tasks"] += 1
-            if t.status in settled_statuses:
-                b["settled"] += 1
-                b["usd"] += t.cost_usd or 0.0
-                b["input_tokens"] += t.input_tokens or 0
-                b["output_tokens"] += t.output_tokens or 0
-                b["wall_seconds"] += t.wall_seconds or 0.0
-
-        # Include users who have a configured limit but no tasks yet,
+        by_email = {r["email"]: r for r in rows}
+        # Include users who have an explicit limit but no tasks yet,
         # so the admin sees + can adjust them.
         for email in limits:
-            _bucket(email)
+            if email not in by_email:
+                by_email[email] = {
+                    "email": email, "tasks": 0, "settled": 0, "usd": 0.0,
+                    "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0,
+                    "spent_today_usd": 0.0,
+                }
 
-        for email, b in users.items():
-            b["usd"] = round(b["usd"], 6)
-            b["spent_today_usd"] = round(spend_today.get(email, 0.0), 6)
-            b["daily_limit_usd"] = limits.get(email)
+        for email, b in by_email.items():
+            explicit = limits.get(email)
+            b["daily_limit_usd"] = explicit
+            b["effective_limit_usd"] = explicit if explicit is not None else self.default_user_daily_limit_usd
 
-        payload = sorted(users.values(), key=lambda u: u["usd"], reverse=True)
+        payload = sorted(by_email.values(), key=lambda u: u["usd"], reverse=True)
         self._send_json(req, 200, {
             "users": payload,
-            "day_start_utc": self._utc_day_start(),
+            "day_start_utc": day_start,
+            "default_daily_limit_usd": self.default_user_daily_limit_usd,
         })
 
     def _handle_admin_activity(self, req: BaseHTTPRequestHandler) -> None:
-        """Recent cross-user activity feed (last 50 tasks, newest first).
-        Admin-only. Includes owner_email so the admin sees who did what."""
+        """Recent cross-user activity feed (last 50 tasks, newest first),
+        from the durable ledger. Admin-only."""
         if self._require_admin(req) is None:
             return
-        with self._tasks_lock:
-            tasks = list(self._tasks.values())
-        recent = sorted(tasks, key=lambda t: t.submitted_at, reverse=True)[:50]
         self._send_json(req, 200, {
-            "activity": [
-                {
-                    "task_id": t.task_id,
-                    "owner_email": t.owner_email,
-                    "agent": t.agent,
-                    "status": t.status,
-                    "submitted_at": t.submitted_at,
-                    "cost_usd": t.cost_usd,
-                    "natural_language": t.natural_language[:160],
-                }
-                for t in recent
-            ],
+            "activity": self.accounting.recent_activity(50),
         })
 
     def _handle_admin_set_limit(self, req: BaseHTTPRequestHandler, email: str) -> None:
@@ -2337,6 +2340,21 @@ def build_default_server(
     user_limit_store: UserLimitStore = FileBackedUserLimitStore(
         str(Path(inventory_path).with_name("user_limits.json"))
     )
+    # ACCT-SQL.1 — durable accounting ledger on the same volume. Survives
+    # pod restarts when /var/lib/olympus is a PVC (the demo enables this).
+    accounting_store = SqliteAccountingStore(
+        str(Path(inventory_path).with_name("accounting.db"))
+    )
+    # Per-user daily cap default (applies when an admin hasn't set an
+    # explicit one). Empty/unset = no default (unlimited unless set).
+    _dflt_raw = os.environ.get("OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD", "").strip()
+    default_user_daily_limit_usd: Optional[float] = None
+    if _dflt_raw:
+        try:
+            v = float(_dflt_raw)
+            default_user_daily_limit_usd = v if v > 0 else None
+        except ValueError:
+            logger.warning("Invalid OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD=%r — ignoring", _dflt_raw)
     ctx = AgentContext(
         approval=approval_hook,
         audit=JsonlAuditLogger(audit_log_path),
@@ -2389,6 +2407,8 @@ def build_default_server(
         auth=authenticator,
         inventory_store=inventory_store,
         user_limit_store=user_limit_store,
+        accounting_store=accounting_store,
+        default_user_daily_limit_usd=default_user_daily_limit_usd,
     )
 
 

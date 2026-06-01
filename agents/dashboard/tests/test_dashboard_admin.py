@@ -31,7 +31,7 @@ from agentlib import (
     TaskMessage,
 )
 from dashboard.auth import AuthConfig, Authenticator
-from dashboard.server import DashboardServer, TaskRecord
+from dashboard.server import DashboardServer
 from dashboard.user_limits import FileBackedUserLimitStore, InMemoryUserLimitStore
 
 
@@ -191,22 +191,21 @@ def test_set_and_clear_limit_roundtrip(admin_server):
     assert admin_server.user_limit_store.get("alice@x.com") is None
 
 
+def _seed_settled(server, task_id, owner, cost, *, it=0, ot=0, ws=0.0, when=None):
+    """Write a settled task straight into the durable ledger — the
+    accounting endpoints read from there, not self._tasks."""
+    when = time.time() if when is None else when
+    server.accounting.record_submitted(
+        task_id, owner_email=owner, natural_language="x", submitted_at=when)
+    server.accounting.record_result(
+        task_id, status="success", cost_usd=cost, input_tokens=it,
+        output_tokens=ot, wall_seconds=ws, agent="stub")
+
+
 def test_accounting_rolls_up_per_user(admin_server):
-    # Inject settled task records for two users.
-    now = time.time()
-    with admin_server._tasks_lock:
-        admin_server._tasks["t1"] = TaskRecord(
-            task_id="t1", natural_language="x", submitted_at=now,
-            status="success", cost_usd=2.0, input_tokens=100, output_tokens=50,
-            wall_seconds=1.0, agent="stub", owner_email="alice@x.com")
-        admin_server._tasks["t2"] = TaskRecord(
-            task_id="t2", natural_language="y", submitted_at=now,
-            status="success", cost_usd=3.0, input_tokens=200, output_tokens=80,
-            wall_seconds=2.0, agent="stub", owner_email="alice@x.com")
-        admin_server._tasks["t3"] = TaskRecord(
-            task_id="t3", natural_language="z", submitted_at=now,
-            status="success", cost_usd=1.0, agent="stub",
-            owner_email="bob@x.com")
+    _seed_settled(admin_server, "t1", "alice@x.com", 2.0, it=100, ot=50, ws=1.0)
+    _seed_settled(admin_server, "t2", "alice@x.com", 3.0, it=200, ot=80, ws=2.0)
+    _seed_settled(admin_server, "t3", "bob@x.com", 1.0)
 
     _, acct = _req(admin_server, "GET", "/admin/accounting")
     by_email = {u["email"]: u for u in acct["users"]}
@@ -220,12 +219,12 @@ def test_accounting_rolls_up_per_user(admin_server):
 
 
 def test_activity_feed_includes_owner(admin_server):
-    now = time.time()
-    with admin_server._tasks_lock:
-        admin_server._tasks["t1"] = TaskRecord(
-            task_id="t1", natural_language="deploy the thing",
-            submitted_at=now, status="success", cost_usd=0.5,
-            agent="sysadmin", owner_email="alice@x.com")
+    admin_server.accounting.record_submitted(
+        "t1", owner_email="alice@x.com", natural_language="deploy the thing",
+        submitted_at=time.time(), agent="sysadmin")
+    admin_server.accounting.record_result(
+        "t1", status="success", cost_usd=0.5, input_tokens=0, output_tokens=0,
+        wall_seconds=0.0, agent="sysadmin")
     _, body = _req(admin_server, "GET", "/admin/activity")
     assert body["activity"][0]["owner_email"] == "alice@x.com"
     assert body["activity"][0]["task_id"] == "t1"
@@ -238,12 +237,9 @@ def test_activity_feed_includes_owner(admin_server):
 
 def test_post_task_blocked_when_over_limit(admin_server):
     # Admin's own email is root@tianleyu.com (bypass dev_email). Set a
-    # tiny cap + pre-seed a task that already exceeds it, then submit.
+    # tiny cap + pre-seed a settled task that already exceeds it.
     admin_server.user_limit_store.set("root@tianleyu.com", 1.0)
-    with admin_server._tasks_lock:
-        admin_server._tasks["seed"] = TaskRecord(
-            task_id="seed", natural_language="prior", submitted_at=time.time(),
-            status="success", cost_usd=1.5, owner_email="root@tianleyu.com")
+    _seed_settled(admin_server, "seed", "root@tianleyu.com", 1.5)
     status, body = _req(admin_server, "POST", "/tasks",
                         {"natural_language": "do more"})
     assert status == 429
@@ -257,6 +253,71 @@ def test_post_task_allowed_under_limit(admin_server):
                         {"natural_language": "do a thing"})
     assert status == 202
     assert "task_id" in body
+
+
+# ---------------------------------------------------------------------------
+# SQLite ledger: persistence + default limit
+# ---------------------------------------------------------------------------
+
+
+def test_accounting_store_persists_across_instances(tmp_path):
+    from dashboard.accounting import SqliteAccountingStore
+    db = tmp_path / "accounting.db"
+    s1 = SqliteAccountingStore(db)
+    s1.record_submitted("t1", owner_email="alice@x.com", natural_language="x",
+                         submitted_at=time.time())
+    s1.record_result("t1", status="success", cost_usd=4.0, input_tokens=10,
+                     output_tokens=5, wall_seconds=1.0, agent="stub")
+    s1.close()
+    # A brand-new store over the same file still sees the row — this is
+    # the whole point (survives a pod restart when the file's on a PVC).
+    s2 = SqliteAccountingStore(db)
+    rows = s2.per_user(0.0)
+    assert len(rows) == 1
+    assert rows[0]["email"] == "alice@x.com"
+    assert rows[0]["usd"] == 4.0
+    s2.close()
+
+
+def test_default_limit_enforced_without_explicit_override():
+    # Server with a $2 default; user has no explicit limit set.
+    srv = _make_server("root@tianleyu.com", frozenset({"*@tianleyu.com"}))
+    srv.default_user_daily_limit_usd = 2.0
+    try:
+        _seed_settled(srv, "seed", "root@tianleyu.com", 2.5)  # over the $2 default
+        status, body = _req(srv, "POST", "/tasks", {"natural_language": "more"})
+        assert status == 429
+        assert body["daily_limit_usd"] == 2.0  # the default, not an explicit cap
+    finally:
+        srv.shutdown()
+
+
+def test_explicit_limit_overrides_default():
+    srv = _make_server("root@tianleyu.com", frozenset({"*@tianleyu.com"}))
+    srv.default_user_daily_limit_usd = 2.0
+    try:
+        # Explicit higher cap should let a $2.50-spent user keep going.
+        srv.user_limit_store.set("root@tianleyu.com", 100.0)
+        _seed_settled(srv, "seed", "root@tianleyu.com", 2.5)
+        status, _ = _req(srv, "POST", "/tasks", {"natural_language": "more"})
+        assert status == 202
+    finally:
+        srv.shutdown()
+
+
+def test_accounting_exposes_default_and_effective_limit(admin_server):
+    admin_server.default_user_daily_limit_usd = 10.0
+    _seed_settled(admin_server, "t1", "alice@x.com", 1.0)
+    admin_server.user_limit_store.set("bob@x.com", 3.0)
+    _, acct = _req(admin_server, "GET", "/admin/accounting")
+    assert acct["default_daily_limit_usd"] == 10.0
+    by_email = {u["email"]: u for u in acct["users"]}
+    # alice: no explicit → effective is the default
+    assert by_email["alice@x.com"]["daily_limit_usd"] is None
+    assert by_email["alice@x.com"]["effective_limit_usd"] == 10.0
+    # bob: explicit override wins
+    assert by_email["bob@x.com"]["daily_limit_usd"] == 3.0
+    assert by_email["bob@x.com"]["effective_limit_usd"] == 3.0
 
 
 # ---------------------------------------------------------------------------
