@@ -593,3 +593,95 @@ def test_cost_from_agent_zero_run_returns_zeros():
     assert cb.total_usd == 0.0
     assert cb.input_tokens == 0
     assert cb.output_tokens == 0
+
+
+# ---------------------------------------------------------------------------
+# Self-protection: hard-deny self-targeting BEFORE approval (the headline
+# guarantee — a malicious user must not be able to approve their own
+# self-escalation).
+# ---------------------------------------------------------------------------
+
+from agentlib import SelfProtectionPolicy  # noqa: E402
+
+
+@tool
+def delete_pod(name: str, namespace: str = "default") -> str:
+    """Stand-in for the sysadmin delete_pod tool."""
+    return f"deleted:{namespace}/{name}"
+
+
+class _CountingApprove:
+    """Approval spy: approves everything but records how many times it was
+    asked, so we can assert the self-protection path NEVER reaches it."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def request(self, **kwargs: Any) -> Any:
+        self.calls += 1
+        from agentlib import ApprovalDecision
+        return ApprovalDecision(approved=True, reason="auto (spy)")
+
+
+class _SelfProtSpec(AgentSpec):
+    name = "sysadmin"
+    domain = "test"
+    tools: Sequence[Any] = [safe_read, delete_pod]
+    destructive_verbs = {"delete_pod"}
+
+    def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
+        raise NotImplementedError
+
+
+def _self_prot_ctx(approval):
+    audit = InMemoryAuditLogger()
+    policy = SelfProtectionPolicy.from_env({"OLYMPUS_SELF_NAMESPACE": "olympus"})
+    ctx = AgentContext(approval=approval, audit=audit, self_protection=policy)
+    return ctx, audit
+
+
+def test_self_protection_hard_denies_before_approval_even_when_approver_says_yes():
+    """delete_pod in the protected namespace must be denied WITHOUT ever
+    calling the approval hook and WITHOUT invoking the underlying tool."""
+    approver = _CountingApprove()
+    ctx, audit = _self_prot_ctx(approver)
+    gated = gate_tools(_SelfProtSpec(), ctx, task_id="sp-1")
+    by_name = {t.name: t for t in gated}
+
+    result = by_name["delete_pod"].invoke({"name": "olympus-abc", "namespace": "olympus"})
+
+    assert "DENIED by self-protection" in result
+    assert approver.calls == 0                      # approval never consulted
+    assert "deleted:" not in result                 # inner tool never ran
+    assert len(audit.records) == 1
+    assert audit.records[0]["approved"] is False
+    assert audit.records[0]["tool"] == "delete_pod"
+
+
+def test_self_protection_lets_non_self_destructive_calls_through_approval():
+    """A delete in a normal user namespace still routes through approval
+    (regression — the guard is targeted, not a blanket block)."""
+    approver = _CountingApprove()
+    ctx, audit = _self_prot_ctx(approver)
+    gated = gate_tools(_SelfProtSpec(), ctx, task_id="sp-2")
+    by_name = {t.name: t for t in gated}
+
+    result = by_name["delete_pod"].invoke({"name": "web", "namespace": "team-a"})
+
+    assert result == "deleted:team-a/web"
+    assert approver.calls == 1                       # normal approval path used
+
+
+def test_self_protection_disabled_is_a_noop():
+    """With no self-identity configured the policy is disabled and never
+    interferes."""
+    approver = _CountingApprove()
+    audit = InMemoryAuditLogger()
+    policy = SelfProtectionPolicy.from_env({})       # disabled
+    ctx = AgentContext(approval=approver, audit=audit, self_protection=policy)
+    gated = gate_tools(_SelfProtSpec(), ctx, task_id="sp-3")
+    by_name = {t.name: t for t in gated}
+
+    result = by_name["delete_pod"].invoke({"name": "x", "namespace": "kube-system"})
+    assert result == "deleted:kube-system/x"
+    assert approver.calls == 1

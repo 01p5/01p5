@@ -122,6 +122,11 @@ def _wrap_one(
     is_destructive = inner.name in spec.destructive_verbs
     audit = ctx.audit
     approval = ctx.approval
+    # Self-protection: hard-deny calls that target the cluster / VM hosts
+    # Olympus runs on. Checked BEFORE approval so a malicious user can't
+    # approve their own self-escalation. None / disabled => no-op.
+    policy = getattr(ctx, "self_protection", None)
+    inventory_store = getattr(ctx, "inventory_store", None)
 
     snapshot_fn = (
         spec.rollback_snapshots.get(inner.name)
@@ -158,6 +163,23 @@ def _wrap_one(
             )
 
     def gated(**kwargs: Any) -> Any:
+        # Self-protection runs first — for destructive AND read-ish tools —
+        # and hard-denies without ever reaching the approval hook or the
+        # underlying tool. The deny is audited (approved=False) + mirrored
+        # to the ticket transcript so the attempt is visible.
+        if policy is not None and getattr(policy, "enabled", False):
+            deny = policy.check(inner.name, kwargs, inventory_store=inventory_store)
+            if deny is not None:
+                audit.log_tool_call(
+                    task_id=task_id,
+                    agent=spec.name,
+                    tool=inner.name,
+                    args=kwargs,
+                    result=deny,
+                    approved=False,
+                )
+                emit_tool_call(kwargs, deny, False)
+                return deny
         if is_destructive:
             decision = approval.request(
                 agent=spec.name,

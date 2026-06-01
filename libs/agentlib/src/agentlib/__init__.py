@@ -37,6 +37,7 @@ from .inventory import (
     render_ansible_inventory,
     ssh_key_fingerprint,
 )
+from .self_protection import SelfProtectionPolicy
 from .mcp import (
     HttpTransport,
     MCPClient,
@@ -163,6 +164,7 @@ __all__ = [
     "HostEntry",
     "SshKey",
     "InventoryError",
+    "SelfProtectionPolicy",
     "InventoryStore",
     "InMemoryInventoryStore",
     "FileBackedInventoryStore",
