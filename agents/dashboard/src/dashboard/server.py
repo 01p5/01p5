@@ -136,6 +136,11 @@ from .auth import (
 )
 from .proxy import proxy_request
 from .terminal import SessionManager, session_to_info
+from .user_limits import (
+    FileBackedUserLimitStore,
+    InMemoryUserLimitStore,
+    UserLimitStore,
+)
 from .terminal_ws import WSHandshakeError, bridge_session_to_socket, perform_ws_handshake
 
 logger = logging.getLogger(__name__)
@@ -162,6 +167,9 @@ class TaskRecord:
     output_tokens: Optional[int] = None
     wall_seconds: Optional[float] = None
     agent: Optional[str] = None
+    # ADM.2 — submitting user's email (None for bypass/system tasks).
+    # Drives the per-user accounting rollup on the admin dashboard.
+    owner_email: Optional[str] = None
 
 
 class DashboardServer:
@@ -181,6 +189,7 @@ class DashboardServer:
         auth: Optional[Authenticator] = None,
         inventory_store: Optional[InventoryStore] = None,
         session_manager: Optional["SessionManager"] = None,
+        user_limit_store: Optional["UserLimitStore"] = None,
     ):
         self.orchestrator = orchestrator
         self.bus = bus
@@ -195,6 +204,10 @@ class DashboardServer:
         # construct DashboardServer without one); build_default_server
         # swaps in a FileBackedInventoryStore against the persistent volume.
         self.inventory_store: InventoryStore = inventory_store or InMemoryInventoryStore()
+        # ADM.3 — per-user daily cost caps, set via the admin dashboard.
+        # In-memory default (tests + ephemeral deploys); build_default_server
+        # swaps in a FileBackedUserLimitStore on the persistent volume.
+        self.user_limit_store: UserLimitStore = user_limit_store or InMemoryUserLimitStore()
         # TERM.2a — operator-driven SSH sessions hosted in this pod.
         # Pool of PTY-wrapped ssh subprocesses, keyed by session_id +
         # owner_email. The REST endpoints below + the WS bridge (TERM.2b)
@@ -302,12 +315,13 @@ class DashboardServer:
 
     # ---- task submission (worker thread) ----
 
-    def submit(self, natural_language: str) -> str:
+    def submit(self, natural_language: str, owner_email: Optional[str] = None) -> str:
         task_id = str(uuid.uuid4())
         rec = TaskRecord(
             task_id=task_id,
             natural_language=natural_language,
             submitted_at=time.time(),
+            owner_email=owner_email,
         )
         with self._tasks_lock:
             self._tasks[task_id] = rec
@@ -499,6 +513,10 @@ class DashboardServer:
                     return outer._handle_list_rollbacks(self)
                 if path == "/telemetry":
                     return outer._handle_telemetry(self)
+                if path == "/admin/accounting":
+                    return outer._handle_admin_accounting(self)
+                if path == "/admin/activity":
+                    return outer._handle_admin_activity(self)
                 if path == "/mcp/servers":
                     return outer._handle_list_mcp_servers(self)
                 if path.startswith("/mcp/servers/") and path.endswith("/tools"):
@@ -592,6 +610,10 @@ class DashboardServer:
                 if path.startswith("/inventory/hosts/"):
                     host_id = path[len("/inventory/hosts/"):]
                     return outer._handle_put_host(self, host_id)
+                if path.startswith("/admin/limits/"):
+                    from urllib.parse import unquote
+                    email = unquote(path[len("/admin/limits/"):])
+                    return outer._handle_admin_set_limit(self, email)
                 self.send_response(404)
                 self.end_headers()
 
@@ -696,7 +718,15 @@ class DashboardServer:
         if not isinstance(nl, str) or not nl.strip():
             self._send_json(req, 400, {"error": "natural_language required"})
             return
-        task_id = self.submit(nl.strip())
+        # ADM.3 — per-user daily cost limit. Reject before spawning the
+        # worker if the submitting user is already over their cap.
+        session = self.auth.session_from_request(req.headers)
+        owner = session.email if session else None
+        over, detail = self._user_over_limit(owner)
+        if over:
+            self._send_json(req, 429, {"error": "daily cost limit reached", **detail})
+            return
+        task_id = self.submit(nl.strip(), owner_email=owner)
         self._send_json(req, 202, {"task_id": task_id})
 
     # ---- auth (Phase A) ----
@@ -1280,6 +1310,164 @@ class DashboardServer:
             "by_agent": by_agent,
             "by_status": by_status,
             "recent": recent_payload,
+        })
+
+    # ---- ADM.2/3 — super-admin accounting ----
+
+    @staticmethod
+    def _utc_day_start(now: Optional[float] = None) -> float:
+        """Unix-seconds floor of the current UTC day. Per-user daily
+        spend resets at 00:00 UTC."""
+        t = time.time() if now is None else now
+        return t - (t % 86400.0)
+
+    def _spend_today_by_user(self) -> dict[str, float]:
+        """Sum each user's cost_usd for tasks submitted since 00:00 UTC.
+        Keyed by lowercased owner_email. Tasks with no owner (bypass /
+        system) bucket under '' and are excluded from per-user views."""
+        day_start = self._utc_day_start()
+        out: dict[str, float] = {}
+        with self._tasks_lock:
+            tasks = list(self._tasks.values())
+        for t in tasks:
+            if t.submitted_at < day_start:
+                continue
+            owner = (t.owner_email or "").lower()
+            if not owner:
+                continue
+            out[owner] = out.get(owner, 0.0) + (t.cost_usd or 0.0)
+        return out
+
+    def _user_over_limit(self, email: Optional[str]) -> tuple[bool, dict]:
+        """Return (over, detail). A user is over when they have a
+        configured daily cap AND today's spend already meets/exceeds it.
+        No cap configured ⇒ never over. No email (bypass) ⇒ never over."""
+        if not email:
+            return False, {}
+        cap = self.user_limit_store.get(email)
+        if cap is None:
+            return False, {}
+        spent = self._spend_today_by_user().get(email.lower(), 0.0)
+        if spent >= cap:
+            return True, {"spent_today_usd": round(spent, 4), "daily_limit_usd": cap}
+        return False, {}
+
+    def _require_admin(self, req: BaseHTTPRequestHandler) -> Optional[str]:
+        """Return the admin's email, or send a 403 + return None. The
+        auth gate already 401'd unauthenticated requests; this enforces
+        the admin role on top."""
+        session = self.auth.session_from_request(req.headers)
+        email = session.email if session else None
+        if not email or not self.auth.config.is_admin(email):
+            self._send_json(req, 403, {"error": "super-admin only"})
+            return None
+        return email
+
+    def _handle_admin_accounting(self, req: BaseHTTPRequestHandler) -> None:
+        """Per-user accounting rollup. Admin-only.
+
+        {
+          "users": [
+            {"email", "tasks", "settled", "usd", "input_tokens",
+             "output_tokens", "wall_seconds", "spent_today_usd",
+             "daily_limit_usd": float|null}, ...
+          ],
+          "day_start_utc": float
+        }
+        """
+        if self._require_admin(req) is None:
+            return
+        settled_statuses = {"success", "failed", "rejected", "cancelled"}
+        spend_today = self._spend_today_by_user()
+        limits = self.user_limit_store.all()
+        with self._tasks_lock:
+            tasks = list(self._tasks.values())
+
+        users: dict[str, dict] = {}
+
+        def _bucket(email: str) -> dict:
+            return users.setdefault(email, {
+                "email": email, "tasks": 0, "settled": 0, "usd": 0.0,
+                "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0,
+            })
+
+        for t in tasks:
+            owner = (t.owner_email or "").lower()
+            if not owner:
+                continue
+            b = _bucket(owner)
+            b["tasks"] += 1
+            if t.status in settled_statuses:
+                b["settled"] += 1
+                b["usd"] += t.cost_usd or 0.0
+                b["input_tokens"] += t.input_tokens or 0
+                b["output_tokens"] += t.output_tokens or 0
+                b["wall_seconds"] += t.wall_seconds or 0.0
+
+        # Include users who have a configured limit but no tasks yet,
+        # so the admin sees + can adjust them.
+        for email in limits:
+            _bucket(email)
+
+        for email, b in users.items():
+            b["usd"] = round(b["usd"], 6)
+            b["spent_today_usd"] = round(spend_today.get(email, 0.0), 6)
+            b["daily_limit_usd"] = limits.get(email)
+
+        payload = sorted(users.values(), key=lambda u: u["usd"], reverse=True)
+        self._send_json(req, 200, {
+            "users": payload,
+            "day_start_utc": self._utc_day_start(),
+        })
+
+    def _handle_admin_activity(self, req: BaseHTTPRequestHandler) -> None:
+        """Recent cross-user activity feed (last 50 tasks, newest first).
+        Admin-only. Includes owner_email so the admin sees who did what."""
+        if self._require_admin(req) is None:
+            return
+        with self._tasks_lock:
+            tasks = list(self._tasks.values())
+        recent = sorted(tasks, key=lambda t: t.submitted_at, reverse=True)[:50]
+        self._send_json(req, 200, {
+            "activity": [
+                {
+                    "task_id": t.task_id,
+                    "owner_email": t.owner_email,
+                    "agent": t.agent,
+                    "status": t.status,
+                    "submitted_at": t.submitted_at,
+                    "cost_usd": t.cost_usd,
+                    "natural_language": t.natural_language[:160],
+                }
+                for t in recent
+            ],
+        })
+
+    def _handle_admin_set_limit(self, req: BaseHTTPRequestHandler, email: str) -> None:
+        """PUT /admin/limits/{email} — set or clear a user's daily cap.
+        Body: {"daily_limit_usd": float | null}. Admin-only."""
+        if self._require_admin(req) is None:
+            return
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        raw = body.get("daily_limit_usd", None)
+        limit: Optional[float]
+        if raw is None:
+            limit = None
+        else:
+            try:
+                limit = float(raw)
+            except (TypeError, ValueError):
+                return self._send_json(req, 400, {"error": "daily_limit_usd must be a number or null"})
+        try:
+            self.user_limit_store.set(email, limit)
+        except ValueError as exc:
+            return self._send_json(req, 400, {"error": str(exc)})
+        return self._send_json(req, 200, {
+            "email": email.lower(),
+            "daily_limit_usd": limit,
         })
 
     @staticmethod
@@ -2106,6 +2294,11 @@ def build_default_server(
         Path(audit_log_path).with_name("inventory.json")
     )
     inventory_store: InventoryStore = FileBackedInventoryStore(inventory_path)
+    # ADM.3 — per-user daily cost caps, persisted next to inventory on
+    # the same PVC.
+    user_limit_store: UserLimitStore = FileBackedUserLimitStore(
+        str(Path(inventory_path).with_name("user_limits.json"))
+    )
     ctx = AgentContext(
         approval=approval_hook,
         audit=JsonlAuditLogger(audit_log_path),
@@ -2157,6 +2350,7 @@ def build_default_server(
         ticket_store=ticket_store,
         auth=authenticator,
         inventory_store=inventory_store,
+        user_limit_store=user_limit_store,
     )
 
 
