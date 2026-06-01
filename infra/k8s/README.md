@@ -37,7 +37,13 @@ kubectl create secret generic olympus-secrets \
 # 4. Install:
 helm install olympus infra/k8s/charts/olympus \
   --set image.repository=olympus/dashboard \
-  --set image.tag=dev
+  --set image.tag=dev \
+  --set-string 'hardening.selfNodes=<cp-ip>\,<worker-ip>\,<cp-host>\,<worker-host>'
+# Self-protection: agents can't manage the cluster/VM hosts Olympus runs on.
+# The release namespace is ALWAYS protected (downward API) even without the flag;
+# hardening.selfNodes additionally blocks ssh/ansible to the listed node IPs +
+# hostnames. NOTE the escaped commas — `--set` treats a bare comma as a list
+# separator, so use `--set-string` with `\,` (or a -f values file).
 
 # 5. Port-forward the dashboard:
 kubectl port-forward svc/olympus-olympus 8765:80
