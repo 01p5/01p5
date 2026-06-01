@@ -107,6 +107,7 @@ from agentlib import (
     JsonlMemoryStore,
     JsonlRollbackStore,
     MemoryStore,
+    SelfProtectionPolicy,
     Orchestrator,
     QueueApprovalHook,
     RollbackStore,
@@ -2038,9 +2039,13 @@ class DashboardServer:
         from agentlib import JsonlAuditLogger
         from terminal_companion import ask as companion_ask
 
+        # terminal_companion has no destructive/self-targeting tools, so the
+        # policy is a no-op here — included for parity + forward-safety if a
+        # future tool is added. from_env() is a cheap env read.
         ctx = AgentContext(
             approval=self.approval_hook,
             audit=JsonlAuditLogger(self.audit_log_path),
+            self_protection=SelfProtectionPolicy.from_env(),
         )
         try:
             resp = companion_ask(
@@ -2359,12 +2364,27 @@ def build_default_server(
             default_user_daily_limit_usd = v if v > 0 else None
         except ValueError:
             logger.warning("Invalid OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD=%r — ignoring", _dflt_raw)
+    # Self-protection: hard-block the agents from managing the cluster / VM
+    # hosts Olympus runs on (see agentlib.SelfProtectionPolicy). Identity comes
+    # from OLYMPUS_SELF_NAMESPACE (downward API) + OLYMPUS_SELF_NODES, never the
+    # user-editable inventory. Disabled (no-op) on dev where neither is set.
+    self_protection = SelfProtectionPolicy.from_env()
+    if self_protection.enabled:
+        logger.info(
+            "Self-protection ON — namespace=%s protected=%s self_nodes=%s",
+            self_protection.self_namespace,
+            sorted(self_protection.protected_namespaces),
+            sorted(self_protection.self_nodes),
+        )
+    else:
+        logger.info("Self-protection OFF — no OLYMPUS_SELF_NAMESPACE/OLYMPUS_SELF_NODES configured")
     ctx = AgentContext(
         approval=approval_hook,
         audit=JsonlAuditLogger(audit_log_path),
         rollback=rollback,
         budget_guard=budget_guard,
         inventory_store=inventory_store,
+        self_protection=self_protection,
     )
     if memory is None:
         mode = os.environ.get("OLYMPUS_MEMORY", "").lower()
