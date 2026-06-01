@@ -45,6 +45,8 @@ spec:
               value: {{ .Values.auth.bypass | quote }}
             - name: OLYMPUS_AUTH_ALLOWED_DOMAINS
               value: {{ .Values.auth.allowedDomains | quote }}
+            - name: OLYMPUS_AUTH_ADMIN_EMAILS
+              value: {{ .Values.auth.adminEmails | quote }}
             - name: OLYMPUS_AUTH_REDIRECT_BASE_URL
               value: {{ .Values.auth.redirectBaseUrl | quote }}
             - name: OLYMPUS_AUTH_COOKIE_SECURE

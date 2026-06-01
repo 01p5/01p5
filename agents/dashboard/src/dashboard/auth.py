@@ -55,6 +55,12 @@ class AuthConfig:
     bypass: bool = False
     dev_email: str = "dev@local"
     allowed_domains: frozenset[str] = frozenset()
+    # Super-admin identities — entries are matched by is_admin():
+    #   "*"               → everyone is admin (dev/test only)
+    #   "*@tianleyu.com"  → any email at that domain
+    #   "alice@x.com"     → that exact email
+    # Empty = nobody is admin (the /admin surface 403s for all).
+    admin_emails: frozenset[str] = frozenset()
     session_secret: bytes = b""
     session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS
     cookie_secure: bool = True
@@ -80,6 +86,10 @@ class AuthConfig:
             d.strip().lower() for d in (e.get("OLYMPUS_AUTH_ALLOWED_DOMAINS") or "").split(",")
             if d.strip()
         )
+        admin_emails = frozenset(
+            a.strip().lower() for a in (e.get("OLYMPUS_AUTH_ADMIN_EMAILS") or "").split(",")
+            if a.strip()
+        )
         secret_raw = e.get("OLYMPUS_AUTH_SESSION_SECRET") or ""
         if secret_raw:
             session_secret = secret_raw.encode()
@@ -99,6 +109,7 @@ class AuthConfig:
             bypass=bypass,
             dev_email=e.get("OLYMPUS_AUTH_DEV_EMAIL", "dev@local"),
             allowed_domains=domains,
+            admin_emails=admin_emails,
             session_secret=session_secret,
             session_ttl_seconds=ttl,
             cookie_secure=cookie_secure,
@@ -132,6 +143,29 @@ class AuthConfig:
         if "*" in self.allowed_domains:
             return True
         return email.rsplit("@", 1)[1].lower() in self.allowed_domains
+
+    def is_admin(self, email: str) -> bool:
+        """Super-admin check, used to gate the /admin accounting surface.
+
+        Matches ``admin_emails`` entries:
+          - ``"*"``              → anyone (dev/test)
+          - ``"*@domain"``       → any email at that domain
+          - ``"alice@x.com"``    → exact email
+        Empty ``admin_emails`` ⇒ nobody is admin. Independent of
+        ``bypass`` — even in bypass mode, the dev_email must match an
+        admin pattern to see /admin (so a bypass demo doesn't
+        accidentally expose admin to everyone unless "*" is set)."""
+        if not email or "@" not in email:
+            return False
+        if not self.admin_emails:
+            return False
+        e = email.lower()
+        if "*" in self.admin_emails:
+            return True
+        if e in self.admin_emails:
+            return True
+        domain = e.rsplit("@", 1)[1]
+        return f"*@{domain}" in self.admin_emails
 
     def google_oauth_enabled(self) -> bool:
         return bool(self.google_client_id and self.google_client_secret and self.redirect_base_url)
@@ -238,7 +272,7 @@ def clear_cookie_header(name: str, *, secure: bool, path: str = "/") -> str:
 _GATED_GET_PREFIXES = (
     "/tasks", "/events", "/approvals", "/audit", "/tools",
     "/memory", "/rollback", "/telemetry", "/mcp", "/stacks", "/tickets",
-    "/inventory", "/terminal",
+    "/inventory", "/terminal", "/admin",
     # S2.C2 — reverse-proxied sibling dashboards. Even though they
     # have their own (none, currently) auth surface, we want all proxied
     # traffic to inherit Olympus's session so an unauth user can't see
@@ -252,7 +286,7 @@ _GATED_POST_PREFIXES = (
 )
 _GATED_PUT_PREFIXES = (
     "/inventory/",
-    "/slurm", "/gpu",
+    "/slurm", "/gpu", "/admin",
 )
 _GATED_DELETE_PREFIXES = (
     "/inventory/", "/mcp/servers/", "/terminal/",

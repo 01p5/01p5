@@ -714,6 +714,7 @@ class DashboardServer:
         return self._send_json(req, 200, {
             "authenticated": True,
             "email": session.email,
+            "is_admin": self.auth.config.is_admin(session.email),
             "auth": status,
         })
 

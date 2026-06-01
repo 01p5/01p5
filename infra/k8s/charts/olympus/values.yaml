@@ -49,6 +49,7 @@ secrets:
 auth:
   bypass: false                  # OLYMPUS_AUTH_BYPASS — true skips auth entirely
   allowedDomains: ""             # OLYMPUS_AUTH_ALLOWED_DOMAINS — csv: "stanford.edu,tianleyu.com"
+  adminEmails: ""                # OLYMPUS_AUTH_ADMIN_EMAILS — super-admins for /admin. csv of exact emails, "*@domain", or "*". e.g. "*@tianleyu.com"
   redirectBaseUrl: ""            # OLYMPUS_AUTH_REDIRECT_BASE_URL — e.g. https://0lympu5.com
   cookieSecure: true             # OLYMPUS_AUTH_COOKIE_SECURE — keep true behind TLS
   sessionTtlSeconds: 604800      # 7 days

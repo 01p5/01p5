@@ -112,6 +112,46 @@ def test_wildcard_allowlist_accepts_any_authenticated_email():
     assert c.is_email_allowed("no-at-sign") is False
 
 
+# --- super-admin (is_admin) ---
+
+def test_is_admin_empty_rejects_everyone():
+    c = _cfg(admin_emails=frozenset())
+    assert c.is_admin("alice@tianleyu.com") is False
+    assert c.is_admin("anyone@anywhere.com") is False
+
+
+def test_is_admin_domain_wildcard():
+    c = _cfg(admin_emails=frozenset({"*@tianleyu.com"}))
+    assert c.is_admin("alice@tianleyu.com") is True
+    assert c.is_admin("BOB@Tianleyu.com") is True  # case-insensitive
+    assert c.is_admin("eve@stanford.edu") is False  # allowed user, not admin
+    assert c.is_admin("") is False
+    assert c.is_admin("no-at-sign") is False
+
+
+def test_is_admin_exact_email():
+    c = _cfg(admin_emails=frozenset({"root@x.com"}))
+    assert c.is_admin("root@x.com") is True
+    assert c.is_admin("other@x.com") is False
+
+
+def test_is_admin_global_wildcard():
+    c = _cfg(admin_emails=frozenset({"*"}))
+    assert c.is_admin("anyone@anywhere.com") is True
+
+
+def test_from_env_parses_admin_emails():
+    c = AuthConfig.from_env({
+        "OLYMPUS_AUTH_ALLOWED_DOMAINS": "*",
+        "OLYMPUS_AUTH_ADMIN_EMAILS": "*@tianleyu.com, root@x.com",
+        "OLYMPUS_AUTH_SESSION_SECRET": "x",
+    })
+    assert c.admin_emails == frozenset({"*@tianleyu.com", "root@x.com"})
+    assert c.is_admin("dev@tianleyu.com") is True
+    assert c.is_admin("root@x.com") is True
+    assert c.is_admin("nope@gmail.com") is False
+
+
 def test_from_env_parses_domains_and_truthy_bypass():
     env = {
         "OLYMPUS_AUTH_BYPASS": "true",
