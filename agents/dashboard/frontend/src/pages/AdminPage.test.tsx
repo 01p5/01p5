@@ -107,6 +107,79 @@ describe("AdminPage", () => {
     });
   });
 
+  it("shows '—' when a user has no daily limit at all", async () => {
+    (api.adminAccounting as ReturnType<typeof vi.fn>).mockResolvedValue({
+      users: [{
+        email: "nolimit@x.com", tasks: 0, settled: 0, usd: 0,
+        input_tokens: 0, output_tokens: 0, wall_seconds: 0,
+        spent_today_usd: 0, daily_limit_usd: null, effective_limit_usd: null,
+        last_login_at: null, login_count: 0,
+      }],
+      day_start_utc: 1719792000,
+      default_daily_limit_usd: null,  // no default → no banner, "—" limit
+    });
+    render(<AdminPage />);
+    await waitFor(() => expect(screen.getAllByTestId("admin-user-row").length).toBe(1));
+    expect(screen.queryByTestId("admin-default-limit")).not.toBeInTheDocument();
+    const row = screen.getByTestId("admin-user-row");
+    expect(row.querySelector("[data-testid='admin-limit-edit']")!.textContent).toContain("—");
+  });
+
+  it("rejects an invalid (negative) limit without calling the API", async () => {
+    render(<AdminPage />);
+    await waitFor(() => expect(screen.getAllByTestId("admin-user-row").length).toBeGreaterThan(0));
+    const row = screen.getAllByTestId("admin-user-row")[0];
+    fireEvent.click(row.querySelector("[data-testid='admin-limit-edit']") as HTMLElement);
+    const input = screen.getByTestId("admin-limit-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "-5" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // invalid → guard returns early, editor stays open, no PUT
+    await new Promise((r) => setTimeout(r, 20));
+    expect(api.setUserLimit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("admin-limit-input")).toBeInTheDocument();
+  });
+
+  it("Escape cancels the limit editor", async () => {
+    render(<AdminPage />);
+    await waitFor(() => expect(screen.getAllByTestId("admin-user-row").length).toBeGreaterThan(0));
+    const row = screen.getAllByTestId("admin-user-row")[0];
+    fireEvent.click(row.querySelector("[data-testid='admin-limit-edit']") as HTMLElement);
+    const input = screen.getByTestId("admin-limit-input");
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("admin-limit-input")).not.toBeInTheDocument());
+    expect(api.setUserLimit).not.toHaveBeenCalled();
+  });
+
+  it("refresh button re-fetches accounting", async () => {
+    render(<AdminPage />);
+    await waitFor(() => expect(screen.getAllByTestId("admin-user-row").length).toBeGreaterThan(0));
+    const before = (api.adminAccounting as ReturnType<typeof vi.fn>).mock.calls.length;
+    fireEvent.click(screen.getByLabelText("Refresh"));
+    await waitFor(() =>
+      expect((api.adminAccounting as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before),
+    );
+  });
+
+  it("formats last-login across all relative-time buckets", async () => {
+    const now = Date.now() / 1000;
+    const mk = (email: string, ago: number | null) => ({
+      email, tasks: 0, settled: 0, usd: 0, input_tokens: 0, output_tokens: 0,
+      wall_seconds: 0, spent_today_usd: 0, daily_limit_usd: null,
+      effective_limit_usd: null, last_login_at: ago == null ? null : now - ago,
+      login_count: ago == null ? 0 : 1,
+    });
+    (api.adminAccounting as ReturnType<typeof vi.fn>).mockResolvedValue({
+      users: [mk("a@x.com", 5), mk("b@x.com", 7200), mk("c@x.com", 200000), mk("d@x.com", null)],
+      day_start_utc: 1719792000, default_daily_limit_usd: null,
+    });
+    render(<AdminPage />);
+    await waitFor(() => expect(screen.getAllByTestId("admin-user-row").length).toBe(4));
+    const table = screen.getByTestId("admin-users-table");
+    expect(table.textContent).toContain("just now");
+    expect(table.textContent).toContain("2h ago");
+    expect(table.textContent).toContain("2d ago");
+  });
+
   it("shows an error panel when accounting fails", async () => {
     (api.adminAccounting as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("403 super-admin only"));
     render(<AdminPage />);
