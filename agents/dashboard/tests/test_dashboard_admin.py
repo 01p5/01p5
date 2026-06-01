@@ -69,6 +69,31 @@ def test_user_limit_store_validation(make_store, tmp_path):
         s.set("a@b.com", -1.0)
 
 
+def test_mcp_servers_from_env_parses_and_skips_bad(monkeypatch):
+    from dashboard.server import _mcp_servers_from_env
+    monkeypatch.setenv("OLYMPUS_MCP_SERVERS", json.dumps([
+        {"name": "gpu-mcp", "target_agent": "hpc", "transport": "http",
+         "url": "http://x:8780/mcp", "destructive": []},
+        {"name": "bad-no-target"},  # skipped
+        {"name": "slurm-mcp", "target_agent": "hpc", "transport": "http",
+         "url": "http://y/mcp/demo", "destructive": ["jobs_cancel"]},
+    ]))
+    out = _mcp_servers_from_env()
+    assert [e["name"] for e in out] == ["gpu-mcp", "slurm-mcp"]
+    assert out[0]["config"].url == "http://x:8780/mcp"
+    assert out[1]["config"].destructive == {"jobs_cancel"}
+
+
+def test_mcp_servers_from_env_tolerates_garbage(monkeypatch):
+    from dashboard.server import _mcp_servers_from_env
+    monkeypatch.setenv("OLYMPUS_MCP_SERVERS", "not json")
+    assert _mcp_servers_from_env() == []
+    monkeypatch.setenv("OLYMPUS_MCP_SERVERS", '{"not":"a list"}')
+    assert _mcp_servers_from_env() == []
+    monkeypatch.delenv("OLYMPUS_MCP_SERVERS", raising=False)
+    assert _mcp_servers_from_env() == []
+
+
 def test_file_backed_store_persists_across_instances(tmp_path):
     p = tmp_path / "user_limits.json"
     FileBackedUserLimitStore(p).set("bob@x.com", 25.0)

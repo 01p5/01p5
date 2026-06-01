@@ -2385,6 +2385,12 @@ def build_default_server(
     from main_agent.agent import MainAgent
 
     agents.append(MainAgent())
+    # Startup MCP servers: explicit param wins; else parse the
+    # OLYMPUS_MCP_SERVERS env (JSON). Declaring them here means they're
+    # wired on every boot — no post-deploy curl ritual, and they survive
+    # pod restarts (the in-memory runtime registry is rebuilt at startup).
+    if mcp_servers is None:
+        mcp_servers = _mcp_servers_from_env()
     mcp_registry = _wire_mcp_servers(agents, mcp_servers or [])
     orch = build_orchestrator(
         ctx=ctx,
@@ -2511,6 +2517,58 @@ def _unregister_one_mcp_server(
             client.close()
         except Exception as exc:
             logger.warning("MCP %r close failed: %s", name, exc)
+
+
+def _mcp_servers_from_env() -> list[dict[str, Any]]:
+    """Parse OLYMPUS_MCP_SERVERS — a JSON array of server specs, each the
+    same shape POST /mcp/servers accepts:
+      {"name","target_agent","transport":"http"|"stdio",
+       "url"|"command", "args","env","headers","destructive"}
+    Returns the list of {name, target_agent, config: MCPServerConfig}
+    entries _wire_mcp_servers consumes. Malformed entries are skipped
+    with a warning so one bad spec doesn't sink startup."""
+    raw = os.environ.get("OLYMPUS_MCP_SERVERS", "").strip()
+    if not raw:
+        return []
+    from agentlib import MCPServerConfig
+
+    try:
+        specs = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("OLYMPUS_MCP_SERVERS is not valid JSON — ignoring: %s", exc)
+        return []
+    if not isinstance(specs, list):
+        logger.warning("OLYMPUS_MCP_SERVERS must be a JSON array — ignoring")
+        return []
+
+    out: list[dict[str, Any]] = []
+    for spec in specs:
+        if not isinstance(spec, dict):
+            continue
+        name = spec.get("name")
+        target = spec.get("target_agent")
+        transport = (spec.get("transport") or "stdio").lower()
+        if not name or not target:
+            logger.warning("OLYMPUS_MCP_SERVERS entry missing name/target_agent — skipping: %r", spec)
+            continue
+        if transport == "http" and not spec.get("url"):
+            logger.warning("OLYMPUS_MCP_SERVERS http entry %r missing url — skipping", name)
+            continue
+        if transport == "stdio" and not spec.get("command"):
+            logger.warning("OLYMPUS_MCP_SERVERS stdio entry %r missing command — skipping", name)
+            continue
+        config = MCPServerConfig(
+            name=name,
+            command=spec.get("command", "") if transport == "stdio" else "",
+            args=list(spec.get("args") or []) if transport == "stdio" else [],
+            env=dict(spec.get("env") or {}) if transport == "stdio" else {},
+            cwd=spec.get("cwd") if transport == "stdio" else None,
+            url=spec.get("url", "") if transport == "http" else "",
+            headers=dict(spec.get("headers") or {}) if transport == "http" else {},
+            destructive=set(spec.get("destructive") or []),
+        )
+        out.append({"name": name, "target_agent": target, "config": config})
+    return out
 
 
 def _wire_mcp_servers(

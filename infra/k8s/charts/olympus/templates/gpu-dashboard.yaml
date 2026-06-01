@@ -30,8 +30,15 @@ spec:
             - name: http
               containerPort: {{ .Values.gpuDashboard.port }}
           env:
+            # See slurm-dashboard.yaml — hostsSecret makes the node
+            # registry read-only + pre-seeded so gpu-mcp works after any
+            # restart with no manual re-seed.
             - name: GPU_WATCH_HOSTS
+              {{- if .Values.gpuDashboard.hostsSecret }}
+              value: /etc/gpu-watch/{{ .Values.gpuDashboard.hostsSecretKey }}
+              {{- else }}
               value: /var/lib/gpu-watch/hosts.json
+              {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 5
@@ -43,6 +50,11 @@ spec:
           volumeMounts:
             - name: hosts
               mountPath: /var/lib/gpu-watch
+            {{- if .Values.gpuDashboard.hostsSecret }}
+            - name: hosts-seed
+              mountPath: /etc/gpu-watch
+              readOnly: true
+            {{- end }}
             {{- if .Values.secrets.sshPrivateKeyKey }}
             - name: ssh-key
               mountPath: {{ .Values.secrets.sshPrivateKeyMount }}
@@ -57,6 +69,15 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.gpuDashboard.hostsSecret }}
+        - name: hosts-seed
+          secret:
+            secretName: {{ .Values.gpuDashboard.hostsSecret }}
+            optional: true
+            items:
+              - key: {{ .Values.gpuDashboard.hostsSecretKey }}
+                path: {{ .Values.gpuDashboard.hostsSecretKey }}
+        {{- end }}
         {{- if .Values.secrets.sshPrivateKeyKey }}
         - name: ssh-key
           secret:

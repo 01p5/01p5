@@ -33,11 +33,18 @@ spec:
             - name: http
               containerPort: {{ .Values.slurmDashboard.port }}
           env:
-            # slurmlib's ClusterRegistry reads SLURM_MGR_HOSTS first,
-            # else ~/.slurm-mgr/hosts.json. Pin it explicitly so the
-            # PVC mount below is the canonical store.
+            # slurmlib's ClusterRegistry reads SLURM_MGR_HOSTS. When a
+            # hostsSecret is set we point it at the read-only mounted
+            # secret so the dashboard boots PRE-REGISTERED (the slurm-mcp
+            # /mcp/<cluster> endpoint then works immediately after any
+            # restart — no manual re-seed). Otherwise it's the writable
+            # PVC/emptyDir store the UI can add clusters to.
             - name: SLURM_MGR_HOSTS
+              {{- if .Values.slurmDashboard.hostsSecret }}
+              value: /etc/slurm-mgr/{{ .Values.slurmDashboard.hostsSecretKey }}
+              {{- else }}
               value: /var/lib/slurm-mgr/hosts.json
+              {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 5
@@ -49,6 +56,11 @@ spec:
           volumeMounts:
             - name: hosts
               mountPath: /var/lib/slurm-mgr
+            {{- if .Values.slurmDashboard.hostsSecret }}
+            - name: hosts-seed
+              mountPath: /etc/slurm-mgr
+              readOnly: true
+            {{- end }}
             {{- if .Values.secrets.sshPrivateKeyKey }}
             # Reuse Olympus's SSH key secret — the slurm dashboard SSHes
             # to its registered controllers using the same cluster-issued
@@ -66,6 +78,15 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.slurmDashboard.hostsSecret }}
+        - name: hosts-seed
+          secret:
+            secretName: {{ .Values.slurmDashboard.hostsSecret }}
+            optional: true
+            items:
+              - key: {{ .Values.slurmDashboard.hostsSecretKey }}
+                path: {{ .Values.slurmDashboard.hostsSecretKey }}
+        {{- end }}
         {{- if .Values.secrets.sshPrivateKeyKey }}
         - name: ssh-key
           secret:

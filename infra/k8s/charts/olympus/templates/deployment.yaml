@@ -107,6 +107,10 @@ spec:
               value: {{ .Values.hardening.dailyCostCapUsd | quote }}
             - name: OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD
               value: {{ .Values.hardening.defaultUserDailyLimitUsd | quote }}
+            {{- if .Values.mcpServers }}
+            - name: OLYMPUS_MCP_SERVERS
+              value: {{ .Values.mcpServers | quote }}
+            {{- end }}
             # --- Inventory (Phase INV) ---
             # User-managed hosts + ssh keys file. Sibling of the audit
             # log so a single mounted volume (audit.persistence) covers

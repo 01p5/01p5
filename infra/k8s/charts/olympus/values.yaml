@@ -67,6 +67,16 @@ hardening:
   dailyCostCapUsd: ""            # OLYMPUS_DAILY_COST_CAP_USD — empty disables the global (all-users) cap
   defaultUserDailyLimitUsd: ""   # OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD — per-user daily cap when an admin hasn't set one. empty = none
 
+# MCP servers wired at startup (OLYMPUS_MCP_SERVERS, JSON array). Each
+# entry is the same shape POST /mcp/servers takes. Declaring them here
+# means they're registered on every boot — no post-deploy curl, and they
+# survive pod restarts. Empty = none (wire at runtime via the MCP page).
+# Example (HPC):
+#   mcpServers: |
+#     [{"name":"gpu-mcp","target_agent":"hpc","transport":"http","url":"http://...:8780/mcp","destructive":[]},
+#      {"name":"slurm-mcp","target_agent":"hpc","transport":"http","url":"http://...:8770/mcp/demo","destructive":["jobs_cancel",...]}]
+mcpServers: ""
+
 
 # Persistent audit log volume. emptyDir by default for the smoke deploy;
 # a real cluster should swap in a PVC.
@@ -128,6 +138,13 @@ slurmDashboard:
     tag: dev
     pullPolicy: IfNotPresent
   port: 8770
+  # Pre-seed the cluster registry read-only from a Secret so the
+  # dashboard (and its /mcp/<cluster> endpoint) boots already-registered
+  # — survives restarts with no manual re-seed. Empty = writable
+  # emptyDir/PVC the UI manages. Key holds slurmlib's
+  # {"clusters":[...]} JSON.
+  hostsSecret: ""
+  hostsSecretKey: slurm-hosts.json
   resources:
     requests: { cpu: 50m,  memory: 64Mi }
     limits:   { cpu: 500m, memory: 256Mi }
@@ -148,6 +165,10 @@ gpuDashboard:
     tag: dev
     pullPolicy: IfNotPresent
   port: 8780
+  # See slurmDashboard.hostsSecret. Key holds gpuwatchlib's
+  # {"clusters":[...]} (node) JSON.
+  hostsSecret: ""
+  hostsSecretKey: gpu-hosts.json
   resources:
     requests: { cpu: 50m,  memory: 64Mi }
     limits:   { cpu: 500m, memory: 256Mi }
