@@ -5,8 +5,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from agentlib import AgentContext, AlwaysApprove, InMemoryAuditLogger, TaskMessage
-from main_agent.agent import MainAgent, MainResponse
+from agentlib import (
+    AgentContext, AlwaysApprove, InMemoryAuditLogger, InMemoryTicketStore,
+    TaskMessage, TicketEvent,
+)
+from main_agent.agent import MainAgent, MainResponse, _conversation_history
 
 
 def _ctx(dispatcher=None, resolver=None):
@@ -107,3 +110,64 @@ def test_handle_exception_returns_failed_with_type_name():
     assert "RuntimeError" in result.summary
     assert "model down" in result.summary
     fake.cleanup.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Conversation continuity within a ticket (regression: agent was stateless
+# per turn — couldn't see prior messages, so "yes please!" / "what did I
+# ask?" had no context).
+# ---------------------------------------------------------------------------
+
+
+def _seed_ticket(store, ticket_id):
+    store.append(TicketEvent(ticket_id=ticket_id, actor="human",
+                             kind="human_message", payload={"text": "check slurm health"}))
+    store.append(TicketEvent(ticket_id=ticket_id, actor="main",
+                             kind="agent_message", payload={"text": "Slurm or GPU?"}))
+    store.append(TicketEvent(ticket_id=ticket_id, actor="human",
+                             kind="human_message", payload={"text": "yes please!"}))
+
+
+def test_conversation_history_renders_prior_turns():
+    store = InMemoryTicketStore()
+    _seed_ticket(store, "TCK")
+    # current message == the last human turn → excluded from history
+    hist = _conversation_history(store, "TCK", "yes please!")
+    assert "human: check slurm health" in hist
+    assert "you: Slurm or GPU?" in hist
+    # the current "yes please!" must NOT be duplicated into history
+    assert hist.count("yes please!") == 0
+
+
+def test_conversation_history_empty_without_store():
+    assert _conversation_history(None, "TCK", "hi") == ""
+
+
+def test_conversation_history_empty_for_fresh_ticket():
+    store = InMemoryTicketStore()
+    store.append(TicketEvent(ticket_id="T", actor="human",
+                             kind="human_message", payload={"text": "first message"}))
+    # Only the current message in the transcript → no prior history.
+    assert _conversation_history(store, "T", "first message") == ""
+
+
+def test_handle_feeds_conversation_history_to_invoke():
+    spec = MainAgent()
+    captured: dict = {}
+    fake, factory = _patch_structural(captured)
+    fake.invoke.return_value = MainResponse(reply="checking now", resolved=False)
+
+    store = InMemoryTicketStore()
+    _seed_ticket(store, "TCK")
+    ctx = _ctx()
+    ctx.ticket_store = store
+    with patch("main_agent.agent.StructuralAgent", side_effect=factory), \
+         patch("main_agent.agent.cost_from_agent", return_value=None):
+        spec.handle(
+            TaskMessage(task_id="t9", natural_language="yes please!", ticket_id="TCK"), ctx
+        )
+
+    sent = fake.invoke.call_args[0][0]
+    assert "Conversation so far" in sent
+    assert "check slurm health" in sent          # prior turn is visible
+    assert "Latest message from the human:\nyes please!" in sent

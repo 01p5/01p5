@@ -129,6 +129,51 @@ def make_dispatch_tool(*, dispatcher: Dispatcher) -> Any:
     )
 
 
+# How many trailing transcript events to feed back as conversation
+# history. Bounds prompt growth on long tickets; the most recent turns
+# are what matter for continuity.
+_HISTORY_MAX_EVENTS = 40
+
+
+def _conversation_history(ticket_store: Any, ticket_id: str, current_text: str) -> str:
+    """Render prior ticket turns as a plain-text conversation so the main
+    agent has continuity across messages. Without this the agent only
+    ever sees the latest message and can't answer "what did I ask?" /
+    "yes please!".
+
+    Excludes the trailing human_message that equals the current message
+    (submit_ticket records it before dispatching, so it's already in the
+    transcript). Skips noisy machinery (dispatch/tool_call/approval) —
+    keeps human turns, the agent's own replies, and specialist results.
+    """
+    if ticket_store is None:
+        return ""
+    try:
+        events = ticket_store.transcript(ticket_id)
+    except Exception:
+        return ""
+    lines: list[str] = []
+    for e in events:
+        payload = e.payload if isinstance(e.payload, dict) else {}
+        if e.kind == "human_message":
+            lines.append(("human", str(payload.get("text", "")).strip()))
+        elif e.kind == "agent_message":
+            who = "you" if e.actor == "main" else e.actor
+            lines.append((who, str(payload.get("text", "")).strip()))
+        elif e.kind == "agent_result":
+            txt = str(payload.get("summary") or payload.get("text", "")).strip()
+            lines.append((f"{e.actor} (result)", txt))
+    # Drop the trailing human turn if it's the current message.
+    cur = (current_text or "").strip()
+    while lines and lines[-1][0] == "human" and lines[-1][1] == cur:
+        lines.pop()
+    if not lines:
+        return ""
+    lines = lines[-_HISTORY_MAX_EVENTS:]
+    rendered = "\n".join(f"{who}: {text}" for who, text in lines if text)
+    return rendered
+
+
 class MainAgent(AgentSpec):
     name = "main"
     domain = (
@@ -173,9 +218,21 @@ class MainAgent(AgentSpec):
             budget_guard=getattr(ctx, "budget_guard", None),
         )
 
+        # Thread prior conversation so the agent has continuity within
+        # the ticket (it's a group chat, not isolated one-shot tasks).
+        history = _conversation_history(ticket_store, ticket_id, task.natural_language)
+        if history:
+            invoke_input = (
+                "Conversation so far in this ticket (a group chat):\n"
+                f"{history}\n\n"
+                f"Latest message from the human:\n{task.natural_language}"
+            )
+        else:
+            invoke_input = task.natural_language
+
         started = time.monotonic()
         try:
-            response: MainResponse = agent.invoke(task.natural_language)
+            response: MainResponse = agent.invoke(invoke_input)
             return AgentResult(
                 task_id=task.task_id,
                 status="success",
