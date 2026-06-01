@@ -123,6 +123,14 @@ class AuthConfig:
         # Allowlist empty = nobody (fail closed) unless bypass is on.
         if not self.allowed_domains:
             return False
+        # Wildcard "*" = any authenticated email. Used by the public
+        # demo (demo.0lympu5.com): require a real login (OAuth or
+        # email-OTP) but don't restrict by domain. Still fail-closed
+        # in the sense that an unauthenticated user never reaches a
+        # handler that calls this — it gates the post-verify identity,
+        # not page access.
+        if "*" in self.allowed_domains:
+            return True
         return email.rsplit("@", 1)[1].lower() in self.allowed_domains
 
     def google_oauth_enabled(self) -> bool:

@@ -101,6 +101,17 @@ def test_empty_allowlist_rejects_everyone():
     assert c.is_email_allowed("alice@stanford.edu") is False
 
 
+def test_wildcard_allowlist_accepts_any_authenticated_email():
+    # "*" = any domain (public demo: require login, no domain filter).
+    c = _cfg(allowed_domains=frozenset({"*"}))
+    assert c.is_email_allowed("alice@stanford.edu") is True
+    assert c.is_email_allowed("anyone@gmail.com") is True
+    assert c.is_email_allowed("someone@example.org") is True
+    # Still rejects garbage that isn't a real address.
+    assert c.is_email_allowed("") is False
+    assert c.is_email_allowed("no-at-sign") is False
+
+
 def test_from_env_parses_domains_and_truthy_bypass():
     env = {
         "OLYMPUS_AUTH_BYPASS": "true",
