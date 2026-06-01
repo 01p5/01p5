@@ -20,6 +20,31 @@ def _ctx():
     return AgentContext(approval=AlwaysApprove(), audit=InMemoryAuditLogger())
 
 
+def test_suggested_commands_sanitized_to_raw():
+    """The chip injects verbatim into the pty, so the model's markdown
+    must be stripped: code fences, inline backticks, leading prompts."""
+    r = TerminalCompanionResponse(
+        answer="check disk + block devices",
+        suggested_commands=[
+            "```\nlsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE,TYPE\n```",  # fenced
+            "```bash\ndf -h\n```",                                   # fenced + lang
+            "`du -sh /var`",                                        # inline backticks
+            "$ systemctl status nginx",                              # $ prompt
+            "ubuntu@ip-10-30-1-10:~$ free -m",                      # full prompt
+            "   ",                                                   # blank → dropped
+            "htop",                                                 # already clean
+        ],
+    )
+    assert r.suggested_commands == [
+        "lsblk -o NAME,SIZE,MOUNTPOINT,FSTYPE,TYPE",
+        "df -h",
+        "du -sh /var",
+        "systemctl status nginx",
+        "free -m",
+        "htop",
+    ]
+
+
 def test_agent_metadata_marks_read_only():
     spec = TerminalCompanionAgent()
     assert spec.name == "terminal_companion"
