@@ -345,7 +345,7 @@ class DashboardServer:
 
     # ---- group-chat ticket submission (worker thread) ----
 
-    def submit_ticket(self, ticket_id: str, message: str) -> None:
+    def submit_ticket(self, ticket_id: str, message: str, owner_email: Optional[str] = None) -> None:
         """Post a human message into a ticket and run the main agent on it.
 
         The human turn is recorded synchronously (so the SSE stream shows it
@@ -366,9 +366,27 @@ class DashboardServer:
             )
         )
 
+        # ADM.2 — record a TaskRecord for this chat turn so it shows up in
+        # telemetry + the admin per-user accounting, attributed to the
+        # submitting user. The chat path uses dispatch_to (synchronous,
+        # returns the result directly) rather than the bus "result" message
+        # that populates /tasks records — so we populate the record here
+        # from result.cost instead of relying on _on_orchestrator_msg.
+        inner_task_id = str(uuid.uuid4())
+        rec = TaskRecord(
+            task_id=inner_task_id,
+            natural_language=message,
+            submitted_at=time.time(),
+            status="running",
+            agent="main",
+            owner_email=owner_email,
+        )
+        with self._tasks_lock:
+            self._tasks[inner_task_id] = rec
+
         def worker():
             task = TaskMessage(
-                task_id=str(uuid.uuid4()),
+                task_id=inner_task_id,
                 natural_language=message,
                 ticket_id=ticket_id,
                 parent_task_id=ticket_id,
@@ -385,8 +403,20 @@ class DashboardServer:
                     "status": result.status,
                     "resolved": bool((result.artifacts or {}).get("resolved")),
                 }
+                with self._tasks_lock:
+                    rec.status = result.status or "success"
+                    rec.result_summary = result.summary
+                    cost = getattr(result, "cost", None)
+                    if cost is not None:
+                        rec.cost_usd = getattr(cost, "total_usd", None)
+                        rec.input_tokens = getattr(cost, "input_tokens", None)
+                        rec.output_tokens = getattr(cost, "output_tokens", None)
+                        rec.wall_seconds = getattr(cost, "wall_seconds", None)
             except Exception as exc:
                 logger.exception("ticket %s main-agent turn failed", ticket_id)
+                with self._tasks_lock:
+                    rec.status = "failed"
+                    rec.error = f"{type(exc).__name__}: {exc}"
                 payload = {
                     "text": f"main agent error: {type(exc).__name__}: {exc}",
                     "status": "failed",
@@ -873,7 +903,15 @@ class DashboardServer:
         if not isinstance(message, str) or not message.strip():
             self._send_json(req, 400, {"error": "message required"})
             return
-        self.submit_ticket(ticket_id, message.strip())
+        # ADM.3 — daily cap also gates chat (the main cost driver on the
+        # demo). Same enforcement as POST /tasks.
+        session = self.auth.session_from_request(req.headers)
+        owner = session.email if session else None
+        over, detail = self._user_over_limit(owner)
+        if over:
+            self._send_json(req, 429, {"error": "daily cost limit reached", **detail})
+            return
+        self.submit_ticket(ticket_id, message.strip(), owner_email=owner)
         self._send_json(req, 202, {"ticket_id": ticket_id})
 
     def _handle_list_tickets_group(self, req: BaseHTTPRequestHandler) -> None:

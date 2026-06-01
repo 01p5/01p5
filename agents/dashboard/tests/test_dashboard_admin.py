@@ -257,3 +257,67 @@ def test_post_task_allowed_under_limit(admin_server):
                         {"natural_language": "do a thing"})
     assert status == 202
     assert "task_id" in body
+
+
+# ---------------------------------------------------------------------------
+# Chat (ticket) activity is attributed to the user — the demo's real path
+# ---------------------------------------------------------------------------
+
+
+class _CostlyMain(AgentSpec):
+    """A 'main' agent that returns a non-zero cost, so we can assert the
+    chat turn lands in per-user accounting."""
+    tools: Sequence[Any] = []
+    destructive_verbs: set[str] = set()
+    name = "main"
+    domain = "main"
+
+    def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
+        return AgentResult(
+            task_id=task.task_id, status="success", summary="done",
+            artifacts={"resolved": True},
+            cost=CostBreakdown(total_usd=0.42, input_tokens=120,
+                               output_tokens=60, wall_seconds=1.5),
+        )
+
+
+def test_chat_turn_attributed_to_user_in_accounting():
+    from agentlib import InMemoryTicketStore
+    bus = InMemoryBus()
+    approval = QueueApprovalHook(approval_timeout_seconds=5.0)
+    ctx = AgentContext(approval=approval, audit=InMemoryAuditLogger())
+    store = InMemoryTicketStore()
+    orch = Orchestrator(
+        bus=bus, agents=[_CostlyMain()], ctx=ctx,
+        router=ManualRouter(default="main"), ticket_store=store,
+        result_timeout_seconds=5.0,
+    )
+    auth = Authenticator(AuthConfig(
+        bypass=True, dev_email="root@tianleyu.com",
+        admin_emails=frozenset({"*@tianleyu.com"}),
+    ))
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=approval,
+        host="127.0.0.1", port=0, auth=auth, ticket_store=store,
+        user_limit_store=InMemoryUserLimitStore(),
+    )
+    srv.serve()
+    try:
+        status, _ = _req(srv, "POST", "/tickets/t-demo/messages",
+                         {"message": "scale the cluster"})
+        assert status == 202
+        # The worker runs async; poll the accounting until the cost lands.
+        deadline = time.time() + 5
+        alice = None
+        while time.time() < deadline:
+            _, acct = _req(srv, "GET", "/admin/accounting")
+            users = {u["email"]: u for u in acct["users"]}
+            if "root@tianleyu.com" in users and users["root@tianleyu.com"]["usd"] > 0:
+                alice = users["root@tianleyu.com"]
+                break
+            time.sleep(0.1)
+        assert alice is not None, "chat turn never attributed to user"
+        assert alice["usd"] == pytest.approx(0.42)
+        assert alice["input_tokens"] == 120
+    finally:
+        srv.shutdown()
