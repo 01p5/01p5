@@ -18,12 +18,14 @@ const ACCT = {
       email: "alice@x.com", tasks: 3, settled: 3, usd: 5.25,
       input_tokens: 1000, output_tokens: 400, wall_seconds: 12,
       spent_today_usd: 5.25, daily_limit_usd: 10, effective_limit_usd: 10,
+      last_login_at: Date.now() / 1000 - 120, login_count: 4,
     },
     {
       // no explicit override → falls back to the $10 default; over it
       email: "bob@x.com", tasks: 1, settled: 1, usd: 9.9,
       input_tokens: 200, output_tokens: 80, wall_seconds: 4,
       spent_today_usd: 9.9, daily_limit_usd: null, effective_limit_usd: 10,
+      last_login_at: null, login_count: 0,
     },
   ],
   day_start_utc: 1719792000,
@@ -33,9 +35,14 @@ const ACCT = {
 const ACTIVITY = {
   activity: [
     {
-      task_id: "t1", owner_email: "alice@x.com", agent: "sysadmin",
+      kind: "task", task_id: "t1", owner_email: "alice@x.com", agent: "sysadmin",
       status: "success", submitted_at: 1719792100, cost_usd: 2.0,
       natural_language: "deploy the thing",
+    },
+    {
+      kind: "login", task_id: null, owner_email: "bob@x.com", agent: null,
+      status: "login", submitted_at: 1719792050, cost_usd: null,
+      natural_language: "signed in via google",
     },
   ],
 };
@@ -67,12 +74,17 @@ describe("AdminPage", () => {
     expect(bobRow.textContent).toContain("(default)");
   });
 
-  it("renders the activity feed", async () => {
+  it("renders the activity feed with task + login events", async () => {
     render(<AdminPage />);
     await waitFor(() => {
       expect(screen.getByTestId("admin-activity")).toBeInTheDocument();
       expect(screen.getByText("deploy the thing")).toBeInTheDocument();
+      // login event renders distinctly (kind=login row)
+      expect(screen.getByText("signed in via google")).toBeInTheDocument();
     });
+    const feed = screen.getByTestId("admin-activity");
+    expect(feed.querySelector("[data-kind='login']")).not.toBeNull();
+    expect(feed.querySelector("[data-kind='task']")).not.toBeNull();
   });
 
   it("edits a daily limit and PUTs it", async () => {

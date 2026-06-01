@@ -81,17 +81,18 @@ function UsersTable({ users, onChanged }: { users: AdminUserAccounting[]; onChan
           <thead>
             <tr className="bg-dark-secondary/60 text-text-muted font-mono text-[10px] uppercase tracking-[1px]">
               <th className="text-left px-3 py-2">User</th>
+              <th className="text-right px-3 py-2">Last login</th>
               <th className="text-right px-3 py-2">Tasks</th>
-              <th className="text-right px-3 py-2">Total $</th>
+              <th className="text-right px-3 py-2" title="Daily usage — resets at 00:00 UTC">Daily usage</th>
+              <th className="text-right px-3 py-2" title="Daily limit — daily usage must stay under this">Daily limit</th>
+              <th className="text-right px-3 py-2" title="Total spend over all time">Total usage</th>
               <th className="text-right px-3 py-2">Tokens</th>
-              <th className="text-right px-3 py-2">Today $</th>
-              <th className="text-right px-3 py-2">Daily limit</th>
             </tr>
           </thead>
           <tbody>
             {users.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-text-muted italic">
-                no user activity yet
+              <tr><td colSpan={7} className="px-3 py-6 text-center text-text-muted italic">
+                no users yet — they appear here on first login
               </td></tr>
             )}
             {users.map((u) => (
@@ -134,11 +135,11 @@ function UserRow({ user, onChanged }: { user: AdminUserAccounting; onChanged: ()
   return (
     <tr className="border-t border-border-subtle/60 hover:bg-dark-panel/40" data-testid={`admin-user-row`} data-email={user.email}>
       <td className="px-3 py-2 font-mono text-text-primary">{user.email}</td>
+      <td className="px-3 py-2 text-right text-text-muted font-mono text-[11px]">{formatAgo(user.last_login_at)}</td>
       <td className="px-3 py-2 text-right text-text-secondary">{user.settled}/{user.tasks}</td>
-      <td className="px-3 py-2 text-right text-text-primary">{formatUsd(user.usd)}</td>
-      <td className="px-3 py-2 text-right text-text-muted">{tokens.toLocaleString()}</td>
-      <td className={clsx("px-3 py-2 text-right", overLimit ? "text-accent-red font-semibold" : "text-text-secondary")}>
+      <td className={clsx("px-3 py-2 text-right font-mono", overLimit ? "text-accent-red font-semibold" : "text-text-primary")}>
         {formatUsd(user.spent_today_usd)}
+        {overLimit && <span className="ml-1 text-[10px] uppercase">over</span>}
       </td>
       <td className="px-3 py-2 text-right">
         {editing ? (
@@ -181,8 +182,21 @@ function UserRow({ user, onChanged }: { user: AdminUserAccounting; onChanged: ()
           </button>
         )}
       </td>
+      <td className="px-3 py-2 text-right text-text-primary font-mono">{formatUsd(user.usd)}</td>
+      <td className="px-3 py-2 text-right text-text-muted">{tokens.toLocaleString()}</td>
     </tr>
   );
+}
+
+
+/** "3m ago" / "2h ago" / "—". Relative time for the last-login column. */
+function formatAgo(ts: number | null): string {
+  if (ts == null) return "—";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 
@@ -196,16 +210,18 @@ function ActivityFeed({ items }: { items: import("../types").AdminActivityItem[]
         {items.length === 0 && (
           <div className="px-3 py-6 text-center text-text-muted italic text-[12px]">no activity yet</div>
         )}
-        {items.map((a) => (
-          <div key={a.task_id} className="px-3 py-2 flex items-center gap-3 text-[12px] hover:bg-dark-panel/40">
+        {items.map((a, i) => (
+          <div key={a.task_id ?? `login-${i}`} data-kind={a.kind}
+            className="px-3 py-2 flex items-center gap-3 text-[12px] hover:bg-dark-panel/40">
             <span className="font-mono text-text-secondary w-44 shrink-0 truncate">{a.owner_email ?? "—"}</span>
             <span className={clsx(
               "text-[10px] font-mono uppercase tracking-[1px] px-1.5 py-0.5 rounded border shrink-0",
-              a.status === "success" ? "text-accent-green border-accent-green/40"
+              a.kind === "login" ? "text-accent-blue border-accent-blue/40"
+                : a.status === "success" ? "text-accent-green border-accent-green/40"
                 : a.status === "failed" || a.status === "rejected" ? "text-accent-red border-accent-red/40"
                 : "text-text-muted border-border-subtle",
-            )}>{a.status}</span>
-            <span className="text-text-muted font-mono shrink-0">{a.agent ?? "?"}</span>
+            )}>{a.kind === "login" ? "login" : a.status}</span>
+            <span className="text-text-muted font-mono shrink-0">{a.kind === "login" ? "auth" : (a.agent ?? "?")}</span>
             <span className="text-text-primary truncate flex-1">{a.natural_language}</span>
             <span className="text-text-muted font-mono shrink-0">{a.cost_usd != null ? formatUsd(a.cost_usd) : "—"}</span>
           </div>

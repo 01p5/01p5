@@ -153,6 +153,8 @@ export interface AdminUserAccounting {
   spent_today_usd: number;
   daily_limit_usd: number | null;       // explicit override; null = uses the default
   effective_limit_usd: number | null;   // what's actually enforced
+  last_login_at: number | null;
+  login_count: number;
 }
 
 export interface AdminAccountingResponse {
@@ -162,7 +164,8 @@ export interface AdminAccountingResponse {
 }
 
 export interface AdminActivityItem {
-  task_id: string;
+  kind: "task" | "login";
+  task_id: string | null;
   owner_email: string | null;
   agent: string | null;
   status: string;

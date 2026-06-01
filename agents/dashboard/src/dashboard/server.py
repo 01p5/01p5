@@ -849,6 +849,8 @@ class DashboardServer:
             return self._send_json(req, 401, {"error": "oauth_failed", "detail": str(exc)})
         if not cfg.is_email_allowed(email):
             return self._send_json(req, 403, {"error": "email_not_allowed", "email": email})
+        # Record the login (creates the user in accounting + activity feed).
+        self.accounting.record_login(email, method="google")
         # Mint a session cookie, clear the state cookie, redirect to /.
         req.send_response(302)
         req.send_header("Location", "/")
@@ -913,6 +915,8 @@ class DashboardServer:
             return self._send_json(req, 403, {"error": "email_not_allowed"})
         if not self.auth.otp_store.verify(email, code):
             return self._send_json(req, 401, {"error": "invalid_or_expired_code"})
+        # Record the login (creates the user in accounting + activity feed).
+        self.accounting.record_login(email, method="email-otp")
         # Match → mint session cookie.
         req.send_response(200)
         req.send_header("Content-Type", "application/json")
@@ -1460,7 +1464,7 @@ class DashboardServer:
                 by_email[email] = {
                     "email": email, "tasks": 0, "settled": 0, "usd": 0.0,
                     "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0,
-                    "spent_today_usd": 0.0,
+                    "spent_today_usd": 0.0, "last_login_at": None, "login_count": 0,
                 }
 
         for email, b in by_email.items():

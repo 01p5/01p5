@@ -342,7 +342,10 @@ class _CostlyMain(AgentSpec):
         )
 
 
-def test_chat_turn_attributed_to_user_in_accounting():
+def _make_chat_server(dev_email: str):
+    """A server whose default agent is a costly 'main', with a ticket
+    store — so POST /tickets/{id}/messages drives a real (attributed)
+    chat turn."""
     from agentlib import InMemoryTicketStore
     bus = InMemoryBus()
     approval = QueueApprovalHook(approval_timeout_seconds=5.0)
@@ -354,7 +357,7 @@ def test_chat_turn_attributed_to_user_in_accounting():
         result_timeout_seconds=5.0,
     )
     auth = Authenticator(AuthConfig(
-        bypass=True, dev_email="root@tianleyu.com",
+        bypass=True, dev_email=dev_email,
         admin_emails=frozenset({"*@tianleyu.com"}),
     ))
     srv = DashboardServer(
@@ -363,6 +366,11 @@ def test_chat_turn_attributed_to_user_in_accounting():
         user_limit_store=InMemoryUserLimitStore(),
     )
     srv.serve()
+    return srv
+
+
+def test_chat_turn_attributed_to_user_in_accounting():
+    srv = _make_chat_server("root@tianleyu.com")
     try:
         status, _ = _req(srv, "POST", "/tickets/t-demo/messages",
                          {"message": "scale the cluster"})
@@ -380,5 +388,127 @@ def test_chat_turn_attributed_to_user_in_accounting():
         assert alice is not None, "chat turn never attributed to user"
         assert alice["usd"] == pytest.approx(0.42)
         assert alice["input_tokens"] == 120
+    finally:
+        srv.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Login creates a user + is a recorded activity
+# ---------------------------------------------------------------------------
+
+
+def test_login_creates_user_in_accounting(admin_server):
+    # No tasks — just a login. The user must still appear.
+    admin_server.accounting.record_login("newbie@x.com", method="google")
+    _, acct = _req(admin_server, "GET", "/admin/accounting")
+    by_email = {u["email"]: u for u in acct["users"]}
+    assert "newbie@x.com" in by_email, "login did not create the user"
+    u = by_email["newbie@x.com"]
+    assert u["tasks"] == 0 and u["usd"] == 0.0
+    assert u["login_count"] == 1
+    assert u["last_login_at"] is not None
+
+
+def test_login_shows_in_activity_feed(admin_server):
+    admin_server.accounting.record_login("newbie@x.com", method="email-otp")
+    _, body = _req(admin_server, "GET", "/admin/activity")
+    logins = [a for a in body["activity"] if a["kind"] == "login"]
+    assert any(a["owner_email"] == "newbie@x.com" for a in logins)
+    assert any("email-otp" in a["natural_language"] for a in logins)
+
+
+# ---------------------------------------------------------------------------
+# Daily vs total: the daily number resets at the UTC day boundary
+# ---------------------------------------------------------------------------
+
+
+def test_daily_spend_resets_at_day_boundary(admin_server):
+    now = time.time()
+    day_start = now - (now % 86400.0)
+    yesterday = day_start - 3600  # 1h before today's start
+    # A task from yesterday + one from today.
+    admin_server.accounting.record_submitted(
+        "old", owner_email="alice@x.com", natural_language="x", submitted_at=yesterday)
+    admin_server.accounting.record_result(
+        "old", status="success", cost_usd=8.0, input_tokens=0, output_tokens=0,
+        wall_seconds=0.0, agent="stub")
+    _seed_settled(admin_server, "new", "alice@x.com", 2.0, when=now)
+
+    _, acct = _req(admin_server, "GET", "/admin/accounting")
+    alice = next(u for u in acct["users"] if u["email"] == "alice@x.com")
+    # Total (lifetime) includes both; daily only today's.
+    assert alice["usd"] == pytest.approx(10.0)
+    assert alice["spent_today_usd"] == pytest.approx(2.0)
+
+
+def test_daily_limit_ignores_yesterdays_spend(admin_server):
+    # $5 cap. $9 spent yesterday, $0 today → today's spend (0) < cap → allowed.
+    admin_server.user_limit_store.set("root@tianleyu.com", 5.0)
+    now = time.time()
+    yesterday = (now - (now % 86400.0)) - 3600
+    admin_server.accounting.record_submitted(
+        "y", owner_email="root@tianleyu.com", natural_language="x", submitted_at=yesterday)
+    admin_server.accounting.record_result(
+        "y", status="success", cost_usd=9.0, input_tokens=0, output_tokens=0,
+        wall_seconds=0.0, agent="stub")
+    status, _ = _req(admin_server, "POST", "/tasks", {"natural_language": "today's first"})
+    assert status == 202  # yesterday's $9 doesn't count against today's $5 cap
+
+
+# ---------------------------------------------------------------------------
+# NON-HAPPY PATH — over-limit users are blocked, on BOTH entry points
+# ---------------------------------------------------------------------------
+
+
+def test_exactly_at_limit_blocks(admin_server):
+    admin_server.user_limit_store.set("root@tianleyu.com", 3.0)
+    _seed_settled(admin_server, "s", "root@tianleyu.com", 3.0)  # spent == cap
+    status, body = _req(admin_server, "POST", "/tasks", {"natural_language": "more"})
+    assert status == 429
+    assert body["spent_today_usd"] == pytest.approx(3.0)
+    assert body["daily_limit_usd"] == 3.0
+
+
+def test_just_under_limit_allows(admin_server):
+    admin_server.user_limit_store.set("root@tianleyu.com", 3.0)
+    _seed_settled(admin_server, "s", "root@tianleyu.com", 2.99)
+    status, _ = _req(admin_server, "POST", "/tasks", {"natural_language": "more"})
+    assert status == 202
+
+
+def test_over_limit_blocks_chat_path():
+    # The demo's real path is chat. A user over their daily cap must be
+    # blocked at POST /tickets/{id}/messages too, not just /tasks.
+    srv = _make_chat_server("root@tianleyu.com")
+    try:
+        srv.user_limit_store.set("root@tianleyu.com", 1.0)
+        _seed_settled(srv, "prior", "root@tianleyu.com", 1.5)  # over the $1 cap
+        status, body = _req(srv, "POST", "/tickets/t1/messages",
+                            {"message": "another expensive turn"})
+        assert status == 429
+        assert "daily cost limit" in body["error"]
+        # And the blocked turn must NOT have run / been recorded.
+        time.sleep(0.5)
+        _, acct = _req(srv, "GET", "/admin/accounting")
+        root = next(u for u in acct["users"] if u["email"] == "root@tianleyu.com")
+        assert root["usd"] == pytest.approx(1.5)  # unchanged — the new turn was rejected
+    finally:
+        srv.shutdown()
+
+
+def test_over_limit_then_admin_raises_cap_unblocks():
+    # Full operator loop: user blocked → admin raises their cap → unblocked.
+    srv = _make_chat_server("root@tianleyu.com")
+    try:
+        srv.user_limit_store.set("root@tianleyu.com", 1.0)
+        _seed_settled(srv, "prior", "root@tianleyu.com", 1.5)
+        status, _ = _req(srv, "POST", "/tickets/t1/messages", {"message": "x"})
+        assert status == 429
+        # Admin bumps the cap.
+        s2, _ = _req(srv, "PUT", "/admin/limits/root@tianleyu.com",
+                     {"daily_limit_usd": 100.0})
+        assert s2 == 200
+        status, _ = _req(srv, "POST", "/tickets/t1/messages", {"message": "x"})
+        assert status == 202  # now allowed
     finally:
         srv.shutdown()
