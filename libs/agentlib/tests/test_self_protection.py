@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from agentlib import InMemoryInventoryStore, SelfProtectionPolicy
 
-
 # --------------------------------------------------------------------------- env
 
 def _policy(ns="olympus", nodes="10.0.3.20, 10.0.3.21, master, worker1"):

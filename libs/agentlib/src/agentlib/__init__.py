@@ -37,7 +37,6 @@ from .inventory import (
     render_ansible_inventory,
     ssh_key_fingerprint,
 )
-from .self_protection import SelfProtectionPolicy
 from .mcp import (
     HttpTransport,
     MCPClient,
@@ -105,6 +104,7 @@ from .runtime import (
     ToolGateError,
     gate_tools,
 )
+from .self_protection import SelfProtectionPolicy
 from .spec import (
     AgentContext,
     AgentResult,
