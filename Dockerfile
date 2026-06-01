@@ -98,7 +98,7 @@ RUN pip install --no-cache-dir --no-deps -e ./libs/agentlib \
 # spawned by the dashboard's MCP integration card. Both depend on paramiko
 # (SSH); pip pulls it transitively.
 ARG SLURM_MGR_SHA=ef41818
-ARG GPU_WATCH_SHA=7298647118e46dce41757697626bcef5072e322c
+ARG GPU_WATCH_SHA=e2d34ea
 RUN pip install --no-cache-dir \
         "slurmlib    @ git+https://github.com/01p5/slurm-mgr.git@${SLURM_MGR_SHA}#subdirectory=packages/slurmlib"     \
         "slurm-mcp   @ git+https://github.com/01p5/slurm-mgr.git@${SLURM_MGR_SHA}#subdirectory=packages/slurm-mcp"    \
