@@ -131,12 +131,24 @@ class AnsibleAgent(AgentSpec):
         managed_inv_path: Optional[str] = None
         host_count = 0
         inventory_store = getattr(ctx, "inventory_store", None)
+        # Self-protection belt-and-suspenders: keep the cluster/VM hosts Olympus
+        # runs on out of the rendered inventory entirely, so even `--limit all`
+        # can't reach them. The runtime gate independently denies self-targeting
+        # run_playbook/run_module calls (agentlib.SelfProtectionPolicy).
+        policy = getattr(ctx, "self_protection", None)
+        exclude_addresses = (
+            set(policy.self_nodes)
+            if policy is not None and getattr(policy, "enabled", False)
+            else None
+        )
         if inventory_store is not None:
             try:
                 host_count = len(inventory_store.list_hosts())
                 if host_count > 0:
                     run_dir = tempfile.mkdtemp(prefix="olympus-ansible-")
-                    materialized = materialize_run_dir(inventory_store, run_dir)
+                    materialized = materialize_run_dir(
+                        inventory_store, run_dir, exclude_addresses=exclude_addresses
+                    )
                     managed_inv_path = str(materialized.inventory_path)
             except Exception:
                 # A broken store should not block the agent — just

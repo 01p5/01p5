@@ -767,9 +767,25 @@ class MaterializedInventory:
     key_paths: dict[str, str]
 
 
+def _normalize_node_address(value: str) -> str:
+    """Lowercase + strip a host/IP for self-node comparison (mirrors
+    ``agentlib.self_protection._normalize_node`` — kept local so this
+    module stays import-cycle-free)."""
+    v = (value or "").strip().lower()
+    if not v:
+        return ""
+    if v.startswith("[") and "]" in v:
+        return v[1:v.index("]")]
+    if v.count(":") == 1:
+        return v.split(":", 1)[0]
+    return v
+
+
 def materialize_run_dir(
     store: InventoryStore,
     run_dir: str | os.PathLike[str],
+    *,
+    exclude_addresses: Optional[set[str]] = None,
 ) -> MaterializedInventory:
     """Write ``inventory.ini`` + per-key files into ``run_dir``.
 
@@ -778,6 +794,11 @@ def materialize_run_dir(
     the run. Keys land at ``{run_dir}/keys/{key_id}`` with 0600 perms.
     Hosts that reference an unknown ``key_id`` still render — they just
     won't get an ``ansible_ssh_private_key_file`` line.
+
+    ``exclude_addresses`` drops any host whose ``address`` (normalized)
+    matches — used by self-protection to keep the cluster/VM hosts Olympus
+    runs on out of the rendered inventory entirely, so even ``--limit all``
+    can't reach them.
     """
     root = Path(run_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -789,6 +810,9 @@ def materialize_run_dir(
         pass
 
     hosts = store.list_hosts()
+    if exclude_addresses:
+        blocked = {_normalize_node_address(a) for a in exclude_addresses}
+        hosts = [h for h in hosts if _normalize_node_address(h.address) not in blocked]
     referenced: set[str] = {h.key_id for h in hosts if h.key_id}
     key_paths: dict[str, str] = {}
     for kid in referenced:
