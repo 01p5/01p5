@@ -14,6 +14,8 @@ import type {
   PendingApproval,
   RollbackEntry,
   MeResponse,
+  AdminAccountingResponse,
+  AdminActivityResponse,
   TaskRecord,
   TelemetryResponse,
   TerminalSession,
@@ -193,6 +195,12 @@ export const api = {
 
   // Telemetry — rolled-up cost + tokens across stored task records.
   telemetry: (): Promise<TelemetryResponse> => getJson("/telemetry"),
+
+  // ADM.4 — super-admin accounting. 403 if the caller isn't an admin.
+  adminAccounting: (): Promise<AdminAccountingResponse> => getJson("/admin/accounting"),
+  adminActivity: (): Promise<AdminActivityResponse> => getJson("/admin/activity"),
+  setUserLimit: (email: string, dailyLimitUsd: number | null): Promise<{ email: string; daily_limit_usd: number | null }> =>
+    putJson(`/admin/limits/${encodeURIComponent(email)}`, { daily_limit_usd: dailyLimitUsd }),
 
   // MCP (Model Context Protocol) — third-party tool servers wired in
   // at dashboard startup. Read-only for v1; runtime add/remove is a

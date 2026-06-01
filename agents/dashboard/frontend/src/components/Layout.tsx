@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { MessageSquare, Plug, Network, ClipboardList, Wrench, TerminalSquare } from "lucide-react";
+import { MessageSquare, Plug, Network, ClipboardList, Wrench, TerminalSquare, ShieldCheck } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../api";
 import { useAuth } from "../hooks/useAuth";
@@ -42,7 +42,13 @@ export function Layout(): JSX.Element {
             </span>
           </div>
           <nav className="flex gap-1 ml-2">
-            {TABS.map(({ to, label, icon: Icon }) => (
+            {/* ADM.4 — Admin tab is super-admin-only. is_admin comes
+                from /me; the backend 403s the endpoints regardless, so
+                this is just hiding a tab the user can't use. */}
+            {(auth.state === "authed" && auth.isAdmin
+              ? [...TABS, { to: "/admin", label: "Admin", icon: ShieldCheck }]
+              : TABS
+            ).map(({ to, label, icon: Icon }) => (
               <NavLink
                 key={to}
                 to={to}

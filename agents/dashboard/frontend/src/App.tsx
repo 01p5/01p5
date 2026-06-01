@@ -17,12 +17,31 @@ import { SlurmPortalPage } from "./pages/SlurmPortalPage";
 import { GpuPortalPage } from "./pages/GpuPortalPage";
 import { MCPPage } from "./pages/MCPPage";
 import { TerminalPage, TerminalSessionPage } from "./pages/TerminalPage";
+import { AdminPage } from "./pages/AdminPage";
+import { useAuth } from "./hooks/useAuth";
 
 // Wrapper so /chat and /chat/:ticketId both render ChatPage, remounting
 // (via key) when the ticket changes so its state resets cleanly.
 function ChatRoute(): JSX.Element {
   const { ticketId } = useParams();
   return <ChatPage key={ticketId ?? "new"} initialTicketId={ticketId} />;
+}
+
+// ADM.4 — admin-only route guard. RequireAuth has already run (parent
+// route), so here auth is "authed"; redirect non-admins to /chat.
+function RequireAdmin({ children }: { children: JSX.Element }): JSX.Element {
+  const { auth } = useAuth();
+  if (auth.state === "loading") {
+    return (
+      <div className="h-full flex items-center justify-center bg-dark-primary text-text-muted font-mono text-sm">
+        checking…
+      </div>
+    );
+  }
+  if (auth.state !== "authed" || !auth.isAdmin) {
+    return <Navigate to="/chat" replace />;
+  }
+  return children;
 }
 
 export default function App(): JSX.Element {
@@ -76,6 +95,10 @@ export default function App(): JSX.Element {
           <Route path="mcp" element={<MCPPage />} />
           <Route path="terminal" element={<TerminalPage />} />
           <Route path="terminal/:sessionId" element={<TerminalSessionPage />} />
+          {/* ADM.4 — super-admin accounting. RequireAdmin redirects a
+              non-admin to /chat so a deep-linked /admin URL doesn't 404
+              awkwardly; the backend 403s the data endpoints regardless. */}
+          <Route path="admin" element={<RequireAdmin><AdminPage /></RequireAdmin>} />
           {/* Catch-all → chat */}
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Route>

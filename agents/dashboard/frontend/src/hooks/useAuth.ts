@@ -4,7 +4,7 @@ import type { AuthStatus } from "../types";
 
 export type AuthState =
   | { state: "loading" }
-  | { state: "authed"; email: string; status: AuthStatus }
+  | { state: "authed"; email: string; isAdmin: boolean; status: AuthStatus }
   | { state: "unauthed"; status?: AuthStatus };
 
 /**
@@ -20,7 +20,7 @@ export function useAuth(): { auth: AuthState; refresh: () => Promise<void> } {
     try {
       const me = await api.me();
       if (me.authenticated && me.email) {
-        setAuth({ state: "authed", email: me.email, status: me.auth });
+        setAuth({ state: "authed", email: me.email, isAdmin: me.is_admin ?? false, status: me.auth });
       } else {
         setAuth({ state: "unauthed", status: me.auth });
       }

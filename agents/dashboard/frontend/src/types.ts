@@ -137,7 +137,40 @@ export interface AuthStatus {
 export interface MeResponse {
   authenticated: boolean;
   email?: string;
+  is_admin?: boolean;
   auth: AuthStatus;
+}
+
+// ADM.4 — super-admin accounting dashboard.
+export interface AdminUserAccounting {
+  email: string;
+  tasks: number;
+  settled: number;
+  usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  wall_seconds: number;
+  spent_today_usd: number;
+  daily_limit_usd: number | null;
+}
+
+export interface AdminAccountingResponse {
+  users: AdminUserAccounting[];
+  day_start_utc: number;
+}
+
+export interface AdminActivityItem {
+  task_id: string;
+  owner_email: string | null;
+  agent: string | null;
+  status: string;
+  submitted_at: number;
+  cost_usd: number | null;
+  natural_language: string;
+}
+
+export interface AdminActivityResponse {
+  activity: AdminActivityItem[];
 }
 
 export interface TicketSummary {
