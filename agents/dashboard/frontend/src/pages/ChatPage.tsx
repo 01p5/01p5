@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2, ShieldAlert, X, ChevronDown } from "lucide-react";
+import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2, ShieldAlert, X, ChevronDown, Brain } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -398,6 +398,8 @@ function EventView({ event }: { event: TicketEventDTO }): JSX.Element | null {
         return <InterAgentLine event={event} />;
       }
       return <AgentBubble actor={event.actor} text={payloadText(event)} status={p.status as string | undefined} />;
+    case "agent_thinking":
+      return <ThinkingLine text={payloadText(event)} />;
     case "agent_result":
       return (
         <AgentBubble
@@ -529,6 +531,22 @@ function ToolCallLine({ event }: { event: TicketEventDTO }): JSX.Element {
         {JSON.stringify({ args: p.args, result: p.result }, null, 2)}
       </pre>
     </details>
+  );
+}
+
+// A single live "thinking" step from the main agent — a muted, interleaved
+// trace line that lands between dispatches as the coordinator reasons. These
+// are persisted transcript events, so the reasoning trail survives reload and
+// reads chronologically alongside the dispatch chips and tool calls.
+function ThinkingLine({ text }: { text: string }): JSX.Element {
+  if (!text) return <></>;
+  return (
+    <div className="flex" data-testid="thinking-line">
+      <div className="flex items-start gap-2 pl-9 pr-4 text-[12px] italic leading-relaxed text-text-muted">
+        <Brain size={13} className="text-accent-green/50 shrink-0 mt-0.5 not-italic" strokeWidth={2} />
+        <span className="whitespace-pre-wrap break-words">{text}</span>
+      </div>
+    </div>
   );
 }
 

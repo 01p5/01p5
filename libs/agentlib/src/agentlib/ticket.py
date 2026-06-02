@@ -36,6 +36,7 @@ from typing import Any, Callable, Literal, Optional, Protocol
 TicketKind = Literal[
     "human_message",
     "agent_message",
+    "agent_thinking",
     "dispatch",
     "agent_result",
     "tool_call",

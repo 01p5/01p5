@@ -119,6 +119,7 @@ export interface BusEvent {
 export type TicketKind =
   | "human_message"
   | "agent_message"
+  | "agent_thinking"
   | "dispatch"
   | "agent_result"
   | "tool_call"

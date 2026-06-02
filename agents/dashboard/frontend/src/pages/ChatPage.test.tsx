@@ -217,6 +217,24 @@ describe("ChatPage — transcript rendering", () => {
     expect(screen.queryByTestId("thinking")).toBeNull();
   });
 
+  it("renders interleaved thinking lines between dispatches", async () => {
+    renderChat();
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "what nodes?" } }));
+    // A thinking step lands as a persisted, interleaved trace line.
+    await push(mkEvent({ kind: "agent_thinking", actor: "main", payload: { text: "I'll ask sysadmin for the node list" } }));
+    expect(screen.getByText("I'll ask sysadmin for the node list")).toBeInTheDocument();
+    expect(screen.getAllByTestId("thinking-line").length).toBe(1);
+    // It interleaves with a following dispatch chip (both visible at once).
+    await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "get nodes" } }));
+    await push(mkEvent({ kind: "agent_thinking", actor: "main", payload: { text: "sysadmin found 2 nodes" } }));
+    expect(screen.getAllByTestId("thinking-line").length).toBe(2);
+    expect(screen.getByText("sysadmin found 2 nodes")).toBeInTheDocument();
+    // The reasoning trail persists alongside the final reply.
+    await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "There are 2 nodes." } }));
+    expect(screen.getAllByTestId("thinking-line").length).toBe(2);
+    expect(screen.getByText("There are 2 nodes.")).toBeInTheDocument();
+  });
+
   it("renders a dispatch chip and a specialist result", async () => {
     renderChat();
     await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "list pods" } }));

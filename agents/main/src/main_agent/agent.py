@@ -22,6 +22,8 @@ which the ticket store projects).
 """
 from __future__ import annotations
 
+import json
+import logging
 import time
 from typing import Any, Callable, Optional, Sequence
 
@@ -29,13 +31,17 @@ from agentlib import (
     AgentContext,
     AgentResult,
     AgentSpec,
+    StreamingAgent,
     StructuralAgent,
     TaskMessage,
+    TicketEvent,
     cost_from_agent,
     gpt55,
     make_ask_agent_tool,
 )
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 # (agent_name, subtask) -> result summary. The orchestrator builds a
 # per-ticket dispatcher closure that runs the named specialist's
@@ -97,6 +103,126 @@ class MainResponse(BaseModel):
         default=False,
         description="True only when the ticket's request is fully handled and nothing is left to do.",
     )
+
+
+# Streaming contract. Appended to SYSTEM_PROMPT only on the streaming path.
+# The coordinator narrates its reasoning as it works so the human sees a live,
+# interleaved "thinking" trace instead of waiting on a single blob. We make it
+# emit a STREAM OF JSON OBJECTS — one {"thinking": ...} per reasoning step, then
+# a final {"reply": ..., "resolved": ...} — and parse them out (_StreamParser),
+# so nothing raw ever reaches the UI. This is the structured-but-streamed
+# middle ground that the earlier raw-token attempt lacked (which leaked JSON).
+_STREAM_CONTRACT = """
+
+OUTPUT FORMAT — IMPORTANT. You are streaming your work to the human live.
+Emit a stream of JSON objects and NOTHING else (no prose, no markdown, no code
+fences):
+
+  - For each step of your reasoning, emit one object:
+      {"thinking": "<one short, plain-language sentence>"}
+    Emit a thinking object BEFORE each dispatch (what you're about to delegate
+    and why) and one AFTER you read each result (what you learned). Keep them
+    concise and human — these are shown to the user as a live trace.
+
+  - When you are ready to answer, emit exactly one final object:
+      {"reply": "<your full reply to the human, plain prose>", "resolved": <true|false>}
+    Set resolved to true only when the ticket's request is fully handled.
+
+Emit compact objects (no pretty-printing). The "thinking" objects come first,
+the single "reply" object comes last. Never put any text outside these objects.
+"""
+
+
+class _StreamParser:
+    """Peels JSON objects out of the coordinator's streamed output.
+
+    The streaming coordinator emits a sequence of ``{"thinking": ...}`` objects
+    followed by one ``{"reply": ..., "resolved": ...}`` object (see
+    ``_STREAM_CONTRACT``). We decode objects greedily with ``raw_decode`` so it
+    works regardless of how tokens are chunked, whether objects are on one line
+    or pretty-printed across many, and tolerates stray whitespace / code fences
+    between them. Any non-JSON prose is captured as a fallback reply so a
+    non-complying model still produces a clean answer (never raw JSON in the UI).
+
+    ``on_thinking(text)`` fires as each thinking step completes — the caller
+    persists it as an interleaved transcript event.
+    """
+
+    def __init__(self, on_thinking: Callable[[str], None]) -> None:
+        self._buf = ""
+        self._on_thinking = on_thinking
+        self._dec = json.JSONDecoder()
+        self.reply = ""
+        self.resolved = False
+        self._seen_reply = False
+        self._fallback = ""
+
+    def feed(self, chunk: str) -> None:
+        if not chunk:
+            return
+        self._buf += chunk
+        self._drain()
+
+    def close(self) -> None:
+        self._drain()
+        # Whatever JSON couldn't be parsed becomes prose fallback so the human
+        # still gets an answer rather than a dropped reply.
+        leftover = self._buf.strip()
+        if leftover and not self._seen_reply:
+            self._fallback += (("\n" if self._fallback else "") + leftover)
+        self._buf = ""
+        if not self.reply and self._fallback.strip():
+            self.reply = self._fallback.strip()
+
+    def _drain(self) -> None:
+        while True:
+            s = self._buf.lstrip()
+            if not s:
+                self._buf = ""
+                return
+            # Tolerate a stray markdown code-fence line.
+            if s.startswith("```"):
+                nl = s.find("\n")
+                if nl == -1:
+                    self._buf = s
+                    return
+                self._buf = s[nl + 1 :]
+                continue
+            if s[0] != "{":
+                # Prose, not a JSON object. Keep complete lines as fallback
+                # reply text; wait if the line is still incomplete.
+                nl = s.find("\n")
+                if nl == -1:
+                    self._buf = s
+                    return
+                line = s[:nl].strip()
+                if line and not line.startswith("```") and not self._seen_reply:
+                    self._fallback += (("\n" if self._fallback else "") + line)
+                self._buf = s[nl + 1 :]
+                continue
+            try:
+                obj, end = self._dec.raw_decode(s)
+            except json.JSONDecodeError:
+                # Incomplete object — wait for more tokens.
+                self._buf = s
+                return
+            self._buf = s[end:]
+            self._consume(obj)
+
+    def _consume(self, obj: Any) -> None:
+        if not isinstance(obj, dict):
+            return
+        if "thinking" in obj:
+            text = str(obj.get("thinking") or "").strip()
+            if text:
+                try:
+                    self._on_thinking(text)
+                except Exception:
+                    logger.debug("on_thinking callback failed", exc_info=True)
+        if "reply" in obj:
+            self.reply = str(obj.get("reply") or "")
+            self.resolved = bool(obj.get("resolved", False))
+            self._seen_reply = True
 
 
 _DISPATCH_DESCRIPTION = (
@@ -219,13 +345,23 @@ class MainAgent(AgentSpec):
         else:
             invoke_input = task.natural_language
 
-        # NOTE: raw-token streaming of the coordinator was reverted — without
-        # the structured response_format the model free-forms JSON
-        # ({"summary"/"findings"/...}) that leaked into the UI as multiple
-        # un-parsed blobs with no interleave. Clean streaming needs a proper
-        # redesign (per-message streaming + reply extraction / interleaving
-        # with tool events). The thinking indicator + the already-streaming
-        # dispatch/tool/result transcript events cover the "in-flight" feel.
+        # Streaming path: when a token_sink is wired (the dashboard chat UI is
+        # listening) stream the coordinator's work as a live, interleaved
+        # "thinking" trace + a clean final reply. We DON'T raw-stream tokens
+        # (the earlier attempt leaked JSON); instead the model emits a stream
+        # of JSON objects (_STREAM_CONTRACT) that _StreamParser peels apart, so
+        # only parsed prose ever reaches the UI. Falls back to the structured
+        # path when no sink is present (tests / non-chat callers).
+        if getattr(ctx, "token_sink", None) is not None and StreamingAgent is not None:
+            return self._run_streaming(
+                task=task,
+                ticket_id=ticket_id,
+                ticket_store=ticket_store,
+                token_sink=ctx.token_sink,
+                invoke_input=invoke_input,
+                tools=tools,
+            )
+
         agent = StructuralAgent(
             task_id=task.task_id,
             ticket_id=ticket_id,
@@ -247,6 +383,84 @@ class MainAgent(AgentSpec):
                 cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
             )
         except Exception as exc:
+            return AgentResult(
+                task_id=task.task_id,
+                status="failed",
+                summary=f"Main agent raised {type(exc).__name__}: {exc}",
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
+            )
+        finally:
+            agent.cleanup()
+
+    def _run_streaming(
+        self,
+        *,
+        task: TaskMessage,
+        ticket_id: str,
+        ticket_store: Any,
+        token_sink: Callable[[str, str], None],
+        invoke_input: str,
+        tools: list[Any],
+    ) -> AgentResult:
+        """Stream the coordinator: persist each ``thinking`` step as an
+        interleaved transcript event the instant it lands (so the human sees
+        the reasoning unfold between dispatches), then deliver a clean reply.
+
+        Dispatch tool calls fire mid-stream; the orchestrator appends their
+        dispatch/result events to the same ticket store, so the thinking events
+        we append here naturally interleave with them by seq. The final reply
+        is pushed once over the token sink (the live bubble) and also returned
+        as the AgentResult summary (persisted as the agent_message)."""
+
+        def on_thinking(text: str) -> None:
+            if ticket_store is None:
+                return
+            try:
+                ticket_store.append(
+                    TicketEvent(
+                        ticket_id=ticket_id,
+                        actor="main",
+                        kind="agent_thinking",
+                        payload={"text": text},
+                        task_id=task.task_id,
+                    )
+                )
+            except Exception:
+                logger.debug("failed to append thinking event", exc_info=True)
+
+        parser = _StreamParser(on_thinking)
+        agent = StreamingAgent(
+            task_id=task.task_id,
+            system_prompt=SYSTEM_PROMPT + _STREAM_CONTRACT,
+            model=self.model,
+            tools=tools,
+            agent_type=self.name,
+        )
+        started = time.monotonic()
+        try:
+            gen = agent.stream(invoke_input)
+            try:
+                while True:
+                    parser.feed(next(gen))
+            except StopIteration:
+                pass
+            parser.close()
+            reply = parser.reply.strip() or "(the coordinator returned no reply)"
+            # Push the reply once so the live bubble swaps from the thinking
+            # indicator to the answer; the persisted agent_message follows.
+            try:
+                token_sink(ticket_id, reply)
+            except Exception:
+                logger.debug("token_sink push failed", exc_info=True)
+            return AgentResult(
+                task_id=task.task_id,
+                status="success",
+                summary=reply,
+                artifacts={"resolved": parser.resolved},
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
+            )
+        except Exception as exc:
+            logger.exception("streaming coordinator turn failed")
             return AgentResult(
                 task_id=task.task_id,
                 status="failed",
