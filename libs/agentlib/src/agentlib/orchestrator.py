@@ -13,6 +13,7 @@ choose; ``ManualRouter`` returns a fixed mapping for tests.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from dataclasses import replace
@@ -25,6 +26,8 @@ from .memory import MemoryEntry, MemoryStore, NullMemoryStore, render_memory_blo
 from .plan import Plan, PlanResult, step_to_task
 from .spec import AgentContext, AgentResult, AgentSpec, CostBreakdown, TaskMessage
 from .ticket import TicketStore, ticket_bus_sink
+
+logger = logging.getLogger(__name__)
 
 
 class Router(Protocol):
@@ -210,6 +213,7 @@ class Orchestrator:
             payload = msg.payload
             task = payload if isinstance(payload, TaskMessage) else TaskMessage(**payload)
             result = agent.handle(task, self.ctx)
+            self._emit_agent_cost(agent.name, result)
             self.bus.publish(
                 new_message(
                     task_id=task.task_id,
@@ -505,10 +509,24 @@ class Orchestrator:
                     acc = self._turn_costs.get(ticket_id)
                     if acc is not None:
                         acc.append(result.cost)
+            self._emit_agent_cost(agent_name, result)
             return result
         finally:
             with self._ticket_lock:
                 self._active_in_ticket.discard(key)
+
+    def _emit_agent_cost(self, agent_name: str, result: Optional[AgentResult]) -> None:
+        """Report one agent run's cost to the per-agent telemetry sink (if
+        wired). Fired for every agent that runs — main and dispatched
+        specialists alike — so the dashboard's by-agent breakdown reflects
+        sub-agent spend. Best-effort: a sink error must never break a run."""
+        sink = getattr(self.ctx, "cost_sink", None)
+        if sink is None or result is None or result.cost is None:
+            return
+        try:
+            sink(agent_name, result.cost)
+        except Exception:
+            logger.warning("cost_sink failed for agent %s", agent_name, exc_info=True)
 
     def _ticket_ctx(self, ticket_id: str, agent_name: str) -> AgentContext:
         """A ctx bound to one (ticket, agent): shared transcript, the

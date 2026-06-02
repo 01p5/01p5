@@ -150,6 +150,11 @@ class AgentContext:
     # Olympus itself runs on — *before* approval, so a malicious user cannot
     # approve their own self-escalation. None / disabled => no-op (dev/tests).
     self_protection: Optional[Any] = None  # agentlib.SelfProtectionPolicy | None
+    # Per-agent cost telemetry sink. Called once per agent run with
+    # ``(agent_name, CostBreakdown)`` so the dashboard can show a per-agent
+    # breakdown (main + dispatched specialists), independent of the
+    # aggregated-per-turn figure recorded for per-user accounting. None => no-op.
+    cost_sink: Optional[Any] = None  # Callable[[str, CostBreakdown], None] | None
 
 
 class AgentSpec(ABC):

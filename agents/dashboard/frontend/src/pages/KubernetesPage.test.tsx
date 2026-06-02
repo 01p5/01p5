@@ -79,7 +79,7 @@ describe("KubernetesPage — pods table", () => {
     expect(screen.getAllByRole("button", { name: /describe/i }).length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByRole("button", { name: /delete/i }).length).toBeGreaterThanOrEqual(2);
 
-    expect(invokeSpy).toHaveBeenCalledWith("sysadmin", "get_pods", { namespace: "default" });
+    expect(invokeSpy).toHaveBeenCalledWith("sysadmin", "get_pods", { namespace: "olympus" });
   });
 
   it("clicking delete + confirm=true → POST delete_pod with correct args", async () => {
@@ -106,7 +106,7 @@ describe("KubernetesPage — pods table", () => {
     expect(window.confirm).toHaveBeenCalled();
     expect(invokeSpy).toHaveBeenCalledWith("sysadmin", "delete_pod", {
       name: "olympus-abc-123",
-      namespace: "default",
+      namespace: "olympus",
     });
     // Refresh fired after delete → get_pods called again.
     await waitFor(() => expect(getPodsCalls).toBeGreaterThan(1));
@@ -151,7 +151,7 @@ describe("KubernetesPage — pod row actions", () => {
     await act(async () => { await userEvent.click(logsButtons[0]); });
 
     expect(invokeSpy).toHaveBeenCalledWith("sysadmin", "get_logs", {
-      pod: "olympus-abc-123", namespace: "default", tail_lines: 200,
+      pod: "olympus-abc-123", namespace: "olympus", tail_lines: 200,
     });
     await waitFor(() => expect(screen.getByText(/hello from logs/)).toBeInTheDocument());
   });
@@ -185,7 +185,7 @@ describe("KubernetesPage — pod row actions", () => {
     });
 
     expect(invokeSpy).toHaveBeenCalledWith("sysadmin", "describe_pod", {
-      name: "olympus-abc-123", namespace: "default",
+      name: "olympus-abc-123", namespace: "olympus",
     });
     await waitFor(() => expect(screen.getByText(/Status: Running/)).toBeInTheDocument());
   });

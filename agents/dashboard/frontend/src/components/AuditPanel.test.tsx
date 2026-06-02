@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { AuditPanel } from "./AuditPanel";
 import { api } from "../api";
 import type { AuditRecord } from "../types";
@@ -83,6 +84,22 @@ describe("AuditPanel", () => {
       expect(screen.getByText("sysadmin")).toBeInTheDocument();
       expect(screen.getByText("get_pods")).toBeInTheDocument();
     });
+  });
+
+  it("clicking a row opens a detail modal with full args + result", async () => {
+    vi.spyOn(api, "audit").mockResolvedValue([RECS[1]]);  // tf_apply, result "ok"
+    const { container } = render(<AuditPanel />);
+    await waitFor(() => expect(container.querySelector(".audit-row")).not.toBeNull());
+
+    expect(screen.queryByTestId("audit-detail")).toBeNull();
+    await userEvent.click(container.querySelector(".audit-row") as HTMLElement);
+
+    const detail = await screen.findByTestId("audit-detail");
+    expect(detail).toBeInTheDocument();
+    expect(detail.textContent).toContain("tf_apply");
+    expect(detail.textContent).toContain("working_dir");  // full args
+    expect(detail.textContent).toContain("approved");
+    expect(detail.textContent).toContain("t2");            // task_id
   });
 
   it("renders args when args is a string (passthrough)", async () => {

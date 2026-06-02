@@ -13,8 +13,6 @@ import { AnsiblePage } from "./pages/AnsiblePage";
 import { HostsPage } from "./pages/HostsPage";
 import { ProgrammerPage } from "./pages/ProgrammerPage";
 import { HPCPage } from "./pages/HPCPage";
-import { SlurmPortalPage } from "./pages/SlurmPortalPage";
-import { GpuPortalPage } from "./pages/GpuPortalPage";
 import { MCPPage } from "./pages/MCPPage";
 import { TerminalPage, TerminalSessionPage } from "./pages/TerminalPage";
 import { AdminPage } from "./pages/AdminPage";
@@ -78,11 +76,9 @@ export default function App(): JSX.Element {
             <Route path="ansible" element={<AnsiblePage />} />
             <Route path="programmer" element={<ProgrammerPage />} />
             <Route path="hpc" element={<HPCPage />} />
-            {/* S2.F3: wildcards so the parent URL preserves the
-                embedded SPA's inner path (e.g. /capabilities/slurm/jobs).
-                A hard refresh restores the user's place inside the iframe. */}
-            <Route path="slurm/*" element={<SlurmPortalPage />} />
-            <Route path="gpu/*" element={<GpuPortalPage />} />
+            {/* slurm / gpu sibling dashboards open in a new tab (reverse-
+                proxied at /slurm/ and /gpu/) — see CapabilitiesPage. They are
+                no longer iframed, so there are no nested routes for them. */}
           </Route>
           {/* Backwards-compat: the legacy top-level paths Navigate-
               redirect to the nested form so bookmarks + in-app links

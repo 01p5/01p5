@@ -27,10 +27,10 @@ export function MCPPage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary overflow-hidden">
-      <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40">
+      <div className="px-6 pt-6 pb-3 max-w-7xl mx-auto w-full">
         <div className="flex items-baseline gap-3">
           <Plug size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
-          <h1 className="font-display text-base font-semibold text-text-primary">
+          <h1 className="font-display text-xl font-semibold text-text-primary">
             MCP servers
           </h1>
           <span className="text-[11px] font-mono text-text-muted">
@@ -60,7 +60,7 @@ export function MCPPage(): JSX.Element {
           native tools — flagged at registration time, not by the server.
         </p>
       </div>
-      <div className="flex-1 overflow-auto px-6 py-5 space-y-4">
+      <div className="flex-1 overflow-auto px-6 py-5 space-y-4 max-w-7xl mx-auto w-full">
         {!servers.some((s) => s.name === "netdb") && (
           <NetDBCard onConnected={refresh} />
         )}
@@ -287,7 +287,7 @@ function ToolRow({ tool, isDestructive, prefix }: ToolRowProps): JSX.Element {
         "mcp-tool rounded border px-3 py-2 text-[12px] font-mono",
         isDestructive
           ? "border-accent-yellow/40 bg-accent-yellow/[0.05]"
-          : "border-border-subtle bg-dark-secondary/40",
+          : "border-border-subtle",
       )}
     >
       <div className="flex items-baseline gap-2">
