@@ -102,6 +102,14 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
     .filter((a) => a.ticket_id === ticketId)
     .sort((a, b) => a.requested_at - b.requested_at);
 
+  // In-flight: the human has spoken but the main agent hasn't replied yet.
+  // Until the reply streams token-by-token, show a live "working…" affordance
+  // so a turn (esp. a simple one with no dispatches) doesn't look frozen.
+  const lastHumanSeq = Math.max(-1, ...events.filter((e) => e.kind === "human_message").map((e) => e.seq));
+  const lastMainReplySeq = Math.max(-1, ...events.filter((e) => e.kind === "agent_message" && e.actor === "main").map((e) => e.seq));
+  const awaitingReply = sending || lastHumanSeq > lastMainReplySeq;
+  const workingLabel = describeWork(events[events.length - 1], inlineApprovals.length > 0);
+
   const submit = async (text: string): Promise<void> => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
@@ -222,6 +230,7 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
         {inlineApprovals.map((a) => (
           <InlineApprovalCard key={a.approval_id} approval={a} onResolved={refreshApprovals} />
         ))}
+        {awaitingReply && inlineApprovals.length === 0 && <ThinkingBubble label={workingLabel} />}
       </div>
 
       {/* Composer */}
@@ -291,6 +300,46 @@ function EmptyChat({ onPick }: { onPick: (text: string) => void }): JSX.Element 
             {ex}
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// Derive a human "what's happening now" label from the latest event, shown
+// in the thinking bubble while a turn is in flight. Until the reply streams,
+// this is the user's progress signal.
+function describeWork(last: TicketEventDTO | undefined, hasPendingApproval: boolean): string {
+  if (hasPendingApproval) return "Waiting for your approval…";
+  if (!last) return "Main is thinking…";
+  const p = (last.payload ?? {}) as Record<string, unknown>;
+  switch (last.kind) {
+    case "dispatch": return `Dispatching to ${String(p.to ?? "a specialist")}…`;
+    case "tool_call": return `${last.actor} · ${String(p.tool ?? "running a tool")}…`;
+    case "agent_result": return "Main is synthesizing…";
+    case "agent_message": return last.actor === "main" ? "Main is thinking…" : "Main is synthesizing…";
+    default: return "Main is thinking…";
+  }
+}
+
+// Animated "working…" bubble — same lane as a main-agent message so it reads
+// as the reply forming. Removed the instant the agent_message arrives.
+function ThinkingBubble({ label }: { label: string }): JSX.Element {
+  return (
+    <div className="flex gap-3" data-testid="thinking">
+      <div className="shrink-0 w-8 h-8 rounded-full bg-accent-green/10 border border-accent-green/30 flex items-center justify-center">
+        <Sparkles size={15} className="text-accent-green" strokeWidth={2.25} />
+      </div>
+      <div className="flex items-center gap-2 text-[13px] text-text-secondary pt-1">
+        <span className="inline-flex gap-1" aria-hidden>
+          {[0, 150, 300].map((d) => (
+            <span
+              key={d}
+              className="w-1.5 h-1.5 rounded-full bg-accent-green/70 animate-bounce"
+              style={{ animationDelay: `${d}ms` }}
+            />
+          ))}
+        </span>
+        <span className="font-mono">{label}</span>
       </div>
     </div>
   );

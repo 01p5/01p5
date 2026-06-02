@@ -175,6 +175,21 @@ describe("ChatPage — transcript rendering", () => {
     expect(screen.getByText(/^Main$/)).toBeInTheDocument();
   });
 
+  it("shows a thinking indicator after a human turn, clears on the main reply", async () => {
+    renderChat();
+    // Human spoke, no main reply yet → thinking bubble appears.
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "do a thing" } }));
+    expect(screen.getByTestId("thinking")).toBeInTheDocument();
+    expect(screen.getByText(/Main is thinking/)).toBeInTheDocument();
+    // A dispatch updates the label but keeps the indicator while working.
+    await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "x" } }));
+    expect(screen.getByTestId("thinking")).toBeInTheDocument();
+    expect(screen.getByText(/Dispatching to sysadmin/)).toBeInTheDocument();
+    // Main's reply lands → indicator gone.
+    await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "done" } }));
+    expect(screen.queryByTestId("thinking")).toBeNull();
+  });
+
   it("renders a dispatch chip and a specialist result", async () => {
     renderChat();
     await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "list pods" } }));
