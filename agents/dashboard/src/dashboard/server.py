@@ -693,6 +693,8 @@ class DashboardServer:
                     return outer._handle_post_host(self)
                 if self.path == "/inventory/keys":
                     return outer._handle_post_key(self)
+                if self.path == "/inventory/sync-terraform":
+                    return outer._handle_sync_terraform_inventory(self)
                 if self.path == "/terminal/sessions":
                     return outer._handle_post_terminal_session(self)
                 if self.path.startswith("/terminal/sessions/") and self.path.endswith("/ask"):
@@ -1807,6 +1809,80 @@ class DashboardServer:
         except InventoryError as exc:
             return self._send_json(req, 400, {"error": str(exc)})
         return self._send_json(req, 201, {"host": self._host_to_jsonable(host)})
+
+    def _handle_sync_terraform_inventory(self, req: BaseHTTPRequestHandler) -> None:
+        """Operator action (admin-only): read a terraform stack's
+        ``olympus_inventory_hosts`` output and seed each host into the runtime
+        inventory (idempotent). NOT an agent tool — registering a host stays a
+        human-gated step, so an agent that authored/applied the stack still
+        can't expand its own reach without an operator running this.
+
+        Body: {"working_dir": "<path to the applied terraform module>"}.
+        Returns {"added": [...], "skipped": [...], "errors": [...]}.
+        """
+        import subprocess
+
+        if self._require_admin(req) is None:
+            return
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        working_dir = (body or {}).get("working_dir") if isinstance(body, dict) else None
+        if not working_dir or not os.path.isdir(working_dir):
+            return self._send_json(req, 400, {"error": "working_dir missing or not a directory"})
+
+        try:
+            proc = subprocess.run(
+                ["terraform", f"-chdir={working_dir}", "output", "-json", "olympus_inventory_hosts"],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            return self._send_json(req, 500, {"error": f"terraform invocation failed: {exc}"})
+        if proc.returncode != 0:
+            return self._send_json(req, 400, {
+                "error": "terraform output failed (no olympus_inventory_hosts output, or stack not applied)",
+                "detail": (proc.stderr or "").strip()[:500],
+            })
+        try:
+            hosts = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "olympus_inventory_hosts output was not valid JSON"})
+        if not isinstance(hosts, list):
+            return self._send_json(req, 400, {"error": "olympus_inventory_hosts must be a list"})
+
+        key_ids = {k.name: k.id for k in self.inventory_store.list_keys()}
+        added: list[str] = []
+        skipped: list[str] = []
+        errors: list[dict[str, str]] = []
+        for h in hosts:
+            if not isinstance(h, dict) or not h.get("name"):
+                errors.append({"host": str(h)[:60], "error": "entry missing a name"})
+                continue
+            name = h["name"]
+            key_name = h.get("key") or None
+            key_id = key_ids.get(key_name) if key_name else None
+            if key_name and key_id is None:
+                errors.append({"host": name, "error": f"key '{key_name}' not in the store"})
+                continue
+            try:
+                self.inventory_store.add_host(
+                    name=name,
+                    address=h.get("address", ""),
+                    ssh_user=h.get("ssh_user") or "ubuntu",
+                    ssh_port=int(h.get("ssh_port") or 22),
+                    key_id=key_id,
+                    groups=list(h.get("groups") or []),
+                    vars=dict(h.get("vars") or {}),
+                    description=h.get("description") or "synced from terraform",
+                )
+                added.append(name)
+            except InventoryError as exc:
+                if "already exists" in str(exc):
+                    skipped.append(name)
+                else:
+                    errors.append({"host": name, "error": str(exc)})
+        return self._send_json(req, 200, {"added": added, "skipped": skipped, "errors": errors})
 
     def _handle_put_host(self, req: BaseHTTPRequestHandler, host_id: str) -> None:
         try:
