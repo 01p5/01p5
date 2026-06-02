@@ -1,7 +1,7 @@
 # Intelligence layer — memory, feedback, rollback, telemetry
 
 The W7-8 deliverable. Four cooperating subsystems that turn Olympus
-from "five agents that run tools" into "a system that learns from
+from "agents that run tools" into "a system that learns from
 prior runs and lets you undo what it did." This doc is the depth
 companion to the README section — the design decisions, ranking
 math, prompt-injection mitigations, env vars, and code pointers.
@@ -68,7 +68,8 @@ see prior Terraform outcomes"), it's a one-line change in
 
 ### Backends
 
-Two ship with v1, same `MemoryStore` Protocol:
+Two real backends ship (plus the trivial `NullMemoryStore` default and an
+`InMemoryMemoryStore` for tests), all behind the same `MemoryStore` Protocol:
 
 | Backend                  | Storage          | Ranking                                                 | When                             |
 |--------------------------|------------------|---------------------------------------------------------|----------------------------------|
@@ -218,10 +219,14 @@ path needs a rollback inverse — without it, "undo a file creation"
 becomes "write an empty file with the same name," which leaks the
 file's existence and breaks anything watching the FS.
 
-### Snapshot coverage across the four agents
+### Snapshot coverage
 
-Three of four agents now declare snapshots; Ansible is deliberately
-left out.
+Of the roster (sysadmin, programmer, terraform, ansible, hpc, plus the
+non-tool `main` coordinator and `terminal_companion`), **three declare
+rollback snapshots: programmer, sysadmin, terraform.** Ansible is deliberately
+left out (a playbook *is* the operation — reverse semantics aren't a meaningful
+default); hpc's destructive Slurm ops and the two non-routable agents declare
+none.
 
 **Sysadmin** (`agents/sysadmin/`) — added in `ac275a5`:
 
@@ -298,7 +303,29 @@ class StructuralAgent:
 Each `agent.handle()` builds its own `StructuralAgent`, so the
 accumulator is naturally task-scoped. `cost_from_agent(agent,
 wall_seconds)` is a helper that reads those + falls back to wall-
-only if the agent doesn't expose them (test stubs).
+only if the agent doesn't expose them (test stubs). **`StreamingAgent`
+([`streaming.py`](../libs/agentlib/src/agentlib/streaming.py)) mirrors the same
+`total_cost_breakdown()` / `total_token_counts()` interface**, so streaming the
+`main` coordinator's reply doesn't drop its cost from the ledger.
+
+### Aggregating sub-agent cost (group chat)
+
+In the CLI's one-agent path a `TaskRecord`'s cost is just that agent's. But in a
+group-chat turn the `main` coordinator *dispatches* to specialists, and each
+specialist's cost would otherwise be invisible to per-user accounting. Two seams
+fix this:
+
+- **`ctx.cost_sink(agent_name, CostBreakdown)`** — the orchestrator calls this
+  once per agent run (`_record_agent_cost` in `server.py`), feeding the
+  `by_agent` breakdown.
+- **`aggregate_cost=True` on `dispatch_to`** — the orchestrator keeps a per-ticket
+  `_turn_costs` accumulator and `_sum_costs()` so the coordinator's returned
+  `AgentResult.cost` includes every specialist it dispatched (money + tokens
+  summed, wall-clock maxed). Keyed by `ticket_id` on a lock-guarded dict — *not*
+  thread-local — because LangGraph runs the dispatch tool on a worker thread.
+
+So the chat turn's recorded cost is the whole turn, while `by_agent` still shows
+where it went.
 
 ### Roll-up at the dashboard
 

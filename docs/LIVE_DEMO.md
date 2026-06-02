@@ -1,222 +1,105 @@
 # Olympus — Live Deploy Reference
 
-The W5–6 deliverable is running on a real Proxmox-backed Kubernetes
-cluster. This file is the runbook: how to reach it, what's been
-exercised against it, and what remains rough.
+The live system runs on AWS and is reachable at **<https://demo.0lympu5.com>**.
+This file is the runbook: how it's shaped, how to reach it, what's been
+exercised against it, and what's still rough.
 
-## Where everything lives
+> The cluster is provisioned and operated from a separate deployment repo
+> (Terraform + Ansible + the Olympus Helm chart). The in-repo [`infra/`](../infra/)
+> is the reference self-host path; this doc describes the live AWS deployment.
+> A clone-and-deploy-it-yourself version lives in the sandbox deployment repo.
 
-| Layer | Location | Notes |
-|-------|----------|-------|
-| PVE host | `root@10.0.3.5` | Throwaway intranet box. SSH key auth. |
-| Cluster nodes | `10.0.3.20` (master) + `.21/.22/.23` (workers) | All Ubuntu 22.04, kubeadm v1.30.14, Calico CNI. SSH as `k8s` with `infra/terraform/deployment/k8s.pem`. |
-| Dev workstation VM | `unics@10.0.3.30` (`olympus-dev`) | 8 vCPU / 16 GB / 120 GB. Mirror of the original dev box; full toolchain installed; `~/.kube/config` is the cluster admin.conf. |
-| Dashboard (cluster) | `http://<any-node>:30093` (NodePort) | E.g. `http://10.0.3.20:30093/healthz`. |
-| Dashboard (proxied) | `http://10.0.3.30/` | Caddy on the dev VM front-ends the NodePort — no port to remember. |
+## Architecture
 
-## Driving the live system
+```
+Cloudflare (zone 0lympu5.com)
+  ├─ A   demo.0lympu5.com   → cluster control-plane EIP   (TLS via the in-cluster proxy)
+  └─ NS  lab.0lympu5.com    → the persistent NetDB DNS server (delegated)
 
-```bash
-# Health
-curl http://10.0.3.30/healthz                 # → {"ok": true}
-
-# Submit a task
-curl -s -X POST http://10.0.3.30/tasks \
-     -H 'Content-Type: application/json' \
-     -d '{"natural_language": "list pods in default namespace"}'
-# → {"task_id": "..."}
-
-# Poll
-curl -s http://10.0.3.30/tasks/<task_id> | jq
-
-# Watch the live event stream (SSE)
-curl -N http://10.0.3.30/events
-
-# Pending approvals
-curl -s http://10.0.3.30/approvals | jq
-
-# Resolve an approval
-curl -s -X POST http://10.0.3.30/approvals/<approval_id> \
-     -H 'Content-Type: application/json' \
-     -d '{"approved": true,  "reason": "ok"}'
-
-# Audit log (JSONL)
-curl -s http://10.0.3.30/audit
-
-# Catalog every tool every agent exposes
-curl -s http://10.0.3.30/tools | jq
-
-# Invoke a tool directly (no LLM in the loop). Destructive tools still
-# surface as approval cards in the right sidebar.
-curl -s -X POST http://10.0.3.30/tools/sysadmin/get_pods \
-     -H 'Content-Type: application/json' \
-     -d '{"namespace": "default"}' | jq
-
-# Enumerate the terraform stacks + ansible playbooks the container has
-# (the UI uses these to pre-fill working_dir / playbook dropdowns)
-curl -s http://10.0.3.30/stacks/terraform | jq
-curl -s http://10.0.3.30/stacks/ansible   | jq
+AWS
+  ├─ Kubernetes cluster (kubeadm on EC2, Calico CNI)
+  │    └─ Helm release: one Deployment = dashboard + orchestrator + bus +
+  │       all agent runtimes (sysadmin/programmer/terraform/ansible/hpc/main)
+  │       + optional GPU/Slurm demo dashboards; Service + TLS reverse proxy
+  └─ Persistent NetDB / Technitium DNS / Kea server (separate Terraform state,
+       survives cluster --fresh) — authoritative for lab.0lympu5.com, grafted
+       onto the sysadmin agent over HTTP MCP (~32 tools, locked to the cluster)
 ```
 
-The browser UI at `http://10.0.3.30/` has two tabs:
-- **💬 Chat** — three-column app: live bus events on the left,
-  conversation in the middle (one bubble pair per task, status streams
-  from "picking an agent…" → "running on X agent…" → final structured
-  result), approval queue + audit on the right.
-- **🛠 Tools** — every tool every agent exposes, rendered as a per-tool
-  card with a form pre-built from the args JSON schema. Destructive tools
-  are red-bordered and still queue an approval card before they fire.
-  Terraform `working_dir` and Ansible `playbook` fields auto-populate
-  from `GET /stacks/terraform` and `GET /stacks/ansible` (dropdown of
-  detected stacks/playbooks shipped in the container at
-  `/opt/olympus/infra/terraform/*` and `/opt/olympus/infra/ansible/*.yml`).
+The chat is a **group chat**: the human talks to the `main` coordinator, which
+dispatches to specialists. Auth is enforced — Google OAuth or email OTP — so the
+HTTP API below is reachable in a browser session, not anonymously (except
+`/healthz`).
 
-The browser UI at `http://10.0.3.30/` shows live events, the
-approval queue, and the audit log — all auto-refreshing.
+## Reaching it
+
+- **Browser:** <https://demo.0lympu5.com> → log in (Google or email OTP) → land on **Chat**.
+- **Health (public):**
+  ```bash
+  curl https://demo.0lympu5.com/healthz        # → {"ok": true}
+  ```
+- **Authenticated API:** every other endpoint requires a session cookie. The
+  browser flow sets it; scripted access needs the same cookie. Key surfaces:
+  `POST /tickets/{id}/messages` (drive the coordinator), `GET /tickets/{id}/events`
+  (SSE transcript), `GET /tickets/{id}/stream` (live reply tokens),
+  `POST /tickets/{id}/close`, `GET /tools` + `POST /tools/{agent}/{tool}` (gated
+  direct invocation), `GET /approvals` + `POST /approvals/{id}`, `GET /audit`,
+  `GET /telemetry`, `GET/POST /mcp/servers`, `GET/POST /inventory/hosts`,
+  `GET /gpu` + `/slurm`, `GET /admin/accounting` (admin only).
+
+## The UI
+
+Nav: **Chat** · **Sessions** · **Auditing** · **Capabilities** (Kubernetes /
+Terraform / Ansible / Programmer / HPC) · **Hosts** · **MCP** · **Terminal** ·
+**Admin**.
+
+- **Chat** — the group-chat ticket. The coordinator's reply forms in-thread;
+  dispatch chips (`main → sysadmin`), tool-call chips, an interleaved 💭 thinking
+  trace, and inline approval cards render chronologically. The left rail is your
+  past sessions.
+- **Capabilities** — per-domain consoles (pod/node tables, Terraform stack
+  cards, Ansible playbooks, the Programmer generators, the HPC Slurm/GPU views).
+  Destructive actions surface the same approval cards as chat.
+- **MCP** — every wired MCP server with status + lazy tool catalog; the NetDB
+  integration card shows the DNS/IPAM tools grafted onto sysadmin.
+- **Terminal** — in-browser SSH (xterm.js); the terminal companion answers
+  questions about the scrollback.
+- **Admin** — per-user daily cost caps + spending ledger.
 
 ## What's been exercised against the live system
 
-Every check below ran end-to-end against the real cluster. ✅ = passed.
-
-| # | Check | Result |
-|---|-------|--------|
-| 1 | Single read-only task (`list pods`) | ✅ ~12s round-trip; structured `SysadminResponse`. |
-| 2 | Destructive flow with approval | ✅ Spawned an `nginx-test` deployment; agent invoked `delete_pod`; approval card surfaced; approving via API fired the actual `kubectl delete`; ReplicaSet recreated the pod. |
-| 3 | Destructive flow with rejection | ✅ Same task, rejected via API; agent honored the rejection; pod was untouched. |
-| 4 | Self-diagnosis (Olympus reads its own pod) | ✅ Agent chained `get_pods → describe_pod → get_events → get_logs` and produced a full report. **Found a real bug in our own code** (see below). |
-| 5 | 5 concurrent tasks | ✅ All 5 finished in ~21s wall clock. No race conditions. Each task_id mapped to its own result. |
-| 6 | Audit log integrity | ✅ Every destructive verb has `approved=True/False` (never `None`). JSONL parses cleanly. Timestamps not strictly monotonic under concurrency — see Known Issues. |
-| 7 | Crash recovery | ✅ Force-killed the pod mid-task; new pod up + `/healthz` ok in **~4s**. In-flight tasks are lost (in-memory bus + emptyDir). |
-| 8 | External access | ✅ Caddy on the dev VM proxies `http://10.0.3.30/` → cluster NodePort. |
-| 9 | Browser E2E suite (5 tests via headless Chromium) | ✅ All 5 pass in ~46s — see below. |
-| 10 | Direct tool invocation via `/tools` + UI Tools tab | ✅ Every agent's tool catalogued at `GET /tools`; `POST /tools/{agent}/{tool}` runs through the same `gate_tools` so destructive ops still queue an approval card. UI exposes a form per tool. |
-| 11 | Chat-centric UI redesign | ✅ 3-column layout: live bus on the left, streaming chat in the center, approval queue + audit on the right. SSE filtered by `task_id` so each turn streams as the orchestrator → agent → result events arrive. |
-| 12 | Real React+TS+Vite frontend with 5 product-style pages | ✅ Tabs: **Chat** / **Kubernetes** / **Terraform** / **Ansible** / **Programmer**. Kubernetes page has pod/node/event tables with inline `logs` / `describe` / `delete` buttons; Terraform page renders stack cards with `init` / `validate` / `plan` / `apply` flow (plan modal includes an "Apply this plan" header action that fires `tf_apply`); Ansible page lists playbooks with `check` / `run`; Programmer page is three generators (Dockerfile / docker-compose / Helm values) with previews + save-to-file via the gated `write_file`. Dark "security console" palette ported from Artemis (Outfit + JetBrains Mono, near-black backgrounds, neon-green accent). Multi-stage Docker build (node:20-alpine vite → python:3.12-slim) bakes the SPA into the image at `static/dist/`. |
-
-## E2E browser tests
-
-The dashboard UI is also covered by an opt-in Playwright suite that
-drives a real headless Chromium against the live deployment. The
-tests click through the actual buttons a human would touch, not the
-HTTP API.
-
-```bash
-# On the dev VM (or any host with playwright + chromium installed):
-pip install --user playwright
-playwright install --with-deps chromium
-
-cd agents/dashboard
-OLYMPUS_LIVE_E2E=1 KUBECONFIG=$HOME/.kube/config \
-    pytest tests/test_dashboard_e2e.py -v
-```
-
-| Test | What it exercises |
-|------|-------------------|
-| `test_index_loads_and_health_connects` | Page renders, title is set, health pill flips to "connected" after the first `/healthz` round-trip. |
-| `test_submit_task_via_form_lands_in_events_feed` | Type a task with a unique marker, press Enter, watch the `[task]`-kind row appear in the live SSE feed. |
-| `test_destructive_task_surfaces_approval_card_and_approve_deletes_pod` | Spawn a throwaway nginx pod, ask the agent to delete it via the form, wait for the approval card to render, click **Approve** in the browser, verify the pod is actually gone via kubectl. |
-| `test_destructive_task_reject_preserves_pod` | Same flow but click **Reject** — verify the pod is still alive 10s later. |
-| `test_audit_log_panel_renders_recent_calls` | After running tools, the audit panel's polling fills with `.audit-row` entries. |
-
-The destructive tests need `kubectl` configured against the cluster
-(`KUBECONFIG=~/.kube/config` works on the dev VM). They create
-short-lived `e2e-target-<rand>` pods labelled `e2e-target=true` and
-clean up after themselves, so a leaked pod from a failed run can be
-swept with:
-
-```bash
-kubectl delete pod -l e2e-target=true --grace-period=0 --force
-```
-
-The browser's `window.prompt()` (which the dashboard uses for the
-approve/reject reason) is auto-accepted by a Playwright `page.on("dialog", ...)`
-handler so the tests don't hang on the modal.
-
-Skipped by default unless `OLYMPUS_LIVE_E2E=1` is set, so CI does
-not try to spin up Chromium.
-
-## Bug found by the live system, fixed in the live system
-
-Self-diagnosis surfaced this in its own log tail:
-
-```
-AttributeError: 'str' object has no attribute 'get'
-File "agentlib/main.py", line 259, in _calculate_response_cost
-    content_dict.get("type", "") == "web_search_call"
-```
-
-`AIMessage.content` can be either a plain string (chat-completions
-API path) or a list of content blocks (Responses API path). The cost
-calculator was iterating a string and treating each character as a
-dict. Caught + logged so non-fatal, but spammy.
-
-Fixed in `libs/agentlib/src/agentlib/main.py`: guard with
-`isinstance(content, list)` and `isinstance(content_dict, dict)`
-before calling `.get`. After rebuild + reship + rollout, fresh pod
-logs show **0 AttributeErrors**.
-
-The agent diagnosed its own bug, then we shipped the fix. That is
-exactly the loop Olympus is supposed to enable.
+| Check | Result |
+|-------|--------|
+| Group-chat turn with dispatch | ✅ `main` dispatches to specialists; dispatch chips + tool-call chips + interleaved thinking trace render live. |
+| Destructive flow with approval | ✅ Destructive tool surfaces an inline approval card in the transcript; approving fires the real call, rejecting honors the veto. |
+| Self-protection | ✅ Calls targeting Olympus's own namespace / nodes (e.g. `shell_exec` against the cluster) are hard-denied before approval — a user cannot escalate by managing the system that gates them. |
+| NetDB / DNS over MCP | ✅ Sysadmin gains ~32 NetDB tools; an agent-created record resolves publicly under `lab.0lympu5.com` (`dig test.lab.0lympu5.com`). NetDB's `:8080` is locked to the cluster (no anonymous access). |
+| Sub-agent cost accounting | ✅ A coordinator turn's recorded cost includes the specialists it dispatched; the telemetry footer + Admin ledger reflect the full turn, with a per-agent breakdown. |
+| Auth | ✅ Google OAuth + email OTP gate the dashboard; domain allowlist + admin role enforced. |
+| TLS + crash recovery | ✅ HTTPS at `demo.0lympu5.com`; a pod restart brings `/healthz` back in seconds (in-flight ticket state is lost — see below). |
+| Persistent DNS survives redeploy | ✅ The NetDB/Technitium server has its own Terraform state, so a cluster `--fresh` leaves the zone + IPAM data intact. |
 
 ## Known issues / limits
 
-- **Cluster-scoped resources are RBAC-forbidden.** The chart's `Role`
-  is namespace-scoped (`default`), so `kubectl get nodes` returns
-  Forbidden. Stress test surfaced this — agents handled it
-  gracefully and reported the RBAC denial in their summaries. Fix:
-  promote to `ClusterRole` + `ClusterRoleBinding` for `nodes` (and
-  any other cluster-scoped resources we add).
+- **The ticket store is in-memory.** Chat transcripts live in the dashboard pod
+  (`InMemoryTicketStore`), so a redeploy / pod restart clears existing
+  conversations. A file-backed store exists in `ticket.py`; wiring it (or Redis)
+  is the persistence fix.
+- **In-flight work dies with the pod.** The bus is in-memory; the audit log is on
+  an opt-in PVC. A restart loses in-flight tasks. `RedisStreamsBus` is built +
+  tested; wiring it + a Redis subchart is the durability path.
+- **Self-protection is config-driven.** It reads the cluster namespace (downward
+  API) + an explicit node list (`OLYMPUS_SELF_NODES` / chart `hardening.selfNodes`).
+  A node that isn't listed isn't protected — keep the list in sync with the fleet.
+- **MCP push-notifications (Phase 4) not wired.** MCP servers are registered at
+  startup / via `POST /mcp/servers`; live server-initiated tool-list changes
+  aren't yet consumed.
 
-- **In-flight tasks die with the pod.** Bus is in-memory inside the
-  dashboard pod; the audit log lives on `emptyDir`. A pod restart
-  loses both. The Redis bus (`agentlib.RedisStreamsBus`) is already
-  designed and tested with `fakeredis`; wiring it into the chart +
-  adding a `redis` subchart is the W7 fix. The audit-log PVC
-  (`audit.persistence.enabled`) is opt-in for the same reason.
+## Deploy / teardown
 
-- **Audit-log timestamps under concurrency are not strictly
-  monotonic.** Multiple worker threads `open(..., "a")` the same
-  file without locking. OS-level append is atomic for short records
-  so no records are lost, but order can be slightly inverted. Real
-  fix would be a single writer thread + queue.
-
-- **Image distribution is local-tar / `ctr import`.** No registry on
-  the cluster; image tags pin via `image.pullPolicy=Never`. Fine
-  for a single dev setup. Multi-machine or rolling updates need a
-  cluster-internal registry (the `daemon.json` insecure-registry
-  config the master playbook already writes was meant for this — the
-  registry itself is not deployed).
-
-- **`output_version="responses/v1"` was tried and reverted** — OpenAI
-  GPT-5+ enforces strict tool schemas through it, and the langchain
-  schema serializer drops `additionalProperties: false`. We work
-  around this by passing tool schemas as dicts (with our own strict
-  flag) through `runtime._strict_schema_dict` — see
-  `libs/agentlib/src/agentlib/runtime.py`. Watch out if upgrading
-  langchain-openai.
-
-## What it costs to run
-
-Quick observation across this session: a "list pods" task is roughly
-3-4 OpenAI calls (gpt-5-mini), tool result included; the
-self-diagnosis task chained 4 tools across ~22 calls. At gpt-5-mini
-pricing this is well under a cent per task. Telemetry isn't measuring
-this yet — wired up in `_calculate_response_cost` but the
-`agent_execution_context` accumulator isn't surfaced through the
-dashboard's task result. W7 plan item.
-
-## Tear-down (if needed)
-
-```bash
-# Stop the dashboard
-helm uninstall olympus
-
-# Stop the cluster (keeps the VMs, just kills kubeadm)
-ansible-playbook -i infra/terraform/deployment/inventory.ini \
-   <reset-playbook>      # not yet written
-
-# Tear down the VMs (will destroy the cluster)
-cd infra/terraform && terraform destroy -var provider_target=pve
-```
-
-The PVE host stays around either way — it's the user's intranet box.
+The cluster + dashboard are deployed from the separate deployment repo
+(`./inf/deploy.sh` → Terraform apply + Ansible + Helm; `--ansible-only` re-rolls
+the app without touching infra; `--fresh` rebuilds the cluster). The persistent
+NetDB/DNS server is brought up once with `./inf/deploy.sh netdb-up` and is *not*
+torn down by a cluster `--fresh`. See that repo for the full operator guide; the
+in-repo [`infra/`](../infra/) mirrors the same shape for self-hosting.

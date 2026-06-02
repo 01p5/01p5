@@ -3,9 +3,12 @@
 Plan item: *full K8s deploy (extends the W3-4 minimal AWS path).*
 
 This is the smallest meaningful K8s deploy: a single Deployment that
-embeds the dashboard + orchestrator + bus + the four agent runtimes,
-fronted by a Service (and optional Ingress). It's enough for the
-"sysadmin agent verifies its own pod" demo.
+embeds the dashboard + orchestrator + bus + every agent runtime
+(sysadmin, programmer, terraform, ansible, hpc, and the `main` group-chat
+coordinator), fronted by a Service (and optional Ingress). Optional sibling
+GPU/Slurm demo dashboards deploy as separate templates. It's enough for the
+"sysadmin agent verifies its own pod" demo, and is what the live AWS deploy
+runs (with TLS + auth + self-protection `selfNodes` configured).
 
 ## Out-of-scope (W7+)
 

@@ -38,9 +38,8 @@ meet:
 - **Append-only, ordered, replayable.** `XADD` writes; `XRANGE` /
   `XREAD` reads from any point; consumer groups handle attach-late and
   multi-consumer fan-out.
-- **One stream per task** (`task:{task_id}`) keeps the per-task audit
-  view trivial; a single broadcast stream (`bus:all`) keeps the "*"
-  subscriber semantics.
+- **One stream per recipient** plus a broadcast mirror keeps fan-out
+  cheap and the "*" subscriber semantics simple (see "As built" below).
 - **TTL / `MAXLEN`** caps storage growth. The full audit lives in the
   JSONL file the runtime already writes — Redis is the live tier.
 - **Tiny operational surface.** A single `redis:7-alpine` container in
@@ -63,6 +62,23 @@ meet:
 3. The dashboard backend constructs `RedisStreamsBus` directly.
 4. Tests stay on `InMemoryBus`; one integration test covers the Redis
    path against a `redis:7-alpine` container started by docker-compose.
+
+## As built (`agentlib/bus_redis.py`)
+
+The implementation refined the topology from the sketch above:
+
+- **One stream per recipient**, `olympus:bus:{recipient}`, not per-task. Every
+  `publish` `XADD`s to the recipient's stream and mirrors to a single broadcast
+  stream `olympus:bus:_all`; `"*"` subscribers tail `_all`. (Per-task grouping
+  isn't needed — the per-ticket transcript is reconstructed by the `TicketStore`,
+  and the JSONL audit log is the durable per-task view.)
+- Each `subscribe(recipient, cb)` spawns a daemon thread that `XREAD BLOCK`s the
+  stream. `subscribe()` **resolves the stream's current end id synchronously**
+  before starting the thread, so a message published between `thread.start()` and
+  the thread's first `XREAD` can't be dropped (the earlier `"$"`-in-thread
+  approach raced; fixed in the consumer start-id change).
+- Consumer *groups* aren't used yet — each subscriber is an independent tailer.
+  Capacity is capped with `MAXLEN`; the JSONL audit log remains the durable tier.
 
 ## When to revisit
 

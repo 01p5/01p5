@@ -1,5 +1,11 @@
 # Olympus Infra
 
+> **This is the reference / self-host path.** The live demo
+> (<https://demo.0lympu5.com>) runs on AWS and is provisioned + operated from a
+> separate deployment repo; a clone-and-deploy-it-yourself version lives in the
+> sandbox deployment repo. The layers below stand up an equivalent cluster on
+> AWS *or* Proxmox for self-hosting or local bring-up.
+
 Three layers, applied in order:
 
 | Layer | Path | What it provisions | Run order |
@@ -53,8 +59,10 @@ helm upgrade --install olympus {{ olympus_chart_path }} \
   --set image.tag={{ olympus_image_tag | default('dev') }}
 ```
 
-The `helm install` step references `infra/k8s/charts/olympus`, the
-chart we built in W5-6.
+The `helm install` step references `infra/k8s/charts/olympus`. The chart
+bundles the dashboard + orchestrator + bus + all agent runtimes (sysadmin,
+programmer, terraform, ansible, hpc, and the `main` coordinator), plus optional
+GPU/Slurm demo dashboards. See [`k8s/README.md`](k8s/README.md).
 
 ## Standing up a new account
 

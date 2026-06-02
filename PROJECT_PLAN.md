@@ -13,41 +13,49 @@
 
 ```
 ┌─────────────────────────────────────────────┐
-│              Human Interfaces               │
-│         Terminal CLI  |  Web Dashboard       │
-└──────────────────┬──────────────────────────┘
+│              Human Interfaces                │
+│   Terminal CLI (router)  |  Web Dashboard    │
+│                          |  (group chat)     │
+└──────────────────┬───────────────────────────┘
                    │
          ┌─────────▼─────────┐
-         │   Orchestrator    │
-         │  (task decompose  │
-         │   + dispatch)     │
+         │   Orchestrator    │  LLM router (CLI) /
+         │  + context bus    │  main coordinator (chat)
+         │  + ticket store   │  dispatch / ask_agent
          └─────────┬─────────┘
                    │
-     ┌─────────────┼─────────────┐
-     │      Shared Context Bus   │
-     │  (message queue + state)  │
-     └─┬───┬───┬───┬───┬────────┘
-       │   │   │   │   │
-       ▼   ▼   ▼   ▼   ▼
-      TF  ANS  NET  PRG  SYS
+     ┌────────┬────┼────┬────────┬────────┐
+     ▼        ▼    ▼    ▼        ▼        ▼
+    TF       ANS  SYS  PRG      HPC   (+ terminal
+                                       companion)
 ```
+
+> **Networking** (the originally-planned 5th specialist) was never built as a
+> native agent — it landed instead as an **MCP integration**: NetDB (IPAM / DNS /
+> DHCP, ~32 tools over HTTP MCP) grafts onto the **Sysadmin** agent. **HPC**
+> (Slurm + GPU) was added as a real specialist. The dashboard chat is a
+> **group chat**: a non-routable `main` coordinator dispatches subtasks to the
+> specialists rather than the orchestrator routing to exactly one.
 
 ### Agents
 
 | Agent | Domain | Tools |
 |-------|--------|-------|
-| **Terraform** | Infrastructure-as-code | `terraform plan/apply/destroy`, state files |
-| **Ansible** | Configuration management | Playbook execution, inventory management |
-| **Networking** | Network operations | DNS, firewalls, LB, VPN/Wireguard diagnostics |
-| **Programmer** | Code & packaging | Dockerfiles, Helm charts, CI/CD, scripts |
-| **Sysadmin** | Runtime operations | kubectl, logs, metrics, pod health |
+| **Sysadmin** | Runtime operations | kubectl, logs, events, pod health, `ssh_run`; + NetDB (DNS/IPAM) via MCP |
+| **Programmer** | Code & packaging | Dockerfiles, compose, Helm values, file read/write/edit/delete |
+| **Terraform** | Infrastructure-as-code | `terraform init/plan/validate/show/apply/destroy`, state-aware rollback |
+| **Ansible** | Configuration management | Playbook execution (`--check`/run), host introspection over SSH inventory |
+| **HPC** | Scheduling + accelerators | Slurm queue + GPU health via MCP (advertises prerequisites) |
+| **main** (coordinator) | Group-chat orchestration | `dispatch` + `ask_agent`; streamed thinking trace; no native tools |
+| **terminal_companion** | Terminal observer | read-only Q&A over an in-browser SSH session's scrollback |
 
 ### Key Design Principles
 
-- **Tool-gated execution** — each agent can only invoke tools within its domain
+- **Tool-gated execution** — each agent can only invoke tools within its declaration
 - **Human-in-the-loop safety** — destructive operations require human approval before execution
-- **Shared context bus** — agents communicate through a shared layer with enforced logging/auditing
-- **LiteLLM multi-provider** — different models for different task complexity/cost tradeoffs
+- **Self-protection** — Olympus cannot manage the cluster/hosts it runs on; those calls are hard-denied before the approval queue
+- **Shared context bus + ticket store** — agents collaborate in a logged/audited group-chat transcript
+- **Multi-provider models** — different models for different task complexity/cost tradeoffs (GPT-5.5 default)
 
 ---
 
@@ -63,6 +71,7 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 | Secrets leaked into logs / LLM context | Secrets pulled from a vault at tool-invocation time, redacted from transcripts before they hit the bus |
 | Replay / audit gap | Every bus message and tool call is append-only logged with task ID, agent, model, inputs, outputs, approval decision |
 | Compromised model provider returns malicious tool calls | Tool args validated against schema before execution; destructive verbs gated regardless of model output |
+| User escalates privilege by making Olympus manage its own cluster/accounting/code | `SelfProtectionPolicy` hard-denies any call targeting Olympus's own namespace or VM hosts — *before* approval, so no one (not even an admin) can approve their own self-escalation |
 
 ---
 
@@ -73,7 +82,7 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 - [x] Write and submit project proposal
 - [x] Secure domain (0lympu5.com)
 - [x] Monorepo scaffolding (`libs/agentlib` — LangChain/LangGraph wrapper, multi-provider models, budget guard, streaming)
-- [x] CI/CD + linting — ruff + pytest + vitest in `.github/workflows/ci.yml`; 146 frontend + 120 backend run on every push
+- [x] CI/CD + linting — ruff + pytest + vitest in `.github/workflows/ci.yml`; the suites grew to ~393 frontend + ~800 backend, each behind an 80% coverage gate, run on every push
 - [x] **Agent interface contract** — `AgentSpec` document: tool schema, approval hook signature, context-bus message format, error semantics *(promoted: every later phase depends on it)* → [docs/AGENT_SPEC.md](docs/AGENT_SPEC.md) (draft v0.1)
 - [x] Proof of concept: single agent (Sysadmin — read-only `kubectl` / log queries) executing a task end-to-end — live since W4 against the PVE cluster, see [docs/LIVE_DEMO.md](docs/LIVE_DEMO.md)
 - [x] Docker Compose dev environment — `docker-compose.yml` at repo root; production deploy uses the same multi-stage Dockerfile
@@ -111,10 +120,10 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 
 ### Weeks 7–8: Testing, Hardening & Intelligence
 
-- [x] End-to-end integration tests — single-agent (146 vitest + 120 pytest + 23 Playwright) PLUS cross-agent plan tests (8 in `libs/agentlib/tests/test_plan_integration.py`, exercising writer → planner → checker through gate_tools + audit + rollback + memory). Closed in 0185a57.
+- [x] End-to-end integration tests — single-agent (vitest + pytest + 23 Playwright) PLUS cross-agent plan tests (in `libs/agentlib/tests/test_plan_integration.py`, exercising writer → planner → checker through gate_tools + audit + rollback + memory). Closed in 0185a57. (Suites have since grown to ~393 frontend + ~800 backend.)
 - [x] Operation telemetry analysis — per-task `CostBreakdown` populated by every agent via `cost_from_agent`; dashboard surfaces it on `TaskRecord` and aggregates via `GET /telemetry`; UI shows a per-turn cost chip + a live telemetry footer. Closed in 9801400.
 - [x] Agent memory: vector store of past run transcripts, retrieved at task start. Lexical (`JsonlMemoryStore`) for tests/CI, OpenAI embeddings (`EmbeddingMemoryStore`) for production. Orchestrator integrates retrieval + write-back on both `.run()` and `.run_plan()`. Closed in 4cfdbf0 + 0185a57.
-- [x] Error recovery and rollback capabilities — `RollbackPlan` + `RollbackStore` (Null/InMemory/Jsonl); runtime captures inverse-state before destructive calls. **Three of four agents now opt in:** Programmer (write/edit/delete\_file, with delete\_file added as the rollback inverse for "new-file write\_file" — 9bbad49); Sysadmin (delete\_pod → apply\_manifest with `kubectl get -o yaml` scrubbed of server-managed fields — ac275a5); Terraform (tf\_apply → tf\_restore\_state: `terraform state push <captured>` then `terraform apply` to reconcile, atomic against push-failure — ac275a5). Ansible deliberately skipped (a playbook *is* the operation; reverse semantics aren't a meaningful default). Dashboard exposes `GET /rollback` + `POST /rollback/{id}/execute` (re-routes through `gate_tools` so the undo re-prompts approval). UI lists captured rollbacks with an Undo button. Closed in 9bbad49 + b005137 + ac275a5.
+- [x] Error recovery and rollback capabilities — `RollbackPlan` + `RollbackStore` (Null/InMemory/Jsonl); runtime captures inverse-state before destructive calls. **Three agents opt in:** Programmer (write/edit/delete\_file, with delete\_file added as the rollback inverse for "new-file write\_file" — 9bbad49); Sysadmin (delete\_pod → apply\_manifest with `kubectl get -o yaml` scrubbed of server-managed fields — ac275a5); Terraform (tf\_apply → tf\_restore\_state: `terraform state push <captured>` then `terraform apply` to reconcile, atomic against push-failure — ac275a5). Ansible deliberately skipped (a playbook *is* the operation; reverse semantics aren't a meaningful default). Dashboard exposes `GET /rollback` + `POST /rollback/{id}/execute` (re-routes through `gate_tools` so the undo re-prompts approval). UI lists captured rollbacks with an Undo button. Closed in 9bbad49 + b005137 + ac275a5.
 - [x] Feedback loop: 👍/👎/correction on memory entries. Backend: `MemoryStore.annotate(task_id, feedback, correction)` on all four backends. Retrieval drops "bad" entries entirely and boosts "good" entries by +0.15. Corrections ride into the prompt block on future retrievals. UI: `FeedbackButtons` under each settled chat turn. Closed in 8f9ceae + b005137.
 - [ ] Contact potential alpha test users for real-world deployments.
 
@@ -125,11 +134,28 @@ A system whose pitch is "agents run `terraform destroy` and `kubectl delete`" ne
 - [x] Documentation and onboarding experience — top-level [`README.md`](README.md) (quick start + per-component guide + intelligence-layer walkthrough), [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md), [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md), [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md), and [`docs/MCP.md`](docs/MCP.md) (worked example with the demo server). *Remaining:* short screencast / GIF walkthrough for the final presentation.
 - [ ] Incorporate alpha tester feedback (not yet contacted)
 - [x] **MCP interface for the Orchestrator** — shipped end-to-end across three passes. Pass 1 (7526b6e): `libs/agentlib/mcp.py` with `MCPServerConfig`, abstract `Transport` Protocol, `StdioTransport` + `MockTransport`, `MCPClient` (JSON-RPC 2.0 handshake + `tools/list` + `tools/call`), `to_langchain_tool` adapter, `register_mcp_tools` convenience. Per-server destructive allowlist supplied by the integrator (never by the server). Pass 2 (76ab0e6): dashboard registry + `GET /mcp/servers` + `GET /mcp/servers/{name}/tools` endpoints + new "MCP" tab in the topnav showing every wired server with status, command, and lazy-loaded tool catalog (destructive tools flagged). Failing servers land as `status="error"` rather than crashing the dashboard. Pass 3 (8070040): `HttpTransport` for Streamable-HTTP MCP servers — stdlib-only (urllib), default `Accept: application/json, text/event-stream`, captures + echoes `Mcp-Session-Id`, parses first SSE event when server streams. `build_transport(config)` factory picks stdio vs HTTP based on which fields are set on `MCPServerConfig`. The same `register_mcp_tools` + dashboard wiring works for both transports. Worked example in [`docs/MCP.md`](docs/MCP.md) + [`infra/demo-mcp-server/`](infra/demo-mcp-server/).
-- [x] Additional/customizable agents — subsumed by MCP. Anyone with a Python script + stdio JSON-RPC can extend any of the four agents without touching Olympus core code. Demo server at [`infra/demo-mcp-server/server.py`](infra/demo-mcp-server/server.py) ships as a copy-paste starting point.
-- [ ] Polished demo for class presentation / users / investors
+- [x] Additional/customizable agents — subsumed by MCP. Anyone with a Python script + stdio/HTTP JSON-RPC can extend a target agent without touching Olympus core code. Demo server at [`infra/demo-mcp-server/server.py`](infra/demo-mcp-server/server.py) ships as a copy-paste starting point.
+- [x] Polished demo for class presentation / users / investors — live at <https://demo.0lympu5.com> (AWS, group-chat UI, auth, a self-healing fake HPC fleet for NCCL-style demos)
 - [ ] Final writeup
 
-**Deliverable:** Production-ready demo, documentation, presentation. Third-party tool authors can register MCP servers without touching Olympus core code. **MCP shipped; remaining items are presentation work, not code.**
+**Deliverable:** Production-ready demo, documentation, presentation. Third-party tool authors can register MCP servers without touching Olympus core code. **MCP + live demo shipped; the final writeup is the remaining non-code item.**
+
+---
+
+## Beyond the plan — shipped after W10
+
+The plan's "orchestrator-only delegation in v1" decision was revisited and a
+larger arc landed:
+
+- **Group chat / sub-agents** ([docs/SUBAGENTS_PLAN.md](docs/SUBAGENTS_PLAN.md)) — the dashboard chat became a group-chat *ticket*: a non-routable `main` coordinator `dispatch`es subtasks to specialists and `ask_agent`s them direct questions; per-(ticket,agent) checkpoints; ticket lifecycle (close → summarize-to-memory → discard). Phases 1–3 shipped; Phase 4 (MCP push-notifications) deferred.
+- **Live-streamed thinking trace** — the coordinator narrates its reasoning as interleaved, parsed "thinking" lines instead of one blob.
+- **Self-protection** — `SelfProtectionPolicy` hard-denies any call targeting Olympus's own namespace / VM hosts, before approval.
+- **Sub-agent cost accounting** — a coordinator turn aggregates the cost of every specialist it dispatched, with a per-agent breakdown for the dashboard.
+- **MCP-over-HTTP push** — servers declared via `OLYMPUS_MCP_SERVERS` graft onto a named `target_agent`. Production example: **NetDB** (IPAM/DNS/DHCP, ~32 tools) + a persistent Technitium DNS server on AWS, delegated under `lab.0lympu5.com`.
+- **HPC specialist + dashboards** — Slurm + GPU pages, backed by MCP, with a demo fleet.
+- **Auth + multi-user accounting** — Google OAuth + email OTP login, admin role, per-user daily cost caps + spending ledger (closes the W9–10 Auth/RBAC open question).
+- **In-browser terminal** — xterm.js SSH sessions + a `terminal_companion` observer.
+- **Live deploy moved to AWS** — kubeadm on EC2 + Helm, behind TLS at `demo.0lympu5.com`, operated from a separate deployment repo (the in-repo `infra/` is the reference self-host path).
 
 ---
 
@@ -160,7 +186,7 @@ Targets to evaluate against in W7–8 telemetry analysis. Numbers are starting h
 | CI/CD | GitHub Actions |
 | Local Dev | Docker Compose |
 | Production | AWS / K8s |
-| Web UI | *Decide by W4* — leaning Next.js (App Router) for SSR + streaming |
+| Web UI | React + TypeScript + Vite + Tailwind (decided W4; Next.js rejected — SSR adds no value for a single-user dashboard) |
 | Terminal UI | `textual` (Python, async-friendly, integrates with LangGraph streaming) |
 
 ---
@@ -169,10 +195,10 @@ Targets to evaluate against in W7–8 telemetry analysis. Numbers are starting h
 
 Each question is tagged with the week it must be resolved by — slipping these cascades.
 
-- [x] **(decided W2)** Agent-to-agent delegation: orchestrator-only in v1. Revisit after W6.
+- [x] **(decided W2, revisited post-W10)** Agent-to-agent delegation: orchestrator-only in v1 — **revisited.** The dashboard now runs a group-chat model where a `main` coordinator `dispatch`es to specialists and agents `ask_agent` each other (mediated by the orchestrator, logged to the ticket transcript). The CLI keeps the router-picks-one model. See [docs/SUBAGENTS_PLAN.md](docs/SUBAGENTS_PLAN.md).
 - [x] **(decided W2)** Long-running ops (Terraform apply): sync-with-progress-events. No async job model in v1.
 - [x] **(decided W5)** Message queue for context bus: **Redis Streams** for v2; in-memory bus stays for tests/single-process dev. See [docs/BUS_DECISION.md](docs/BUS_DECISION.md).
 - [x] **(decided W4)** Web UI framework: plain React + TypeScript + Vite + Tailwind. Shipped at `agents/dashboard/frontend/`. Next.js considered but rejected — SSR adds no value for a single-user dashboard, and the SPA + standard-library HTTP server is simpler to operate.
 - [x] **(decided W4)** Terminal UI: textual. Mounted in `agents/olympus_cli/src/olympus_cli/tui.py`.
 - [x] **(decided W7)** Agent memory storage: neither pgvector / Chroma / Qdrant. Instead, a Protocol-driven `MemoryStore` with two backends — `JsonlMemoryStore` (lexical Jaccard over append-only JSONL, dep-free) and `EmbeddingMemoryStore` (OpenAI text-embedding-3-small + numpy cosine over the same on-disk format). External vector DB deferred until we outgrow ~10k entries. See `libs/agentlib/src/agentlib/memory.py`.
-- [ ] **(stretch, W9–10)** Auth/RBAC model for multi-user scenarios.
+- [x] **(shipped)** Auth/RBAC model for multi-user scenarios — Google OAuth + email OTP login, an admin role, and per-user daily cost caps + a spending ledger (`/admin/*`). Domain allowlist + dev bypass for local runs.

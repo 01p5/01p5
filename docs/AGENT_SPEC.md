@@ -2,9 +2,13 @@
 
 > Every later week of the plan depends on this contract. If we get it wrong, every agent and the orchestrator pay the cost of refactoring.
 
-**Status:** v0.2 (W1–2, frozen for W3)
+**Status:** v0.3 — the W1–2 contract, extended post-W6 for the group-chat model
 **Owner:** Tianle
-**Reviewers needed:** self-review against PoC, then frozen for W3
+
+> The black-box contract below held; what grew is `AgentContext` (many runtime
+> seams added) and a group-chat layer on top (tickets, `dispatch`, `ask_agent`).
+> `handle()` is **synchronous** (it was speced async; it ships sync). Sections
+> updated to match the code are flagged inline.
 
 ---
 
@@ -33,15 +37,18 @@ class AgentSpec:
     domain: str                     # human-readable description for the orchestrator
     tools: list[ToolSpec]           # exhaustive — runtime rejects calls to anything else
     destructive_verbs: set[str]     # tool names that always trigger approval
-    model: ModelRef                 # LiteLLM-routable identifier; agent can override per-task
-    budget: BudgetGuard             # token + $ ceiling per task
+    model: ModelRef                 # model identifier; agent can override per-task
+    routable: bool = True           # False = never picked by the router (main, terminal_companion)
+    prerequisites: set[str] = set() # required MCP servers; agent is offered only when connected (hpc)
+    rollback_snapshots: dict[str, Callable] = {}  # tool -> inverse-capture (see INTELLIGENCE_LAYER)
 
-    async def handle(
-        self,
-        task: TaskMessage,
-        ctx: AgentContext,
-    ) -> AgentResult: ...
+    def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult: ...
 ```
+
+> **Changed since v0.2:** `handle` is **synchronous** (not `async`).
+> `budget` is no longer a class attribute — the per-task ceiling is injected via
+> `AgentContext.budget_guard`. `routable`, `prerequisites`, and
+> `rollback_snapshots` were added.
 
 ### `TaskMessage` (input)
 
@@ -53,6 +60,7 @@ class TaskMessage:
     natural_language: str           # the user (or orchestrator's) request
     inputs: dict[str, Any]          # structured params, e.g. {"cluster": "prod-us-east-1"}
     constraints: dict[str, Any]     # {"dry_run": True, "max_cost_usd": 0.50, ...}
+    ticket_id: str | None           # group-chat ticket this turn belongs to (see SUBAGENTS_PLAN)
     history_ref: str | None         # opaque pointer to retrievable past-run context
 ```
 
@@ -60,12 +68,31 @@ class TaskMessage:
 
 ```python
 class AgentContext:
-    bus: BusClient                  # publish/subscribe to shared context bus
-    approval: ApprovalHook          # async approval callback (see below)
-    secrets: SecretsClient          # vault-backed; never round-trips through LLM
+    # core (v1)
+    approval: ApprovalHook          # approval callback (see below)
     audit: AuditLogger              # append-only; every tool call lands here
-    cancel_token: CancelToken       # cooperative cancellation
+    secrets: SecretsClient | None   # vault-backed; never round-trips through LLM (unimplemented in v0)
+    cancel_token: CancelToken | None
+    # intelligence layer
+    rollback: RollbackStore | None
+    budget_guard: BudgetGuard | None        # per-task token/$ ceiling
+    cost_sink: Callable | None              # (agent_name, CostBreakdown) -> per-agent telemetry
+    # group chat (see SUBAGENTS_PLAN.md)
+    ticket_store: TicketStore | None        # the group-chat transcript
+    dispatcher: Callable | None             # main: delegate a subtask to a specialist
+    agent_resolver: Callable | None         # build the ask_agent tool (directed Q&A)
+    checkpointer: BaseCheckpointSaver | None # per-(ticket,agent) context continuity
+    token_sink: Callable | None             # (ticket_id, chunk) -> stream the coordinator's reply
+    # infrastructure
+    inventory_store: InventoryStore | None   # user-managed hosts + SSH keys (ansible / ssh_run)
+    self_protection: SelfProtectionPolicy | None  # hard-deny calls targeting Olympus's own cluster/hosts
 ```
+
+> **Changed since v0.2:** `bus` is no longer passed on the context (the
+> orchestrator owns it; agents observe via the ticket store). The remaining
+> fields above were all added for the intelligence layer, group chat, and
+> infrastructure seams. Every field is `Optional` — an agent with none wired
+> behaves exactly as the v1 black box.
 
 ### `AgentResult` (output)
 
@@ -88,13 +115,14 @@ The runtime — not the agent — decides when to call this. The agent declares 
 
 ```python
 class ApprovalHook(Protocol):
-    async def request(
+    def request(                    # synchronous (not async)
         self,
         agent: str,
         tool: str,
         args: dict[str, Any],
         rationale: str,             # agent-provided "why I want to do this"
         diff: str | None = None,    # for IaC: terraform plan output
+        ticket_id: str | None = None,  # group-chat ticket, so the card renders inline
     ) -> ApprovalDecision: ...
 
 @dataclass
@@ -113,6 +141,7 @@ All inter-agent communication is wrapped:
 class BusMessage:
     msg_id: str
     task_id: str                    # always — ties everything to a root task
+    ticket_id: str | None           # group-chat ticket, when the turn is part of one
     sender: str                     # "orchestrator" | agent name
     recipient: str | Literal["*"]
     kind: Literal["task", "result", "progress", "log", "approval_request", "approval_decision"]
@@ -125,14 +154,32 @@ The bus is **append-only and replayable** — the audit log is just a filtered v
 
 ---
 
-## Locked decisions (v1)
+## Locked decisions (v1) — and how they evolved
 
-These were the open questions blocking freeze; both are now decided. Revisit when W6 cross-agent workflows force the issue.
+- **Agent-to-agent delegation: orchestrator-only** *(v1)* → **revisited.** The
+  dashboard now runs a **group chat**: a non-routable `main` coordinator
+  `dispatch`es subtasks to specialists and agents `ask_agent` each other. These
+  are still mediated by the orchestrator (it runs the target agent and relays
+  only the result/answer), and every exchange is appended to a `TicketStore`
+  transcript — so the audit trail stays linear and there are no free-for-all bus
+  cycles. The CLI keeps the original router-picks-one model. See
+  [SUBAGENTS_PLAN.md](SUBAGENTS_PLAN.md).
+- **Long-running tools: stream `progress` messages** *(unchanged in spirit).*
+  `handle()` is synchronous from the orchestrator's perspective; progress is now
+  surfaced as ticket events (dispatch / tool_call / agent_thinking) projected to
+  the UI, and the coordinator additionally streams its reply tokens via
+  `token_sink`. No pending-result state machine.
 
-- **Agent-to-agent delegation: orchestrator-only.** Agents do not publish `kind="task"` to other agents. The orchestrator is the only sender of tasks. *Why:* keeps the bus a star topology in v1, makes the audit log linear, and avoids cycles before we have a planner that can reason about them. *Revisit after W6* once we have real cross-agent workflows that benefit from direct dispatch.
-- **Long-running tools: stream `progress` messages.** `handle()` is synchronous from the orchestrator's perspective but emits `kind="progress"` bus messages while it works. No "pending result + follow-up" state machine in v1. *Why:* a state machine is the more flexible design but doubles the bus surface area; streaming covers Terraform apply / k8s rollout for the foreseeable future.
+## The group-chat layer (added post-W6)
 
-The Sysadmin PoC and the W3-4 multi-agent rollout both build on these.
+On top of the black-box contract, `libs/agentlib/ticket.py` adds the group-chat
+transcript: a `TicketStore` of `TicketEvent`s (`TicketKind` ∈ human_message,
+agent_message, agent_thinking, dispatch, agent_result, tool_call,
+approval_request/decision, mcp_event). The `main` agent builds two tools from
+context seams — `dispatch(agent, subtask)` (from `ctx.dispatcher`) and
+`ask_agent(target, question)` (from `ctx.agent_resolver`) — and narrates its
+reasoning as streamed `agent_thinking` events. Specialists are unchanged; they
+just run with a `ticket_id` set so their tool calls land on the transcript.
 
 ---
 

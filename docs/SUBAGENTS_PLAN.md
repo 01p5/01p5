@@ -2,6 +2,13 @@
 
 > Working plan / ground truth. Built collaboratively; reflects the design
 > decisions as of this doc. Phase 1 is self-contained and ships value alone.
+>
+> **Status (shipped):** Phases **1–3 are live** — group-chat tickets, the `main`
+> coordinator with `dispatch` + `ask_agent`, per-(ticket,agent) checkpoints, and
+> close → summarize-to-memory → discard. **Phase 4 (MCP push) remains deferred.**
+> Beyond the plan, the coordinator now **streams a live, parsed "thinking"
+> trace** (`agent_thinking` events) interleaved with its dispatches. The
+> implementation refined a few details below (noted inline).
 
 ## The model in one paragraph
 
@@ -55,15 +62,18 @@ the per-ticket checkpoints are then discarded.
 
 ---
 
-## Phase 1 — Ticket spine + isolated contexts + `ask_agent`
+## Phase 1 — Ticket spine + isolated contexts + `ask_agent` ✅ shipped
 *(foundation; no routing/UX change yet — ships shared-Q&A + ticket timeline)*
 
 1. **`libs/agentlib/ticket.py`** (new)
    - `TicketEvent` dataclass: `ticket_id`, `seq` (monotonic per ticket),
      `event_id`, `ts`, `actor` (`"human"` | `"main"` | agent name | mcp
-     server name), `kind` (`human_message` | `agent_message` | `dispatch` |
-     `agent_result` | `tool_call` | `approval_request` | `approval_decision`
-     | `mcp_event`), `payload`, `causation_id`, `task_id?`.
+     server name), `kind` (`human_message` | `agent_message` | `agent_thinking` |
+     `dispatch` | `agent_result` | `tool_call` | `approval_request` |
+     `approval_decision` | `mcp_event`), `payload`, `causation_id`, `task_id?`.
+     *(As shipped: `agent_thinking` was added for the coordinator's live
+     reasoning trace. The dashboard wires `InMemoryTicketStore`, so transcripts
+     are cleared on a pod restart; `JsonlTicketStore` exists for persistence.)*
    - `TicketStore` Protocol; `JsonlTicketStore` (one JSONL per ticket under
      a `tickets/` dir + in-mem index) and `InMemoryTicketStore` (tests).
    - `transcript(ticket_id, after_seq=0)` → ordered events (the group-chat
@@ -88,7 +98,8 @@ the per-ticket checkpoints are then discarded.
    (B answers from retained context); isolation (A sees B's *answer*, never
    B's raw context); cross-ticket isolation.
 
-## Phase 2 — Group chat (main agent + sub-agents as participants)
+## Phase 2 — Group chat (main agent + sub-agents as participants) ✅ shipped
+*(plus: the coordinator streams an interleaved, parsed `agent_thinking` trace)*
 
 7. **`agents/main/`** (new): generalist `MainAgent` (gpt55). Knows a bit of
    everything; tools = `dispatch(agent_name, subtask)` + `ask_agent`. No
@@ -102,7 +113,7 @@ the per-ticket checkpoints are then discarded.
 10. **Tests + UI verification**: main agent dispatches two sub-agents; #2
     answers a question to #1 via `ask_agent`; all turns render in the chat.
 
-## Phase 3 — Ticket close + summarize → memory
+## Phase 3 — Ticket close + summarize → memory ✅ shipped
 
 11. **Close action** (human ends, or main agent marks resolved). On close:
     summarize the transcript, extract important details, write to the

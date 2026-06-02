@@ -27,10 +27,12 @@ won't trust a tool's self-declaration that it's safe — if a tool
 should re-prompt before firing, the integrator names it in
 ``destructive`` at registration time.
 
-What's intentionally out of scope for the first pass:
-  - HTTP and SSE transports (stdio + JSON-RPC over line-delimited
-    stdin/stdout is the protocol baseline; the other transports
-    layer on top of the same JSON-RPC envelope).
+Transports: ``StdioTransport`` (line-delimited JSON-RPC over stdin/stdout)
+and ``HttpTransport`` (Streamable-HTTP — captures/echoes ``Mcp-Session-Id``
+and parses the first SSE event when the server streams). ``build_transport``
+picks between them from the config.
+
+What's intentionally out of scope:
   - Server-initiated requests / sampling / notifications beyond
     the post-initialize ``initialized`` notification.
   - Resources (``resources/list``, ``resources/read``) — tools are

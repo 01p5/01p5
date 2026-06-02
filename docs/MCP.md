@@ -1,9 +1,9 @@
 # MCP — Model Context Protocol integration
 
 W9-10 headline feature. Olympus accepts a third-party MCP server as a
-tool source and makes its tools available to any agent — gated,
-audited, and rolled-back the same way native tools are. The deal is
-*"you wrote the server, we make it safe."*
+tool source and grafts its tools onto a **named target agent** — gated,
+audited, self-protection-checked, and rolled-back the same way native tools
+are. The deal is *"you wrote the server, we make it safe."*
 
 Two reference docs to read first:
 
@@ -55,7 +55,31 @@ Three things make this safe:
    look like any other agent tool to the runtime — every call goes
    through the audit log, destructive ones go through ApprovalHook,
    destructive file ops get rollback snapshots when the agent has
-   registered a snapshot fn.
+   registered a snapshot fn. Self-protection applies too: an MCP tool
+   targeting Olympus's own cluster/hosts is hard-denied before approval.
+4. **Tools register onto a specific `target_agent`, not globally.** A
+   server names the agent its tools graft onto (e.g. `sysadmin`); only that
+   agent gains them. The toolset is per-agent.
+
+### Declaring servers at startup — `OLYMPUS_MCP_SERVERS`
+
+The dashboard reads the `OLYMPUS_MCP_SERVERS` env var at boot: a JSON array of
+server descriptors that are wired before the first request. Each entry:
+
+```json
+[
+  {"name": "netdb", "target_agent": "sysadmin", "transport": "http",
+   "url": "http://<host>:8080/mcp",
+   "destructive": ["create_host", "delete_host", "create_zone", "delete_dns_record", "..."]},
+  {"name": "demo", "target_agent": "programmer", "transport": "stdio",
+   "command": "python3", "args": ["infra/demo-mcp-server/server.py"]}
+]
+```
+
+`transport` picks stdio (`command`/`args`/`env`) vs http (`url`/`headers` — the
+latter commonly carries `Authorization: Bearer ...`). Servers can also be added
+at runtime via `POST /mcp/servers`. A server that fails to connect lands as
+`status="error"` rather than crashing the dashboard.
 
 ## Worked example: the demo server
 
@@ -184,6 +208,20 @@ The `HttpTransport` captures the `Mcp-Session-Id` header from the
 per the MCP Streamable-HTTP spec. Responses with
 `Content-Type: text/event-stream` are parsed for the first SSE
 event (the response to the request); deeper streaming is deferred.
+
+### Production example: NetDB over HTTP
+
+The live demo wires **NetDB** (IPAM / DNS / DHCP) — ~32 tools — onto the
+**sysadmin** agent over HTTP MCP, via `OLYMPUS_MCP_SERVERS`. NetDB runs on a
+persistent server (its own Terraform state, separate from the cluster) and is
+authoritative for `lab.0lympu5.com`; an agent-created A record resolves publicly
+within seconds. Its read tools (get_*) stay ungated; ~23 write verbs
+(`create_host`, `delete_dns_record`, `create_zone`, `kea_sync_now`, …) are in the
+server's `destructive` list, so they queue an approval card. NetDB's `:8080`
+(no auth, write tools) is locked at the security-group level to the cluster's
+egress IPs — it must never be internet-open, since that would bypass Olympus's
+approval queue entirely. The dashboard's **MCP** page shows the NetDB card with
+its connected tool count.
 
 ### `register_mcp_tools(spec, config, client=None)`
 

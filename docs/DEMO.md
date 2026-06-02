@@ -6,8 +6,14 @@ and stacks on the prior section's state so the demo builds a story
 rather than jumping around.
 
 Designed to run end-to-end in **~15 minutes** against a fresh local
-clone — no live cluster required (the live deploy at
-`http://10.0.3.30/` predates W7-8 and isn't re-rolled).
+clone — no live cluster required. (The live deploy at
+<https://demo.0lympu5.com> has the full group-chat UI, auth, and admin
+accounting; this script runs locally in dev-bypass auth for simplicity.)
+
+The dashboard chat is a **group chat**: you talk to a `main` coordinator that
+dispatches subtasks to specialists (sysadmin / programmer / terraform / ansible /
+hpc) and narrates its reasoning as a live "thinking" trace. Keep that model in
+mind throughout — there's no "pick one agent" step anymore.
 
 ## Setup (1 min)
 
@@ -20,8 +26,8 @@ launch it later).
 git clone git@github.com:01p5/01p5.git && cd 01p5
 pip install -e libs/agentlib -e agents/olympus_cli \
             -e agents/sysadmin -e agents/programmer \
-            -e agents/terraform -e agents/ansible \
-            -e agents/dashboard
+            -e agents/terraform -e agents/ansible -e agents/hpc \
+            -e agents/main -e agents/dashboard
 export OPENAI_API_KEY=sk-...
 ```
 
@@ -50,22 +56,23 @@ In the Chat tab, type:
 
 > *"List the pods in the default namespace and tell me if any are not running."*
 
-What you'll narrate as it runs:
+What you'll narrate as it runs (all in one chat thread):
 
-1. The Bus sidebar on the left fires: `task` → `orchestrator`.
-2. The center bubble flips from "picking the right agent…" to
-   "running on sysadmin agent…" — that's the LLMRouter deciding.
-3. Sysadmin's `get_pods` tool runs, audit log on the right ticks up.
-4. The summary lands in the chat. The bubble shows the timestamp,
-   task-id chip, agent, and the cost chip (e.g. `$0.00043 · 1.2s`).
-5. The telemetry footer at the bottom of the layout ticks to
-   `1/1 tasks · $0.00043 spent`.
+1. The header reads "group chat · main agent coordinates specialists." The
+   `main` coordinator starts working — you'll see muted 💭 **thinking lines**
+   appear as it reasons ("I'll ask sysadmin for the pod list…").
+2. A **dispatch chip** (`main → sysadmin · …`) shows the coordinator handing the
+   subtask to the specialist. Sysadmin's `get_pods` runs as a **tool-call chip**.
+3. The coordinator reads the result (another thinking line), then posts its
+   plain-language reply in the thread. The telemetry footer ticks to
+   `1/1 tasks · $… spent`, and the per-agent breakdown shows `sysadmin: 1×`.
 
 **Talking points:**
-- "Every tool call hit the audit log — pre-execution + post — so
-  there's no `kubectl` we ran that isn't recorded."
-- "The cost chip + telemetry footer are live — every settled task
-  contributes."
+- "There's no router picking one agent — a coordinator runs the conversation and
+  pulls in specialists, narrating its reasoning live and interleaved with the
+  actual tool calls."
+- "Every tool call hit the audit log — pre-execution + post. And the turn's cost
+  *aggregates the specialist it dispatched*, not just the coordinator's tokens."
 
 ## Part 2 — Destructive flow + approval queue (2 min)
 
@@ -75,16 +82,16 @@ Now ask for something destructive:
 
 What to point at:
 
-1. Sysadmin agent investigates first (multiple `get_pods` calls in
-   the audit log).
-2. The Approval Queue panel in the right sidebar fires an
-   `sysadmin → delete_pod` card.
-3. **Don't click anything yet.** The center bubble shows
-   "awaiting your approval — see the right sidebar". The bus
-   sidebar shows the approval_request event.
-4. Click **Approve**. The agent's invocation resumes.
-5. Audit log gets a second `delete_pod` row, this time with
-   `approved=true` and the result.
+1. The coordinator dispatches to sysadmin, which investigates first
+   (`get_pods` tool-call chips).
+2. When it attempts `delete_pod`, an **inline approval card** appears right in
+   the chat transcript — `sysadmin → delete_pod`, with the rationale + args.
+3. **Don't click anything yet.** The card sits in-thread; the thinking
+   indicator shows "waiting for your approval."
+4. Click **Approve** on the card. The specialist's tool runs and the result
+   lands back in the thread.
+5. Audit log (the **Auditing** page) gets a second `delete_pod` row, this time
+   with `approved=true` and the result.
 
 **Talking points:**
 - "The agent literally cannot run `delete_pod` without a human
@@ -136,13 +143,12 @@ Now demo the feedback loop:
 
 ## Part 4 — Rollback execute (2 min)
 
-Switch to the Programmer tab. Click the **Dockerfile** generator,
-fill in a service name + image + port, and hit **save to file**.
-The approval queue fires for `write_file`; approve it. The Programmer
-writes the Dockerfile to disk.
+Open the **Capabilities** nav → **Programmer** sub-tab. Click the
+**Dockerfile** generator, fill in a service name + image + port, and hit
+**save to file**. The `write_file` approval card fires; approve it. The
+Programmer writes the Dockerfile to disk.
 
-Back to the right sidebar — the **Rollback queue** panel now shows
-one card:
+The **Rollback** panel now shows one card:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -233,13 +239,15 @@ Watch the chain:
 
 ## Part 6 — Cost + audit closing argument (1 min)
 
-Browse all four sidebar panels:
+Browse the relevant surfaces:
 
-- **Approval queue:** empty (nothing pending; we approved everything).
-- **Rollback queue:** the Dockerfile entry shows as **executed** (greyed).
-- **Audit log:** every tool call, with approval decision and result
-  truncated. This is the source of truth.
-- **Telemetry footer:** `N tasks · $X spent · avg $Y/task · K tokens · Ws wall · sysadmin: 3× · programmer: 2×`
+- **Chat thread:** the whole story is in one transcript — thinking lines,
+  dispatch chips, tool calls, the approved card, replies.
+- **Rollback panel:** the Dockerfile entry shows as **executed** (greyed).
+- **Auditing page:** every tool call, with approval decision and result. The
+  source of truth — click a row for full detail.
+- **Telemetry footer:** `N tasks · $X spent · … · sysadmin: 3× · programmer: 2× · main: 1×` — the per-agent breakdown comes from the cost sink.
+- *(On the live deploy, the **Admin** page rolls this into per-user daily spend + caps.)*
 
 **Closing talking points:**
 - "Everything an agent did is here. Approve, reject, rollback —
@@ -249,10 +257,14 @@ Browse all four sidebar panels:
 
 ## Total demo time: ~14 minutes
 
-Add a 1-minute "What's next" wrap (alpha-tester invites, the W7-8
-intelligence layer's open paths — better rollback for Terraform /
-Ansible verbs, MCP HTTP transport, multi-user RBAC) and you're in
-the 15-minute slot.
+Add a 1-minute "What's next" wrap and you're in the 15-minute slot. Things you
+can show on the **live** deploy (<https://demo.0lympu5.com>) that this local
+script skips: the **HPC** page (Slurm queue + GPU health), the **Hosts**
+inventory, the **Terminal** (in-browser SSH + a companion that reads the
+scrollback), **Sessions** (resume past tickets), and **NetDB over MCP** — ~32
+DNS/IPAM tools grafted onto sysadmin, with agent-created records resolving under
+`lab.0lympu5.com`. Self-protection means the agent *can't* manage the cluster it
+runs on, even if asked.
 
 ## Recovery cheat sheet (in case something flakes mid-demo)
 
@@ -264,12 +276,14 @@ the 15-minute slot.
 | Memory chips don't show up               | First similar task — there's no prior entry yet. Run the task once, then run a similar one. |
 | Rollback panel empty                     | Only successful destructive calls capture a rollback. A rejected call doesn't (correctly). |
 
-## What's NOT in the demo
+## What's NOT in this local script (but shipped)
 
-- Live cluster (10.0.3.30) — the deploy predates W7-8.
-- Terraform / Ansible live verb (no rollback snapshots declared yet
-  on those agents).
-- HTTP-transport MCP server.
+- The **live AWS deploy** (<https://demo.0lympu5.com>) with auth, admin
+  accounting, and the HPC/Hosts/Terminal/Sessions pages.
+- **HTTP-transport MCP** in production (NetDB) — this script uses the stdio toy
+  server; the HTTP transport is live on the deploy.
+- **Multi-user auth/RBAC** (Google OAuth + email OTP + per-user caps) — bypassed
+  locally, enforced on the deploy.
 
-These are all in the W9-10 follow-up list, not the shipped feature
-set.
+Genuinely not-yet-done: Ansible rollback snapshots (intentionally — a playbook
+*is* the operation) and MCP push-notifications (Phase 4, deferred).
