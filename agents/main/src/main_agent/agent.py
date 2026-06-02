@@ -29,6 +29,7 @@ from agentlib import (
     AgentContext,
     AgentResult,
     AgentSpec,
+    StreamingAgent,
     StructuralAgent,
     TaskMessage,
     cost_from_agent,
@@ -207,17 +208,6 @@ class MainAgent(AgentSpec):
                 )
             )
 
-        agent = StructuralAgent(
-            task_id=task.task_id,
-            ticket_id=ticket_id,
-            system_prompt=SYSTEM_PROMPT,
-            response_class=MainResponse,
-            model=self.model,
-            tools=tools,
-            agent_type=self.name,
-            budget_guard=getattr(ctx, "budget_guard", None),
-        )
-
         # Thread prior conversation so the agent has continuity within
         # the ticket (it's a group chat, not isolated one-shot tasks).
         history = _conversation_history(ticket_store, ticket_id, task.natural_language)
@@ -230,6 +220,24 @@ class MainAgent(AgentSpec):
         else:
             invoke_input = task.natural_language
 
+        # When a token_sink is wired (the chat path), stream the reply text
+        # to the UI as it generates. StreamingAgent runs raw-text (no
+        # structured MainResponse), so `resolved` is deferred — it isn't
+        # surfaced in the UI, and the manual Resolve button still works.
+        token_sink = getattr(ctx, "token_sink", None)
+        if token_sink is not None:
+            return self._handle_streaming(task, ctx, tools, invoke_input, token_sink)
+
+        agent = StructuralAgent(
+            task_id=task.task_id,
+            ticket_id=ticket_id,
+            system_prompt=SYSTEM_PROMPT,
+            response_class=MainResponse,
+            model=self.model,
+            tools=tools,
+            agent_type=self.name,
+            budget_guard=getattr(ctx, "budget_guard", None),
+        )
         started = time.monotonic()
         try:
             response: MainResponse = agent.invoke(invoke_input)
@@ -238,6 +246,54 @@ class MainAgent(AgentSpec):
                 status="success",
                 summary=response.reply,
                 artifacts={"resolved": response.resolved},
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
+            )
+        except Exception as exc:
+            return AgentResult(
+                task_id=task.task_id,
+                status="failed",
+                summary=f"Main agent raised {type(exc).__name__}: {exc}",
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
+            )
+        finally:
+            agent.cleanup()
+
+    def _handle_streaming(
+        self,
+        task: TaskMessage,
+        ctx: AgentContext,
+        tools: list,
+        invoke_input: str,
+        token_sink: Callable[[str], None],
+    ) -> AgentResult:
+        """Streaming variant of handle(): emit reply tokens to token_sink as
+        they generate, accumulate the full reply, preserve cost. cost_from_agent
+        works because StreamingAgent now tracks tokens/cost."""
+        ckpt = getattr(ctx, "checkpointer", None)
+        s_kwargs = {"checkpointer": ckpt} if ckpt is not None else {}
+        agent = StreamingAgent(
+            task_id=task.task_id,
+            system_prompt=SYSTEM_PROMPT,
+            model=self.model,
+            tools=tools,
+            agent_type=self.name,
+            **s_kwargs,
+        )
+        started = time.monotonic()
+        try:
+            tkey = task.ticket_id or task.task_id
+            reply = ""
+            for tok in agent.stream(invoke_input):
+                reply += tok
+                try:
+                    token_sink(tkey, tok)
+                except Exception:  # a UI sink hiccup must never break the run
+                    pass
+            return AgentResult(
+                task_id=task.task_id,
+                status="success",
+                summary=reply,
+                artifacts={"resolved": False},
                 cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
             )
         except Exception as exc:

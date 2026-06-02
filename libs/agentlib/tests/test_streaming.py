@@ -139,3 +139,28 @@ def test_invoke_returns_empty_when_messages_missing():
     sa = _make_streaming_agent()
     sa.agent.invoke.return_value = {}
     assert sa.invoke("hi") == ""
+
+
+def test_cost_tracking_from_token_counts():
+    """StreamingAgent now exposes total_token_counts/total_cost_breakdown so
+    cost_from_agent works on it (streaming the main reply mustn't drop cost)."""
+    from agentlib.models import gpt55, model_costs
+
+    sa = _make_streaming_agent(model=gpt55)
+    sa._input_tokens = 1000
+    sa._output_tokens = 500
+    assert sa.total_token_counts() == (1000, 500)
+
+    usd, breakdown = sa.total_cost_breakdown()
+    price = model_costs[gpt55]
+    expected = 1000 * price["input"] / 1_000_000 + 500 * price["output"] / 1_000_000
+    assert abs(usd - expected) < 1e-12
+    assert abs(breakdown["input_total"] - 1000 * price["input"] / 1_000_000) < 1e-12
+    assert breakdown["output"] == 500 * price["output"] / 1_000_000
+
+
+def test_cost_zero_when_model_pricing_unknown():
+    sa = _make_streaming_agent(model="openai:some-unpriced-model")
+    sa._input_tokens = 10
+    usd, _ = sa.total_cost_breakdown()
+    assert usd == 0.0

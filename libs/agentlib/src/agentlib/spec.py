@@ -155,6 +155,12 @@ class AgentContext:
     # breakdown (main + dispatched specialists), independent of the
     # aggregated-per-turn figure recorded for per-user accounting. None => no-op.
     cost_sink: Optional[Any] = None  # Callable[[str, CostBreakdown], None] | None
+    # Token sink for streaming the coordinator's reply to the UI as it
+    # generates. Called as ``(ticket_id, chunk)`` per text chunk — ticket-routed
+    # so it's safe on the shared ctx across concurrent turns. When set, the main
+    # agent runs in streaming mode (raw text) instead of the structured one-shot.
+    # None => non-streaming (the /tasks path, tests). Only the main agent uses it.
+    token_sink: Optional[Any] = None  # Callable[[str, str], None] | None
 
 
 class AgentSpec(ABC):

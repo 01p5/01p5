@@ -61,6 +61,10 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
   // all become first-class.
   const [urlSynced, setUrlSynced] = useState<boolean>(Boolean(initialTicketId));
   const [events, setEvents] = useState<TicketEventDTO[]>([]);
+  // Live, un-persisted reply text streamed token-by-token over /stream. Shown
+  // as a growing bubble while the turn is in flight; the persisted
+  // agent_message replaces it the instant it lands.
+  const [streamingReply, setStreamingReply] = useState("");
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -70,24 +74,39 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
   // Reset the transcript whenever the ticket changes (New button).
   useEffect(() => {
     setEvents([]);
+    setStreamingReply("");
   }, [ticketId]);
 
-  // Stick to bottom on new content.
+  // Stick to bottom on new content (incl. each streamed token).
   useEffect(() => {
     if (streamRef.current) {
       streamRef.current.scrollTop = streamRef.current.scrollHeight;
     }
-  }, [events]);
+  }, [events, streamingReply]);
 
   // Stream the ticket transcript. Events arrive in seq order; dedupe by
   // event_id so a reconnect (which replays from seq 0) doesn't double up.
   useSSE<TicketEventDTO>(`/tickets/${ticketId}/events`, (ev) => {
     if (!ev || !ev.event_id) return;
+    // A new human turn, or the main reply landing, ends the current stream:
+    // drop the live buffer so the persisted message is the single source.
+    if (ev.kind === "human_message" || (ev.kind === "agent_message" && ev.actor === "main")) {
+      setStreamingReply("");
+    }
     setEvents((prev) =>
       prev.some((e) => e.event_id === ev.event_id)
         ? prev
         : [...prev, ev].sort((a, b) => a.seq - b.seq),
     );
+  });
+
+  // Token stream of the main reply (ephemeral; not in the transcript). Each
+  // frame is {chunk}. Accumulate into the live bubble; cleared above when the
+  // persisted agent_message arrives.
+  useSSE<{ chunk?: string }>(`/tickets/${ticketId}/stream`, (ev) => {
+    if (ev && typeof ev.chunk === "string") {
+      setStreamingReply((prev) => prev + ev.chunk);
+    }
   });
 
   // AUD.5c: pending approvals for THIS ticket render inline at the end
@@ -230,7 +249,11 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
         {inlineApprovals.map((a) => (
           <InlineApprovalCard key={a.approval_id} approval={a} onResolved={refreshApprovals} />
         ))}
-        {awaitingReply && inlineApprovals.length === 0 && <ThinkingBubble label={workingLabel} />}
+        {awaitingReply && inlineApprovals.length === 0 && (
+          streamingReply
+            ? <StreamingBubble text={streamingReply} />
+            : <ThinkingBubble label={workingLabel} />
+        )}
       </div>
 
       {/* Composer */}
@@ -340,6 +363,25 @@ function ThinkingBubble({ label }: { label: string }): JSX.Element {
           ))}
         </span>
         <span className="font-mono">{label}</span>
+      </div>
+    </div>
+  );
+}
+
+// Live reply bubble — the main agent's text as it streams in, with a blinking
+// cursor. Replaced by the persisted agent_message (rich render) on finalize.
+function StreamingBubble({ text }: { text: string }): JSX.Element {
+  return (
+    <div className="flex gap-3" data-testid="streaming-reply">
+      <div className="shrink-0 w-8 h-8 rounded-full bg-accent-green/10 border border-accent-green/30 flex items-center justify-center">
+        <Sparkles size={15} className="text-accent-green" strokeWidth={2.25} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] font-mono uppercase tracking-[1px] text-accent-green mb-1">Main</div>
+        <div className="text-[13px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">
+          {text}
+          <span className="inline-block w-1.5 h-4 ml-0.5 align-text-bottom bg-accent-green/70 animate-pulse" aria-hidden />
+        </div>
       </div>
     </div>
   );
