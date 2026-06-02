@@ -147,12 +147,16 @@ class Orchestrator:
         # main) — prevents infinite recursion through ask_agent / dispatch.
         self._active_in_ticket: set[tuple[str, str]] = set()
         self._ticket_lock = threading.RLock()
-        # Per-turn cost accumulator. A chat turn is one synchronous worker
-        # thread, so a thread-local sink collects every agent's cost across
-        # the whole dispatch tree (main + specialists + ask_agent). The
-        # outermost dispatch_to(aggregate_cost=True) sums them so per-user
-        # accounting reflects sub-agent spend, not just the coordinator's.
-        self._cost_sink = threading.local()
+        # Per-turn cost accumulator, keyed by ticket_id. Collects every
+        # agent's cost across the whole dispatch tree (main + specialists +
+        # ask_agent) so the outermost dispatch_to(aggregate_cost=True) can sum
+        # them — per-user accounting then reflects sub-agent spend, not just
+        # the coordinator's. NOT thread-local: LangGraph runs tool calls (and
+        # thus nested dispatches) on a ThreadPoolExecutor, so the sub-agent
+        # runs on a different thread than the one that opened the turn. Every
+        # agent in a turn shares the ticket_id (the dispatcher preserves it),
+        # so we key on that and guard with the existing ticket lock.
+        self._turn_costs: dict[str, list[CostBreakdown]] = {}
         # Start with the catalog filtered against an empty prerequisite
         # set — agents with no prereqs are still in, anything that
         # depends on an MCP server is held out until the dashboard
@@ -414,11 +418,18 @@ class Orchestrator:
         ticket_id = task.ticket_id or task.task_id
         if with_memory:
             task = self._with_memory_context(task, agent=agent_name)
-        # Only the outermost aggregate_cost call owns the sink; nested
-        # dispatches just feed it via _run_in_ticket.
-        own_sink = aggregate_cost and getattr(self._cost_sink, "acc", None) is None
-        if own_sink:
-            self._cost_sink.acc = []
+        # Only the outermost aggregate_cost call owns the accumulator; nested
+        # dispatches just feed it via _run_in_ticket. Keyed by ticket_id so it
+        # survives the ThreadPoolExecutor hop into tool calls. (A second
+        # concurrent turn on the same ticket would find own_sink False and
+        # report coordinator-only — acceptable; turns on one ticket are
+        # sequential in practice.)
+        own_sink = False
+        if aggregate_cost:
+            with self._ticket_lock:
+                if ticket_id not in self._turn_costs:
+                    self._turn_costs[ticket_id] = []
+                    own_sink = True
         try:
             if announce:
                 self.bus.publish(
@@ -454,11 +465,14 @@ class Orchestrator:
             if own_sink:
                 # Replace the coordinator-only cost with the whole turn's
                 # cost (main + every specialist/ask_agent that ran).
-                result = replace(result, cost=_sum_costs(self._cost_sink.acc))
+                with self._ticket_lock:
+                    costs = list(self._turn_costs.get(ticket_id, []))
+                result = replace(result, cost=_sum_costs(costs))
             return result
         finally:
             if own_sink:
-                self._cost_sink.acc = None
+                with self._ticket_lock:
+                    self._turn_costs.pop(ticket_id, None)
 
     def _run_in_ticket(self, agent_name: str, task: TaskMessage) -> AgentResult:
         if agent_name not in self.agents:
@@ -484,11 +498,13 @@ class Orchestrator:
         try:
             ctx = self._ticket_ctx(ticket_id, agent_name)
             result = self.agents[agent_name].handle(task, ctx)
-            # Feed this agent's cost into the active per-turn sink (if any)
-            # so the outermost dispatch can aggregate main + sub-agents.
-            sink = getattr(self._cost_sink, "acc", None)
-            if sink is not None and result is not None and result.cost is not None:
-                sink.append(result.cost)
+            # Feed this agent's cost into the active per-turn accumulator (if
+            # any) so the outermost dispatch can aggregate main + sub-agents.
+            if result is not None and result.cost is not None:
+                with self._ticket_lock:
+                    acc = self._turn_costs.get(ticket_id)
+                    if acc is not None:
+                        acc.append(result.cost)
             return result
         finally:
             with self._ticket_lock:

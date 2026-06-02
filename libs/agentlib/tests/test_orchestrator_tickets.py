@@ -379,23 +379,61 @@ def test_dispatch_with_memory_prepends_prior_context():
 
 class _CostAgent(AgentSpec):
     """Returns a fixed cost; optionally dispatches to another agent first
-    (via the injected ctx.dispatcher) so we can exercise the dispatch tree."""
+    (via the injected ctx.dispatcher) so we can exercise the dispatch tree.
+
+    ``dispatch_in_thread`` runs the dispatch on a separate thread to mimic
+    LangGraph's ToolNode, which executes tool calls on a ThreadPoolExecutor —
+    so the sub-agent runs on a different thread than the one that opened the
+    turn. The per-turn cost accumulator must survive that hop (regression for
+    the thread-local bug that recorded coordinator-only cost in production)."""
 
     tools: Sequence[Any] = []
     destructive_verbs: set[str] = set()
 
-    def __init__(self, name: str, cost: CostBreakdown, dispatch_to: Optional[str] = None):
+    def __init__(
+        self,
+        name: str,
+        cost: CostBreakdown,
+        dispatch_to: Optional[str] = None,
+        dispatch_in_thread: bool = False,
+    ):
         self.name = name
         self.domain = "cost"
         self._cost = cost
         self._dispatch_to = dispatch_to
+        self._dispatch_in_thread = dispatch_in_thread
 
     def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
         if self._dispatch_to is not None:
-            ctx.dispatcher(self._dispatch_to, "subtask")  # runs the specialist
+            if self._dispatch_in_thread:
+                import concurrent.futures as _cf
+
+                with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+                    ex.submit(ctx.dispatcher, self._dispatch_to, "subtask").result()
+            else:
+                ctx.dispatcher(self._dispatch_to, "subtask")  # runs the specialist
         return AgentResult(
             task_id=task.task_id, status="success", summary=self.name, cost=self._cost
         )
+
+
+def test_aggregate_cost_survives_threadpool_dispatch():
+    """The real-world case: LangGraph runs the dispatch tool on a worker
+    thread, so the sub-agent runs off the turn's opening thread. The recorded
+    cost must still include it (this failed with a thread-local accumulator)."""
+    worker = _CostAgent("worker", CostBreakdown(total_usd=0.02, input_tokens=500))
+    main = _CostAgent(
+        "main",
+        CostBreakdown(total_usd=0.01, input_tokens=200),
+        dispatch_to="worker",
+        dispatch_in_thread=True,
+    )
+    orch = _orch([main, worker])
+
+    result = orch.dispatch_to("main", _task("go", "T1"), announce=False, aggregate_cost=True)
+
+    assert abs(result.cost.total_usd - 0.03) < 1e-9   # main + worker, cross-thread
+    assert result.cost.input_tokens == 700
 
 
 def test_aggregate_cost_sums_main_and_subagents():
