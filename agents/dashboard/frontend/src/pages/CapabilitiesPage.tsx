@@ -34,7 +34,7 @@ const EXTERNAL_PORTALS = [
 export function CapabilitiesPage(): JSX.Element {
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
-      <div className="px-6 pt-6 pb-3 flex items-baseline gap-4">
+      <div className="px-6 pt-6 pb-3 max-w-7xl mx-auto w-full flex items-baseline gap-4">
         <div className="flex items-baseline gap-3">
           <Wrench size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
           <h1 className="font-display text-xl font-semibold text-text-primary">Capabilities</h1>
@@ -80,7 +80,7 @@ export function CapabilitiesPage(): JSX.Element {
         </nav>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col max-w-7xl mx-auto w-full">
         <Outlet />
       </div>
     </section>
