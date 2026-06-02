@@ -154,9 +154,16 @@ class RedisStreamsBus:
 
     def subscribe(self, recipient: str, callback: Subscriber) -> None:
         stream = _stream_for(recipient)
+        # Resolve the stream's current end id *here*, in the caller's thread,
+        # before the consumer starts. Letting the consumer use "$" is racy: a
+        # publish landing between thread.start() and the thread's first XREAD
+        # would advance "$" past it and the message would be dropped. Pinning
+        # the start id synchronously closes that window — every message
+        # published after subscribe() returns is guaranteed to be delivered.
+        start_id = self._stream_end_id(stream)
         thread = threading.Thread(
             target=self._consume,
-            args=(stream, callback, recipient),
+            args=(stream, callback, recipient, start_id),
             name=f"bus-redis-sub:{recipient}",
             daemon=True,
         )
@@ -196,8 +203,27 @@ class RedisStreamsBus:
 
     # ----- internal -----
 
-    def _consume(self, stream: str, callback: Subscriber, recipient: str) -> None:
-        last_id = "$"  # only deliver messages produced after subscribe()
+    def _stream_end_id(self, stream: str) -> str:
+        """Current end id of ``stream``, resolved synchronously.
+
+        Used as a consumer's starting point so it only sees messages
+        published after ``subscribe()`` returns. If the stream does not
+        exist yet there is nothing to skip, so start at ``"0"`` (which then
+        only picks up future writes).
+        """
+        try:
+            info = self._client.xinfo_stream(stream)
+        except Exception:
+            return "0"
+        last = info.get("last-generated-id") if isinstance(info, dict) else None
+        if last is None:
+            return "0"
+        return last if isinstance(last, str) else last.decode()
+
+    def _consume(
+        self, stream: str, callback: Subscriber, recipient: str, start_id: str = "$"
+    ) -> None:
+        last_id = start_id  # only deliver messages produced after subscribe()
         while not self._stop.is_set():
             try:
                 resp = self._client.xread({stream: last_id}, block=_BLOCK_MS, count=64)
