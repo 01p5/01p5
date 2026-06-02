@@ -28,9 +28,9 @@ export function HPCPage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
-      <div className="px-6 py-3 border-b border-border-subtle flex items-baseline gap-3">
+      <div className="px-6 pt-6 pb-3 max-w-6xl mx-auto w-full flex items-baseline gap-3">
         <Cpu size={16} className="text-accent-green self-center" strokeWidth={2.25} />
-        <h1 className="font-display text-base font-semibold text-text-primary">HPC</h1>
+        <h1 className="font-display text-xl font-semibold text-text-primary">HPC</h1>
         <span className="text-[11px] font-mono text-text-muted">
           slurm scheduler + GPU health · powered by 2 MCP servers
         </span>

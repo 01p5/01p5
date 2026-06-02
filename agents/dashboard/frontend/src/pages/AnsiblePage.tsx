@@ -62,9 +62,9 @@ export function AnsiblePage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full">
-      <div className="px-6 py-3 border-b border-border-subtle flex items-baseline gap-3">
+      <div className="px-6 pt-6 pb-3 flex items-baseline gap-3">
         <ListChecks size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
-        <h1 className="font-display text-base font-semibold text-text-primary">Ansible</h1>
+        <h1 className="font-display text-xl font-semibold text-text-primary">Ansible</h1>
         <span className="text-[11px] font-mono text-text-muted">
           {playbooks?.length ?? "…"} playbook{playbooks?.length === 1 ? "" : "s"} discovered
         </span>

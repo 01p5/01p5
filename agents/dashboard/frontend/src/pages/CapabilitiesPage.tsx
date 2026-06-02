@@ -34,10 +34,10 @@ const EXTERNAL_PORTALS = [
 export function CapabilitiesPage(): JSX.Element {
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
-      <div className="px-6 py-3 border-b border-border-subtle flex items-baseline gap-4">
+      <div className="px-6 pt-6 pb-3 flex items-baseline gap-4">
         <div className="flex items-baseline gap-3">
           <Wrench size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
-          <h1 className="font-display text-base font-semibold text-text-primary">Capabilities</h1>
+          <h1 className="font-display text-xl font-semibold text-text-primary">Capabilities</h1>
           <span className="text-[11px] font-mono text-text-muted">
             direct agent control surfaces — kubectl · terraform · ansible · code-gen
           </span>

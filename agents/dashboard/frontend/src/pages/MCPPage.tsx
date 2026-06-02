@@ -27,10 +27,10 @@ export function MCPPage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary overflow-hidden">
-      <div className="px-6 py-3 border-b border-border-subtle">
+      <div className="px-6 pt-6 pb-3">
         <div className="flex items-baseline gap-3">
           <Plug size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
-          <h1 className="font-display text-base font-semibold text-text-primary">
+          <h1 className="font-display text-xl font-semibold text-text-primary">
             MCP servers
           </h1>
           <span className="text-[11px] font-mono text-text-muted">
