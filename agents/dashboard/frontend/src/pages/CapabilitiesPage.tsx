@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Server, Layers, ListChecks, Hammer, Wrench, Cpu, Activity, Database } from "lucide-react";
+import { Server, Layers, ListChecks, Hammer, Wrench, Cpu, Activity, Database, ExternalLink } from "lucide-react";
 import clsx from "clsx";
 
 const SUBTABS = [
@@ -8,13 +8,15 @@ const SUBTABS = [
   { to: "ansible",    label: "Ansible",    icon: ListChecks },
   { to: "programmer", label: "Programmer", icon: Hammer },
   { to: "hpc",        label: "HPC",        icon: Cpu },
-  // S2.D1 — embedded sibling portals. Each iframes the standalone
-  // slurm-mgr / gpu-watch dashboard via Olympus's reverse proxy.
-  // Health-gated at the page level (the nudge shows when the sub-pod
-  // isn't deployed), but the chip itself stays visible — gating its
-  // visibility would need a separate /healthz poll in the CapabilitiesPage.
-  { to: "slurm",      label: "Slurm",      icon: Database },
-  { to: "gpu",        label: "GPU",        icon: Activity },
+];
+
+// Sibling dashboards (slurm-mgr / gpu-watch) run in their own pods and are
+// reverse-proxied under /slurm/ and /gpu/. They open in a NEW TAB rather than
+// embedding an iframe — cleaner than nesting a whole SPA inside the dashboard.
+// Same origin, so Olympus's session cookie carries through the proxy.
+const EXTERNAL_PORTALS = [
+  { href: "/slurm/", label: "Slurm", icon: Database },
+  { href: "/gpu/",   label: "GPU",   icon: Activity },
 ];
 
 /**
@@ -41,7 +43,7 @@ export function CapabilitiesPage(): JSX.Element {
           </span>
         </div>
         <div className="flex-1" />
-        <nav className="flex gap-1" data-testid="capabilities-subnav">
+        <nav className="flex gap-1 items-center" data-testid="capabilities-subnav">
           {SUBTABS.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
@@ -58,6 +60,22 @@ export function CapabilitiesPage(): JSX.Element {
               <Icon size={16} strokeWidth={2.5} />
               {label}
             </NavLink>
+          ))}
+          <span className="w-px h-5 bg-border-subtle mx-1" aria-hidden />
+          {EXTERNAL_PORTALS.map(({ href, label, icon: Icon }) => (
+            <a
+              key={href}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid={`portal-link-${label.toLowerCase()}`}
+              title={`Open the ${label} dashboard in a new tab`}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-md text-[12px] font-mono uppercase tracking-[1.5px] transition-colors border border-transparent text-text-secondary hover:text-text-primary"
+            >
+              <Icon size={16} strokeWidth={2.5} />
+              {label}
+              <ExternalLink size={12} strokeWidth={2.5} className="opacity-60" />
+            </a>
           ))}
         </nav>
       </div>

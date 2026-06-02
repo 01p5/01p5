@@ -44,6 +44,18 @@ describe("CapabilitiesPage", () => {
     });
   });
 
+  it("slurm + gpu are new-tab links (not iframed routes)", () => {
+    renderAt("/capabilities/kubernetes");
+    const nav = screen.getByTestId("capabilities-subnav");
+    for (const [testid, href] of [["portal-link-slurm", "/slurm/"], ["portal-link-gpu", "/gpu/"]]) {
+      const link = nav.querySelector(`[data-testid="${testid}"]`) as HTMLAnchorElement;
+      expect(link).not.toBeNull();
+      expect(link.getAttribute("href")).toBe(href);
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toContain("noopener");
+    }
+  });
+
   it("redirects /capabilities (no sub-tab) to kubernetes", () => {
     renderAt("/capabilities");
     expect(lastLocation).toBe("/capabilities/kubernetes");
