@@ -27,7 +27,7 @@ export function MCPPage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary overflow-hidden">
-      <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40">
+      <div className="px-6 py-3 border-b border-border-subtle">
         <div className="flex items-baseline gap-3">
           <Plug size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
           <h1 className="font-display text-base font-semibold text-text-primary">
@@ -287,7 +287,7 @@ function ToolRow({ tool, isDestructive, prefix }: ToolRowProps): JSX.Element {
         "mcp-tool rounded border px-3 py-2 text-[12px] font-mono",
         isDestructive
           ? "border-accent-yellow/40 bg-accent-yellow/[0.05]"
-          : "border-border-subtle bg-dark-secondary/40",
+          : "border-border-subtle",
       )}
     >
       <div className="flex items-baseline gap-2">

@@ -40,7 +40,7 @@ export function AdminPage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
-      <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40 flex items-baseline gap-3">
+      <div className="px-6 py-3 border-b border-border-subtle flex items-baseline gap-3">
         <ShieldCheck size={16} className="text-accent-purple self-center" strokeWidth={2.25} />
         <h1 className="font-display text-base font-semibold text-text-primary">Admin · Accounting</h1>
         <span className="text-[11px] font-mono text-text-muted">

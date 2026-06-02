@@ -171,7 +171,7 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
       <SessionsRail currentTicketId={ticketId} onNew={resetConversation} />
       <div className="flex flex-col min-h-0 flex-1 bg-dark-primary">
       {/* Header */}
-      <div className="px-6 py-3 border-b border-border-subtle flex items-center justify-between bg-dark-secondary/40">
+      <div className="px-6 py-3 border-b border-border-subtle flex items-center justify-between">
         <div className="flex items-baseline gap-3">
           <Sparkles size={16} className="text-accent-green self-center" strokeWidth={2.25} />
           <h1 className="font-display text-base font-semibold text-text-primary">
@@ -228,7 +228,7 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
       <form
         id="task-form"
         onSubmit={send}
-        className="border-t border-border-subtle bg-dark-secondary/40 px-6 py-4"
+        className="border-t border-border-subtle px-6 py-4"
       >
         <div className="max-w-4xl mx-auto flex gap-3">
           <input
@@ -394,7 +394,7 @@ function DispatchChip({ to, subtask }: { to: string; subtask: string }): JSX.Ele
   const accent = actorAccent(to);
   return (
     <div className="flex justify-center">
-      <div className="flex items-center gap-2 text-[11px] font-mono text-text-muted bg-dark-secondary/40 border border-border-subtle rounded-full px-3 py-1">
+      <div className="flex items-center gap-2 text-[11px] font-mono text-text-muted border border-border-subtle rounded-full px-3 py-1">
         <span className="text-accent-green">main</span>
         <ArrowRight size={11} />
         <span className={accent.text}>{to}</span>

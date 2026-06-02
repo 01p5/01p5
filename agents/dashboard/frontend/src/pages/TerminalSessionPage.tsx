@@ -131,7 +131,7 @@ export function TerminalSessionPage(): JSX.Element {
 
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
-      <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40 flex items-center gap-3">
+      <div className="px-6 py-3 border-b border-border-subtle flex items-center gap-3">
         <Link to="/terminal" className="flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-text-primary">
           <ArrowLeft size={14} strokeWidth={2.25} />
           Sessions

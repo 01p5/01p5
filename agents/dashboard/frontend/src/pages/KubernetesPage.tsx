@@ -65,7 +65,7 @@ export function KubernetesPage(): JSX.Element {
   return (
     <section className="flex flex-col min-h-0 h-full">
       {/* Page header */}
-      <div className="px-6 py-3 border-b border-border-subtle bg-dark-secondary/40 flex items-baseline gap-4">
+      <div className="px-6 py-3 border-b border-border-subtle flex items-baseline gap-4">
         <div className="flex items-baseline gap-3">
           <Server size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
           <h1 className="font-display text-base font-semibold text-text-primary">
