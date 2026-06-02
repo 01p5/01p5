@@ -430,6 +430,26 @@ def test_materialize_writes_inventory_and_keys(tmp_path):
     assert str(key_path) in inv_text
 
 
+def test_materialize_excludes_self_node_addresses(tmp_path):
+    """exclude_addresses drops the cluster/VM hosts Olympus runs on so they
+    never appear in the rendered inventory (self-protection belt-and-suspenders)."""
+    store = InMemoryInventoryStore()
+    store.add_host(name="cp", address="10.0.3.20", groups=["control"])
+    store.add_host(name="w1", address="10.0.3.21", groups=["workers"])
+    store.add_host(name="edge", address="203.0.113.9", groups=["edge"])
+
+    # Mixed case / port to confirm normalization on the exclusion side too.
+    result = materialize_run_dir(
+        store, tmp_path / "run",
+        exclude_addresses={"10.0.3.20", "10.0.3.21:22"},
+    )
+    inv_text = result.inventory_path.read_text("utf-8")
+    assert "edge ansible_host=203.0.113.9" in inv_text
+    assert "10.0.3.20" not in inv_text
+    assert "10.0.3.21" not in inv_text
+    assert "cp " not in inv_text and "w1 " not in inv_text
+
+
 def test_materialize_key_files_are_0600(tmp_path):
     store = InMemoryInventoryStore()
     k = store.add_key(name="k", content=_FAKE_KEY_A)

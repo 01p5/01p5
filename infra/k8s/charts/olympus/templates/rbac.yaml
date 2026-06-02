@@ -1,7 +1,16 @@
 {{- if .Values.rbac.create -}}
+# SELF-PROTECTION INVARIANT (do not loosen): this SA must NEVER be granted
+#   - any verb on `secrets` (would let an agent read its own creds), or
+#   - any write verb in apiGroup `rbac.authorization.k8s.io` (self-escalation).
+# It deliberately has neither below. This is the k8s-RBAC layer of the
+# self-management guard; the runtime agentlib.SelfProtectionPolicy is the other.
+#
 # Namespaced Role: pod/event/log read (and optional delete) within
 # the release namespace. The sysadmin agent's pod-facing tools all
 # scope to a single namespace argument, so this is the natural fit.
+# Note: the runtime policy also hard-denies delete_pod in the release
+# (self) + kube-system namespaces, so this Role + the policy are two
+# independent layers over the same action.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

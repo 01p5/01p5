@@ -145,6 +145,11 @@ class AgentContext:
     # Sysadmin's ssh_run tool resolves host aliases against it. None =>
     # agents fall back to their bundled/default inventory.
     inventory_store: Optional[Any] = None  # agentlib.InventoryStore | None
+    # Self-protection policy (config-driven). When set + enabled, the runtime
+    # tool-gate hard-denies any call that targets the cluster / VM hosts
+    # Olympus itself runs on — *before* approval, so a malicious user cannot
+    # approve their own self-escalation. None / disabled => no-op (dev/tests).
+    self_protection: Optional[Any] = None  # agentlib.SelfProtectionPolicy | None
 
 
 class AgentSpec(ABC):

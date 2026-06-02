@@ -66,6 +66,12 @@ hardening:
   demoMode: false                # OLYMPUS_DEMO_MODE — auto-rejects destructive verbs
   dailyCostCapUsd: ""            # OLYMPUS_DAILY_COST_CAP_USD — empty disables the global (all-users) cap
   defaultUserDailyLimitUsd: ""   # OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD — per-user daily cap when an admin hasn't set one. empty = none
+  # Self-protection: the agents are hard-blocked from managing the cluster / VM
+  # hosts Olympus runs on (steal-creds / self-escalation guard). The release
+  # namespace is always protected (injected via the downward API), regardless of
+  # this value. selfNodes lists the control-plane + worker IPs AND hostnames so
+  # ssh_run / ansible can't target them. Set from terraform/ansible at deploy.
+  selfNodes: ""                  # OLYMPUS_SELF_NODES — csv of self node IPs+hostnames. empty = namespace-only protection
 
 # MCP servers wired at startup (OLYMPUS_MCP_SERVERS, JSON array). Each
 # entry is the same shape POST /mcp/servers takes. Declaring them here
