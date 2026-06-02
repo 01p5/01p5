@@ -196,7 +196,11 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
       {/* CHAT.1: sessions rail on the left (ChatGPT/Claude-style).
           Click to switch tickets, "+ New" creates a fresh local id. */}
       <SessionsRail currentTicketId={ticketId} onNew={resetConversation} />
-      <div className="flex flex-col min-h-0 flex-1 bg-dark-primary">
+      {/* min-w-0: this flex-1 column must be allowed to shrink below its
+          widest child, else non-wrapping content (tool-call <pre> JSON, long
+          lines) forces the whole column past the viewport and clips the
+          composer. Standard flexbox overflow guard. */}
+      <div className="flex flex-col min-h-0 flex-1 min-w-0 bg-dark-primary">
       {/* Header */}
       <div className="px-6 py-3 border-b border-border-subtle flex items-center justify-between">
         <div className="flex items-baseline gap-3">
@@ -542,9 +546,9 @@ function ThinkingLine({ text }: { text: string }): JSX.Element {
   if (!text) return <></>;
   return (
     <div className="flex" data-testid="thinking-line">
-      <div className="flex items-start gap-2 pl-9 pr-4 text-[12px] italic leading-relaxed text-text-muted">
+      <div className="flex items-start gap-2 pl-9 pr-4 min-w-0 text-[12px] italic leading-relaxed text-text-muted">
         <Brain size={13} className="text-accent-green/50 shrink-0 mt-0.5 not-italic" strokeWidth={2} />
-        <span className="whitespace-pre-wrap break-words">{text}</span>
+        <span className="min-w-0 whitespace-pre-wrap break-words">{text}</span>
       </div>
     </div>
   );
