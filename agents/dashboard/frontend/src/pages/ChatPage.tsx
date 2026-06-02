@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2, ShieldAlert, X, ChevronDown } from "lucide-react";
+import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2, ShieldAlert, X, ChevronDown, Brain } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -61,6 +61,10 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
   // all become first-class.
   const [urlSynced, setUrlSynced] = useState<boolean>(Boolean(initialTicketId));
   const [events, setEvents] = useState<TicketEventDTO[]>([]);
+  // Live, un-persisted reply text streamed token-by-token over /stream. Shown
+  // as a growing bubble while the turn is in flight; the persisted
+  // agent_message replaces it the instant it lands.
+  const [streamingReply, setStreamingReply] = useState("");
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -70,24 +74,39 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
   // Reset the transcript whenever the ticket changes (New button).
   useEffect(() => {
     setEvents([]);
+    setStreamingReply("");
   }, [ticketId]);
 
-  // Stick to bottom on new content.
+  // Stick to bottom on new content (incl. each streamed token).
   useEffect(() => {
     if (streamRef.current) {
       streamRef.current.scrollTop = streamRef.current.scrollHeight;
     }
-  }, [events]);
+  }, [events, streamingReply]);
 
   // Stream the ticket transcript. Events arrive in seq order; dedupe by
   // event_id so a reconnect (which replays from seq 0) doesn't double up.
   useSSE<TicketEventDTO>(`/tickets/${ticketId}/events`, (ev) => {
     if (!ev || !ev.event_id) return;
+    // A new human turn, or the main reply landing, ends the current stream:
+    // drop the live buffer so the persisted message is the single source.
+    if (ev.kind === "human_message" || (ev.kind === "agent_message" && ev.actor === "main")) {
+      setStreamingReply("");
+    }
     setEvents((prev) =>
       prev.some((e) => e.event_id === ev.event_id)
         ? prev
         : [...prev, ev].sort((a, b) => a.seq - b.seq),
     );
+  });
+
+  // Token stream of the main reply (ephemeral; not in the transcript). Each
+  // frame is {chunk}. Accumulate into the live bubble; cleared above when the
+  // persisted agent_message arrives.
+  useSSE<{ chunk?: string }>(`/tickets/${ticketId}/stream`, (ev) => {
+    if (ev && typeof ev.chunk === "string") {
+      setStreamingReply((prev) => prev + ev.chunk);
+    }
   });
 
   // AUD.5c: pending approvals for THIS ticket render inline at the end
@@ -101,6 +120,14 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
   const inlineApprovals: PendingApproval[] = (allApprovals ?? [])
     .filter((a) => a.ticket_id === ticketId)
     .sort((a, b) => a.requested_at - b.requested_at);
+
+  // In-flight: the human has spoken but the main agent hasn't replied yet.
+  // Until the reply streams token-by-token, show a live "working…" affordance
+  // so a turn (esp. a simple one with no dispatches) doesn't look frozen.
+  const lastHumanSeq = Math.max(-1, ...events.filter((e) => e.kind === "human_message").map((e) => e.seq));
+  const lastMainReplySeq = Math.max(-1, ...events.filter((e) => e.kind === "agent_message" && e.actor === "main").map((e) => e.seq));
+  const awaitingReply = sending || lastHumanSeq > lastMainReplySeq;
+  const workingLabel = describeWork(events[events.length - 1], inlineApprovals.length > 0);
 
   const submit = async (text: string): Promise<void> => {
     const trimmed = text.trim();
@@ -169,7 +196,11 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
       {/* CHAT.1: sessions rail on the left (ChatGPT/Claude-style).
           Click to switch tickets, "+ New" creates a fresh local id. */}
       <SessionsRail currentTicketId={ticketId} onNew={resetConversation} />
-      <div className="flex flex-col min-h-0 flex-1 bg-dark-primary">
+      {/* min-w-0: this flex-1 column must be allowed to shrink below its
+          widest child, else non-wrapping content (tool-call <pre> JSON, long
+          lines) forces the whole column past the viewport and clips the
+          composer. Standard flexbox overflow guard. */}
+      <div className="flex flex-col min-h-0 flex-1 min-w-0 bg-dark-primary">
       {/* Header */}
       <div className="px-6 py-3 border-b border-border-subtle flex items-center justify-between">
         <div className="flex items-baseline gap-3">
@@ -222,6 +253,11 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
         {inlineApprovals.map((a) => (
           <InlineApprovalCard key={a.approval_id} approval={a} onResolved={refreshApprovals} />
         ))}
+        {awaitingReply && inlineApprovals.length === 0 && (
+          streamingReply
+            ? <StreamingBubble text={streamingReply} />
+            : <ThinkingBubble label={workingLabel} />
+        )}
       </div>
 
       {/* Composer */}
@@ -296,6 +332,65 @@ function EmptyChat({ onPick }: { onPick: (text: string) => void }): JSX.Element 
   );
 }
 
+// Derive a human "what's happening now" label from the latest event, shown
+// in the thinking bubble while a turn is in flight. Until the reply streams,
+// this is the user's progress signal.
+function describeWork(last: TicketEventDTO | undefined, hasPendingApproval: boolean): string {
+  if (hasPendingApproval) return "Waiting for your approval…";
+  if (!last) return "Main is thinking…";
+  const p = (last.payload ?? {}) as Record<string, unknown>;
+  switch (last.kind) {
+    case "dispatch": return `Dispatching to ${String(p.to ?? "a specialist")}…`;
+    case "tool_call": return `${last.actor} · ${String(p.tool ?? "running a tool")}…`;
+    case "agent_result": return "Main is synthesizing…";
+    case "agent_message": return last.actor === "main" ? "Main is thinking…" : "Main is synthesizing…";
+    default: return "Main is thinking…";
+  }
+}
+
+// Animated "working…" bubble — same lane as a main-agent message so it reads
+// as the reply forming. Removed the instant the agent_message arrives.
+function ThinkingBubble({ label }: { label: string }): JSX.Element {
+  return (
+    <div className="flex gap-3" data-testid="thinking">
+      <div className="shrink-0 w-8 h-8 rounded-full bg-accent-green/10 border border-accent-green/30 flex items-center justify-center">
+        <Sparkles size={15} className="text-accent-green" strokeWidth={2.25} />
+      </div>
+      <div className="flex items-center gap-2 text-[13px] text-text-secondary pt-1">
+        <span className="inline-flex gap-1" aria-hidden>
+          {[0, 150, 300].map((d) => (
+            <span
+              key={d}
+              className="w-1.5 h-1.5 rounded-full bg-accent-green/70 animate-bounce"
+              style={{ animationDelay: `${d}ms` }}
+            />
+          ))}
+        </span>
+        <span className="font-mono">{label}</span>
+      </div>
+    </div>
+  );
+}
+
+// Live reply bubble — the main agent's text as it streams in, with a blinking
+// cursor. Replaced by the persisted agent_message (rich render) on finalize.
+function StreamingBubble({ text }: { text: string }): JSX.Element {
+  return (
+    <div className="flex gap-3" data-testid="streaming-reply">
+      <div className="shrink-0 w-8 h-8 rounded-full bg-accent-green/10 border border-accent-green/30 flex items-center justify-center">
+        <Sparkles size={15} className="text-accent-green" strokeWidth={2.25} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[11px] font-mono uppercase tracking-[1px] text-accent-green mb-1">Main</div>
+        <div className="text-[13px] text-text-primary whitespace-pre-wrap break-words leading-relaxed">
+          {text}
+          <span className="inline-block w-1.5 h-4 ml-0.5 align-text-bottom bg-accent-green/70 animate-pulse" aria-hidden />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Dispatch each transcript event to the right presentation.
 function EventView({ event }: { event: TicketEventDTO }): JSX.Element | null {
   const p = (event.payload ?? {}) as Record<string, unknown>;
@@ -307,6 +402,8 @@ function EventView({ event }: { event: TicketEventDTO }): JSX.Element | null {
         return <InterAgentLine event={event} />;
       }
       return <AgentBubble actor={event.actor} text={payloadText(event)} status={p.status as string | undefined} />;
+    case "agent_thinking":
+      return <ThinkingLine text={payloadText(event)} />;
     case "agent_result":
       return (
         <AgentBubble
@@ -438,6 +535,22 @@ function ToolCallLine({ event }: { event: TicketEventDTO }): JSX.Element {
         {JSON.stringify({ args: p.args, result: p.result }, null, 2)}
       </pre>
     </details>
+  );
+}
+
+// A single live "thinking" step from the main agent — a muted, interleaved
+// trace line that lands between dispatches as the coordinator reasons. These
+// are persisted transcript events, so the reasoning trail survives reload and
+// reads chronologically alongside the dispatch chips and tool calls.
+function ThinkingLine({ text }: { text: string }): JSX.Element {
+  if (!text) return <></>;
+  return (
+    <div className="flex" data-testid="thinking-line">
+      <div className="flex items-start gap-2 pl-9 pr-4 min-w-0 text-[12px] italic leading-relaxed text-text-muted">
+        <Brain size={13} className="text-accent-green/50 shrink-0 mt-0.5 not-italic" strokeWidth={2} />
+        <span className="min-w-0 whitespace-pre-wrap break-words">{text}</span>
+      </div>
+    </div>
   );
 }
 

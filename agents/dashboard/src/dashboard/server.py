@@ -253,6 +253,12 @@ class DashboardServer:
         # by_agent reflects sub-agent spend. Session-scoped (in-memory), like
         # self._tasks; the durable per-user ledger lives in accounting.db.
         self._agent_telemetry: dict[str, dict] = {}
+        # Ephemeral per-ticket token-stream subscribers (GET /tickets/{id}/stream).
+        # The main agent's token_sink pushes reply chunks here; NOT persisted —
+        # the authoritative reply still lands once as an agent_message on the
+        # transcript. ticket_id -> list[queue.Queue].
+        self._stream_subs: dict[str, list] = {}
+        self._stream_lock = threading.Lock()
         self._mcp_lock = threading.Lock()
 
         # Subscribe an internal sink to mark tasks as completed when the
@@ -589,6 +595,8 @@ class DashboardServer:
                     rest = path[len("/tickets/"):]
                     if rest.endswith("/events"):
                         return outer._handle_ticket_events(self, rest[: -len("/events")])
+                    if rest.endswith("/stream"):
+                        return outer._serve_token_stream(self, rest[: -len("/stream")])
                     return outer._handle_get_ticket(self, rest)
                 if path == "/approvals":
                     return outer._handle_list_approvals(self)
@@ -2164,6 +2172,53 @@ class DashboardServer:
                     return
             time.sleep(0.6)
 
+    def _publish_stream(self, ticket_id: str, chunk: str) -> None:
+        """token_sink: fan a reply chunk out to this ticket's live /stream
+        subscribers. Best-effort + ephemeral — never persisted."""
+        with self._stream_lock:
+            subs = list(self._stream_subs.get(ticket_id, []))
+        for q in subs:
+            try:
+                q.put_nowait(chunk)
+            except Exception:
+                pass
+
+    def _serve_token_stream(self, req: BaseHTTPRequestHandler, ticket_id: str) -> None:
+        """SSE of the main agent's reply tokens for a ticket as they generate.
+        Ephemeral: the persisted transcript still carries the final reply as a
+        single agent_message; the frontend swaps the live buffer for it."""
+        import queue as _queue
+
+        q: "_queue.Queue[str]" = _queue.Queue()
+        with self._stream_lock:
+            self._stream_subs.setdefault(ticket_id, []).append(q)
+
+        req.send_response(200)
+        req.send_header("Content-Type", "text/event-stream")
+        req.send_header("Cache-Control", "no-cache")
+        req.send_header("X-Accel-Buffering", "no")
+        req.end_headers()
+        last_heartbeat = time.monotonic()
+        try:
+            while True:
+                try:
+                    chunk = q.get(timeout=1.0)
+                    req.wfile.write(f"data: {json.dumps({'chunk': chunk})}\n\n".encode())
+                    req.wfile.flush()
+                except _queue.Empty:
+                    if time.monotonic() - last_heartbeat > 15.0:
+                        req.wfile.write(b": heartbeat\n\n")
+                        req.wfile.flush()
+                        last_heartbeat = time.monotonic()
+        except (ConnectionError, BrokenPipeError, OSError):
+            pass  # client disconnected
+        finally:
+            with self._stream_lock:
+                try:
+                    self._stream_subs.get(ticket_id, []).remove(q)
+                except ValueError:
+                    pass
+
     def _serve_sse(
         self, req: BaseHTTPRequestHandler, task_filter: Optional[str]
     ) -> None:
@@ -2463,6 +2518,9 @@ def build_default_server(
     # lazily at run time, so mutating the shared ctx after construction is
     # safe and avoids a chicken-and-egg with the server instance.
     ctx.cost_sink = server._record_agent_cost
+    # Wire reply-token streaming: the main agent emits (ticket_id, chunk) to
+    # this sink, which fans out to the ticket's /stream SSE subscribers.
+    ctx.token_sink = server._publish_stream
     return server
 
 

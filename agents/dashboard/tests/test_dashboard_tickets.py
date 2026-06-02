@@ -133,6 +133,35 @@ def _wait(predicate, timeout=5.0):
     return False
 
 
+def _wait_turn_settled(store, ticket_id, timeout=5.0):
+    """Wait until a coordinator turn has FULLY settled: its success reply is
+    recorded AND no further events are still landing.
+
+    A turn that dispatches publishes the dispatch + specialist result on the
+    bus, which the dashboard projects into ticket events asynchronously. So
+    just waiting for ``len >= 2`` can return on ``[human, dispatch]`` while the
+    reply + result projections are still in flight — and if the test then
+    closes the ticket, those late events land after the closure event and the
+    "closed" message is no longer last (flaky). Require the success reply to be
+    present and the event count to be quiescent across two polls before acting.
+    """
+    deadline = time.monotonic() + timeout
+    prev = -1
+    while time.monotonic() < deadline:
+        events = store.transcript(ticket_id)
+        has_reply = any(
+            e.kind == "agent_message"
+            and e.actor == "main"
+            and (e.payload or {}).get("status") == "success"
+            for e in events
+        )
+        if has_reply and len(events) == prev:
+            return True
+        prev = len(events)
+        time.sleep(0.05)
+    return False
+
+
 # ---- HTTP endpoint behavior ----
 
 def test_post_message_records_human_main_and_dispatch(ticket_server):
@@ -226,7 +255,9 @@ def test_endpoints_404_when_group_chat_disabled():
 def test_close_ticket_endpoint_records_closure(ticket_server):
     srv, store = ticket_server
     _post(srv, "/tickets/TC/messages", {"message": "do it"})
-    assert _wait(lambda: len(store.transcript("TC")) >= 2)
+    # Let the whole turn settle (reply + async dispatch/result projections)
+    # before closing, so the closure event is genuinely last.
+    assert _wait_turn_settled(store, "TC")
 
     status, body = _post(srv, "/tickets/TC/close", {})
     assert status == 200

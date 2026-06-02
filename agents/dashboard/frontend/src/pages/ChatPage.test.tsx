@@ -25,17 +25,21 @@ function renderChat(initialTicketId?: string): void {
   );
 }
 
-// EventSource stub shared by all tests; tests grab .latest to push events.
+// EventSource stub. ChatPage opens two streams (/events transcript +
+// /stream tokens), so route by URL rather than "the latest one".
 class MockEventSource {
   url: string;
   onmessage: ((ev: MessageEvent<string>) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
-  static latest: MockEventSource | null = null;
+  static instances: MockEventSource[] = [];
   constructor(url: string) {
     this.url = url;
-    MockEventSource.latest = this;
+    MockEventSource.instances.push(this);
   }
   close(): void {}
+  static byUrl(substr: string): MockEventSource | undefined {
+    return [...MockEventSource.instances].reverse().find((s) => s.url.includes(substr));
+  }
 }
 
 let seq = 0;
@@ -54,15 +58,23 @@ function mkEvent(over: Partial<TicketEventDTO>): TicketEventDTO {
 }
 
 async function push(ev: TicketEventDTO): Promise<void> {
-  const src = MockEventSource.latest!;
+  const src = MockEventSource.byUrl("/events")!;
   await act(async () => {
     src.onmessage?.({ data: JSON.stringify(ev) } as MessageEvent<string>);
   });
 }
 
+// Push a token chunk on the /stream channel.
+async function pushChunk(chunk: string): Promise<void> {
+  const src = MockEventSource.byUrl("/stream")!;
+  await act(async () => {
+    src.onmessage?.({ data: JSON.stringify({ chunk }) } as MessageEvent<string>);
+  });
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
-  MockEventSource.latest = null;
+  MockEventSource.instances = [];
   seq = 0;
   vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
   // AUD.5c: ChatPage polls /approvals so it can render inline cards
@@ -134,12 +146,12 @@ describe("ChatPage — submission", () => {
 
     const resolve = screen.getByRole("button", { name: /resolve/i });
     expect(resolve).not.toBeDisabled();
-    const firstUrl = MockEventSource.latest!.url;
+    const firstUrl = MockEventSource.byUrl("/events")!.url;
     await act(async () => { await userEvent.click(resolve); });
 
     expect(close).toHaveBeenCalledWith(expect.any(String));
     await waitFor(() => expect(screen.queryByText("hello")).not.toBeInTheDocument());
-    expect(MockEventSource.latest!.url).not.toBe(firstUrl);
+    expect(MockEventSource.byUrl("/events")!.url).not.toBe(firstUrl);
   });
 
   it("Resolve button is disabled on an empty transcript", () => {
@@ -153,11 +165,11 @@ describe("ChatPage — submission", () => {
     await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hello" } }));
     expect(screen.getByText("hello")).toBeInTheDocument();
 
-    const firstUrl = MockEventSource.latest!.url;
+    const firstUrl = MockEventSource.byUrl("/events")!.url;
     await userEvent.click(screen.getByRole("button", { name: /^New$/i }));
     await waitFor(() => expect(screen.queryByText("hello")).not.toBeInTheDocument());
     // A new ticket id => a new SSE url.
-    expect(MockEventSource.latest!.url).not.toBe(firstUrl);
+    expect(MockEventSource.byUrl("/events")!.url).not.toBe(firstUrl);
   });
 });
 
@@ -173,6 +185,54 @@ describe("ChatPage — transcript rendering", () => {
     await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "on it" } }));
     expect(screen.getByText("on it")).toBeInTheDocument();
     expect(screen.getByText(/^Main$/)).toBeInTheDocument();
+  });
+
+  it("shows a thinking indicator after a human turn, clears on the main reply", async () => {
+    renderChat();
+    // Human spoke, no main reply yet → thinking bubble appears.
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "do a thing" } }));
+    expect(screen.getByTestId("thinking")).toBeInTheDocument();
+    expect(screen.getByText(/Main is thinking/)).toBeInTheDocument();
+    // A dispatch updates the label but keeps the indicator while working.
+    await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "x" } }));
+    expect(screen.getByTestId("thinking")).toBeInTheDocument();
+    expect(screen.getByText(/Dispatching to sysadmin/)).toBeInTheDocument();
+    // Main's reply lands → indicator gone.
+    await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "done" } }));
+    expect(screen.queryByTestId("thinking")).toBeNull();
+  });
+
+  it("streams the reply token-by-token, then the persisted message replaces it", async () => {
+    renderChat();
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "hi" } }));
+    // Tokens arrive on /stream → a growing live bubble (not the thinking dots).
+    await pushChunk("Hel");
+    await pushChunk("lo there");
+    expect(screen.getByTestId("streaming-reply")).toBeInTheDocument();
+    expect(screen.getByTestId("streaming-reply").textContent).toContain("Hello there");
+    expect(screen.queryByTestId("thinking")).toBeNull();
+    // The persisted agent_message lands → live bubble gone, final text shown.
+    await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "Hello there" } }));
+    expect(screen.queryByTestId("streaming-reply")).toBeNull();
+    expect(screen.queryByTestId("thinking")).toBeNull();
+  });
+
+  it("renders interleaved thinking lines between dispatches", async () => {
+    renderChat();
+    await push(mkEvent({ kind: "human_message", actor: "human", payload: { text: "what nodes?" } }));
+    // A thinking step lands as a persisted, interleaved trace line.
+    await push(mkEvent({ kind: "agent_thinking", actor: "main", payload: { text: "I'll ask sysadmin for the node list" } }));
+    expect(screen.getByText("I'll ask sysadmin for the node list")).toBeInTheDocument();
+    expect(screen.getAllByTestId("thinking-line").length).toBe(1);
+    // It interleaves with a following dispatch chip (both visible at once).
+    await push(mkEvent({ kind: "dispatch", actor: "main", payload: { to: "sysadmin", subtask: "get nodes" } }));
+    await push(mkEvent({ kind: "agent_thinking", actor: "main", payload: { text: "sysadmin found 2 nodes" } }));
+    expect(screen.getAllByTestId("thinking-line").length).toBe(2);
+    expect(screen.getByText("sysadmin found 2 nodes")).toBeInTheDocument();
+    // The reasoning trail persists alongside the final reply.
+    await push(mkEvent({ kind: "agent_message", actor: "main", payload: { text: "There are 2 nodes." } }));
+    expect(screen.getAllByTestId("thinking-line").length).toBe(2);
+    expect(screen.getByText("There are 2 nodes.")).toBeInTheDocument();
   });
 
   it("renders a dispatch chip and a specialist result", async () => {
