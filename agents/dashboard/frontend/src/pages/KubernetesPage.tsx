@@ -42,7 +42,10 @@ interface EventRow {
  */
 export function KubernetesPage(): JSX.Element {
   const [tab, setTab] = useState<Tab>("pods");
-  const [namespace, setNamespace] = useState("default");
+  // Default to Olympus's own namespace rather than "default" — that's where
+  // the dashboard, agents, and the workloads they manage actually run, so the
+  // view isn't empty on first load. Editable via the namespace box.
+  const [namespace, setNamespace] = useState("olympus");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [tick, setTick] = useState(0);
 
