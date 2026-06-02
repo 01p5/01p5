@@ -370,3 +370,64 @@ def test_dispatch_with_memory_prepends_prior_context():
     seen_nl = main.seen_tasks[-1].natural_language
     assert "disk space again" in seen_nl
     assert "node-3 at 92%" in seen_nl  # prior outcome retrieved from memory
+
+
+# ---------------------------------------------------------------------------
+# Per-turn cost aggregation: a chat turn's recorded cost must include the
+# specialists the main agent dispatched, not just the coordinator's tokens.
+# ---------------------------------------------------------------------------
+
+class _CostAgent(AgentSpec):
+    """Returns a fixed cost; optionally dispatches to another agent first
+    (via the injected ctx.dispatcher) so we can exercise the dispatch tree."""
+
+    tools: Sequence[Any] = []
+    destructive_verbs: set[str] = set()
+
+    def __init__(self, name: str, cost: CostBreakdown, dispatch_to: Optional[str] = None):
+        self.name = name
+        self.domain = "cost"
+        self._cost = cost
+        self._dispatch_to = dispatch_to
+
+    def handle(self, task: TaskMessage, ctx: AgentContext) -> AgentResult:
+        if self._dispatch_to is not None:
+            ctx.dispatcher(self._dispatch_to, "subtask")  # runs the specialist
+        return AgentResult(
+            task_id=task.task_id, status="success", summary=self.name, cost=self._cost
+        )
+
+
+def test_aggregate_cost_sums_main_and_subagents():
+    worker = _CostAgent(
+        "worker",
+        CostBreakdown(total_usd=0.02, input_tokens=500, output_tokens=50, wall_seconds=3.0),
+    )
+    main = _CostAgent(
+        "main",
+        CostBreakdown(total_usd=0.01, input_tokens=200, output_tokens=20, wall_seconds=5.0),
+        dispatch_to="worker",
+    )
+    orch = _orch([main, worker])
+
+    result = orch.dispatch_to("main", _task("go", "T1"), announce=False, aggregate_cost=True)
+
+    # money + tokens summed across main + worker; wall_seconds is the max
+    # (main's invoke runs the worker synchronously inside its own wall clock).
+    assert abs(result.cost.total_usd - 0.03) < 1e-9
+    assert result.cost.input_tokens == 700
+    assert result.cost.output_tokens == 70
+    assert result.cost.wall_seconds == 5.0
+
+
+def test_without_aggregate_cost_reports_main_only():
+    worker = _CostAgent("worker", CostBreakdown(total_usd=0.02, input_tokens=500))
+    main = _CostAgent(
+        "main", CostBreakdown(total_usd=0.01, input_tokens=200), dispatch_to="worker"
+    )
+    orch = _orch([main, worker])
+
+    result = orch.dispatch_to("main", _task("go", "T2"), announce=False)
+
+    assert result.cost.total_usd == 0.01      # coordinator only
+    assert result.cost.input_tokens == 200

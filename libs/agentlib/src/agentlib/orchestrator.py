@@ -147,6 +147,12 @@ class Orchestrator:
         # main) — prevents infinite recursion through ask_agent / dispatch.
         self._active_in_ticket: set[tuple[str, str]] = set()
         self._ticket_lock = threading.RLock()
+        # Per-turn cost accumulator. A chat turn is one synchronous worker
+        # thread, so a thread-local sink collects every agent's cost across
+        # the whole dispatch tree (main + specialists + ask_agent). The
+        # outermost dispatch_to(aggregate_cost=True) sums them so per-user
+        # accounting reflects sub-agent spend, not just the coordinator's.
+        self._cost_sink = threading.local()
         # Start with the catalog filtered against an empty prerequisite
         # set — agents with no prereqs are still in, anything that
         # depends on an MCP server is held out until the dashboard
@@ -388,6 +394,7 @@ class Orchestrator:
         requested_by: str = "main",
         announce: bool = True,
         with_memory: bool = False,
+        aggregate_cost: bool = False,
     ) -> AgentResult:
         """Run ``agent_name`` on ``task`` within its ticket and return the
         result. When ``announce`` (the default), the dispatch and result are
@@ -395,42 +402,63 @@ class Orchestrator:
 
         ``with_memory`` prepends prior-run context (the same retrieval the
         router path uses) to the task — used for the main agent's opening
-        turn so a new ticket benefits from closed ones."""
+        turn so a new ticket benefits from closed ones.
+
+        ``aggregate_cost`` (set only on the outermost call — the chat turn's
+        main dispatch) replaces the returned result's ``cost`` with the sum
+        across every agent that ran during the turn (main + dispatched
+        specialists + ask_agent), so per-user accounting captures sub-agent
+        spend. Money/tokens are summed; ``wall_seconds`` is the max, since the
+        coordinator's invoke runs sub-dispatches synchronously inside its own
+        wall clock (summing would double-count)."""
         ticket_id = task.ticket_id or task.task_id
         if with_memory:
             task = self._with_memory_context(task, agent=agent_name)
-        if announce:
-            self.bus.publish(
-                new_message(
-                    task_id=task.task_id,
-                    sender=requested_by,
-                    recipient="*",
-                    kind="task",
-                    payload={"to": agent_name, "subtask": task.natural_language},
-                    ticket_id=ticket_id,
+        # Only the outermost aggregate_cost call owns the sink; nested
+        # dispatches just feed it via _run_in_ticket.
+        own_sink = aggregate_cost and getattr(self._cost_sink, "acc", None) is None
+        if own_sink:
+            self._cost_sink.acc = []
+        try:
+            if announce:
+                self.bus.publish(
+                    new_message(
+                        task_id=task.task_id,
+                        sender=requested_by,
+                        recipient="*",
+                        kind="task",
+                        payload={"to": agent_name, "subtask": task.natural_language},
+                        ticket_id=ticket_id,
+                    )
                 )
-            )
-        result = self._run_in_ticket(agent_name, task)
-        if announce:
-            self.bus.publish(
-                new_message(
-                    task_id=task.task_id,
-                    sender=agent_name,
-                    recipient="*",
-                    kind="result",
-                    payload={
-                        "agent": agent_name,
-                        "status": result.status,
-                        "summary": result.summary,
-                        # Carry the structured artifacts too, so the actual
-                        # data (e.g. a pod table in findings) reaches the
-                        # transcript/UI, not just the prose summary.
-                        "artifacts": result.artifacts or {},
-                    },
-                    ticket_id=ticket_id,
+            result = self._run_in_ticket(agent_name, task)
+            if announce:
+                self.bus.publish(
+                    new_message(
+                        task_id=task.task_id,
+                        sender=agent_name,
+                        recipient="*",
+                        kind="result",
+                        payload={
+                            "agent": agent_name,
+                            "status": result.status,
+                            "summary": result.summary,
+                            # Carry the structured artifacts too, so the actual
+                            # data (e.g. a pod table in findings) reaches the
+                            # transcript/UI, not just the prose summary.
+                            "artifacts": result.artifacts or {},
+                        },
+                        ticket_id=ticket_id,
+                    )
                 )
-            )
-        return result
+            if own_sink:
+                # Replace the coordinator-only cost with the whole turn's
+                # cost (main + every specialist/ask_agent that ran).
+                result = replace(result, cost=_sum_costs(self._cost_sink.acc))
+            return result
+        finally:
+            if own_sink:
+                self._cost_sink.acc = None
 
     def _run_in_ticket(self, agent_name: str, task: TaskMessage) -> AgentResult:
         if agent_name not in self.agents:
@@ -455,7 +483,13 @@ class Orchestrator:
             self._active_in_ticket.add(key)
         try:
             ctx = self._ticket_ctx(ticket_id, agent_name)
-            return self.agents[agent_name].handle(task, ctx)
+            result = self.agents[agent_name].handle(task, ctx)
+            # Feed this agent's cost into the active per-turn sink (if any)
+            # so the outermost dispatch can aggregate main + sub-agents.
+            sink = getattr(self._cost_sink, "acc", None)
+            if sink is not None and result is not None and result.cost is not None:
+                sink.append(result.cost)
+            return result
         finally:
             with self._ticket_lock:
                 self._active_in_ticket.discard(key)
@@ -574,6 +608,21 @@ def _default_checkpointer() -> Any:
     from langgraph.checkpoint.memory import InMemorySaver
 
     return InMemorySaver()
+
+
+def _sum_costs(costs: list[CostBreakdown]) -> CostBreakdown:
+    """Aggregate a turn's per-agent costs. Money + tokens sum; wall_seconds
+    is the max (the coordinator's invoke runs sub-dispatches synchronously
+    inside its own wall clock, so summing would double-count)."""
+    total = CostBreakdown()
+    for c in costs:
+        if c is None:
+            continue
+        total.total_usd += c.total_usd
+        total.input_tokens += c.input_tokens
+        total.output_tokens += c.output_tokens
+        total.wall_seconds = max(total.wall_seconds, c.wall_seconds)
+    return total
 
 
 def _result_relay_text(result: AgentResult) -> str:

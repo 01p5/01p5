@@ -422,8 +422,12 @@ class DashboardServer:
                 # announce=False: the main agent's own turn is recorded as a
                 # single agent_message below, not as a dispatch+result pair.
                 # with_memory: pull context from prior closed tickets.
+                # aggregate_cost: the recorded per-user cost must include the
+                # specialists the main agent dispatched, not just the
+                # coordinator's own tokens (see _sum_costs in the orchestrator).
                 result = self.orchestrator.dispatch_to(
-                    "main", task, announce=False, with_memory=True
+                    "main", task, announce=False, with_memory=True,
+                    aggregate_cost=True,
                 )
                 payload = {
                     "text": result.summary,
