@@ -1116,6 +1116,7 @@ def _telemetry_server(agent: _CostAgent) -> DashboardServer:
         orchestrator=orch, bus=bus, approval_hook=QueueApprovalHook(),
         host="127.0.0.1", port=0,
     )
+    ctx.cost_sink = srv._record_agent_cost  # per-agent telemetry, as build_default_server does
     srv.serve()
     return srv
 

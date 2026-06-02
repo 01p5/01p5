@@ -417,6 +417,27 @@ class _CostAgent(AgentSpec):
         )
 
 
+def test_cost_sink_fires_per_agent_run_including_subagents():
+    """The per-agent telemetry sink must be called once for EACH agent that
+    runs in a turn — the coordinator and every dispatched specialist — so the
+    footer's by-agent breakdown isn't main-only."""
+    worker = _CostAgent("worker", CostBreakdown(total_usd=0.02, input_tokens=500))
+    main = _CostAgent(
+        "main", CostBreakdown(total_usd=0.01, input_tokens=200),
+        dispatch_to="worker", dispatch_in_thread=True,
+    )
+    orch = _orch([main, worker])
+    seen: list = []
+    orch.ctx.cost_sink = lambda agent, cost: seen.append((agent, cost.total_usd))
+
+    orch.dispatch_to("main", _task("go", "T1"), announce=False, aggregate_cost=True)
+
+    by_agent = dict(seen)
+    assert by_agent["worker"] == 0.02   # sub-agent reported
+    assert by_agent["main"] == 0.01     # coordinator reported
+    assert len(seen) == 2
+
+
 def test_aggregate_cost_survives_threadpool_dispatch():
     """The real-world case: LangGraph runs the dispatch tool on a worker
     thread, so the sub-agent runs off the turn's opening thread. The recorded

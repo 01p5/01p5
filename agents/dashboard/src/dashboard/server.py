@@ -248,6 +248,11 @@ class DashboardServer:
 
         self._tasks: dict[str, TaskRecord] = {}
         self._tasks_lock = threading.Lock()
+        # Per-agent cost telemetry — fed by the orchestrator's cost_sink once
+        # per agent run (main + dispatched specialists), so /telemetry's
+        # by_agent reflects sub-agent spend. Session-scoped (in-memory), like
+        # self._tasks; the durable per-user ledger lives in accounting.db.
+        self._agent_telemetry: dict[str, dict] = {}
         self._mcp_lock = threading.Lock()
 
         # Subscribe an internal sink to mark tasks as completed when the
@@ -331,6 +336,23 @@ class DashboardServer:
             input_tokens=rec.input_tokens, output_tokens=rec.output_tokens,
             wall_seconds=rec.wall_seconds, agent=rec.agent,
         )
+
+    def _record_agent_cost(self, agent: str, cost: Any) -> None:
+        """Per-agent telemetry sink (wired to the orchestrator's cost_sink).
+        Accumulates one bucket per agent across the session so the footer
+        shows main + each specialist that ran, not just the coordinator."""
+        if cost is None:
+            return
+        with self._tasks_lock:
+            b = self._agent_telemetry.setdefault(
+                agent or "unknown",
+                {"tasks": 0, "usd": 0.0, "input_tokens": 0, "output_tokens": 0, "wall_seconds": 0.0},
+            )
+            b["tasks"] += 1
+            b["usd"] += getattr(cost, "total_usd", 0.0) or 0.0
+            b["input_tokens"] += getattr(cost, "input_tokens", 0) or 0
+            b["output_tokens"] += getattr(cost, "output_tokens", 0) or 0
+            b["wall_seconds"] += getattr(cost, "wall_seconds", 0.0) or 0.0
 
     # ---- task submission (worker thread) ----
 
@@ -1341,15 +1363,12 @@ class DashboardServer:
         toward zero."""
         with self._tasks_lock:
             tasks = list(self._tasks.values())
+            # by_agent comes from the per-agent telemetry (fed once per agent
+            # run incl. dispatched specialists), NOT the task records — those
+            # attribute a whole chat turn to "main". Snapshot under the lock.
+            by_agent: dict[str, dict] = {a: dict(b) for a, b in self._agent_telemetry.items()}
         settled_statuses = {"success", "failed", "rejected", "cancelled"}
         settled = [t for t in tasks if t.status in settled_statuses]
-
-        def _add(into: dict, t: TaskRecord) -> None:
-            into["tasks"] = into.get("tasks", 0) + 1
-            into["usd"] = into.get("usd", 0.0) + (t.cost_usd or 0.0)
-            into["input_tokens"] = into.get("input_tokens", 0) + (t.input_tokens or 0)
-            into["output_tokens"] = into.get("output_tokens", 0) + (t.output_tokens or 0)
-            into["wall_seconds"] = into.get("wall_seconds", 0.0) + (t.wall_seconds or 0.0)
 
         totals: dict = {
             "tasks": len(tasks),
@@ -1359,7 +1378,6 @@ class DashboardServer:
             "output_tokens": 0,
             "wall_seconds": 0.0,
         }
-        by_agent: dict[str, dict] = {}
         by_status: dict[str, int] = {}
         for t in tasks:
             by_status[t.status] = by_status.get(t.status, 0) + 1
@@ -1368,9 +1386,6 @@ class DashboardServer:
             totals["input_tokens"] += t.input_tokens or 0
             totals["output_tokens"] += t.output_tokens or 0
             totals["wall_seconds"] += t.wall_seconds or 0.0
-            agent_key = t.agent or "unknown"
-            agent_bucket = by_agent.setdefault(agent_key, {})
-            _add(agent_bucket, t)
 
         recent = sorted(tasks, key=lambda t: t.submitted_at, reverse=True)[:10]
         recent_payload = [
@@ -2429,7 +2444,7 @@ def build_default_server(
     # + ALLOWED_DOMAINS + SESSION_SECRET via the olympus-secrets secret.
     auth_cfg = AuthConfig.from_env()
     authenticator = Authenticator(auth_cfg)
-    return DashboardServer(
+    server = DashboardServer(
         orchestrator=orch,
         bus=bus,
         approval_hook=approval_hook,
@@ -2444,6 +2459,11 @@ def build_default_server(
         accounting_store=accounting_store,
         default_user_daily_limit_usd=default_user_daily_limit_usd,
     )
+    # Wire per-agent cost telemetry: the orchestrator reads ctx.cost_sink
+    # lazily at run time, so mutating the shared ctx after construction is
+    # safe and avoids a chicken-and-egg with the server instance.
+    ctx.cost_sink = server._record_agent_cost
+    return server
 
 
 def _mcp_command_summary(config: Any) -> str:
