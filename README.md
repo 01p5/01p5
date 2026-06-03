@@ -4,6 +4,8 @@ Multi-agent DevOps system: one human, a coordinator, and a team of LLM specialis
 
 Built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford. Project domain: <https://0lympu5.com> (live demo: <https://demo.0lympu5.com>).
 
+> 📖 **Full documentation — including a guided quick-start and every configuration option — lives at [docs.01p5.com](https://docs.01p5.com).** Start there if you want to understand or reproduce the system.
+
 > The vibe-coding tools enable anyone to build anything they can imagine, but keeping it running is still a DevOps problem. Olympus is the smallest viable answer: built by one person, used by one person, to operate infrastructure that used to take a whole DevOps team.
 
 ```
@@ -270,6 +272,7 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 
 ## Further reading
 
+- 📖 [**docs.01p5.com**](https://docs.01p5.com) — the hosted documentation site: project intro, guided quick-start, and every configuration option.
 - [`PROJECT_PLAN.md`](PROJECT_PLAN.md) — the 10-week course plan, threat model, and what shipped.
 - [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md) — the `AgentSpec` contract every agent implements.
 - [`docs/SUBAGENTS_PLAN.md`](docs/SUBAGENTS_PLAN.md) — the group-chat / coordinator model.
@@ -278,6 +281,17 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 - [`docs/INTELLIGENCE_LAYER.md`](docs/INTELLIGENCE_LAYER.md) — memory + feedback + rollback + telemetry depth doc.
 - [`docs/MCP.md`](docs/MCP.md) — MCP integration walkthrough + worked example.
 - [`docs/DEMO.md`](docs/DEMO.md) — class-presentation script.
+
+## AI usage & attribution
+
+Per the CS 153 AI policy, this project was built with heavy use of AI tools, disclosed here.
+
+- **[@clawdyyy](https://github.com/clawdyyy)** is my dedicated AI account. Both the development assistant (Claude, via Claude Code) and the automation/evaluation agent (openclaw) act through it — so commits, PRs, and automated runs attributed to `@clawdyyy` are AI-authored work I directed and reviewed. I made the design decisions, set the scope, and reviewed every change before it landed.
+- AI was used across the project: writing and refactoring code, designing the agent/orchestrator architecture, authoring docs and tests, and driving the live deployment and end-to-end testing.
+
+## Prior work & attribution
+
+- **[Artemis](https://github.com/artemis-sysadmin/artemis)** — referenced for architectural patterns and prior art (see [`PROJECT_PLAN.md`](PROJECT_PLAN.md)). **Artemis is also my own project**, which I built independently; Olympus reuses ideas I developed there but is a separate, from-scratch implementation for this course. No third-party code was forked into this repository.
 
 ## License
 
