@@ -4,12 +4,12 @@ Multi-agent DevOps system: one human, a coordinator, and a team of LLM specialis
 
 Built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford. Project domain: <https://0lympu5.com> (live demo: <https://demo.0lympu5.com>).
 
-> 📖 **Full documentation — including a guided quick-start and every configuration option — lives at [docs.01p5.com](https://docs.01p5.com).** Start there if you want to understand or reproduce the system.
+> **Full documentation — including a guided quick-start and every configuration option — lives at [docs.01p5.com](https://docs.01p5.com).** Start there if you want to understand or reproduce the system.
 
 > The vibe-coding tools enable anyone to build anything they can imagine, but keeping it running is still a DevOps problem. Olympus is the smallest viable answer: built by one person, used by one person, to operate infrastructure that used to take a whole DevOps team.
 
 ```
-        ┌────────────────────────────────────────────────┐
+        ┌──────────────────────────────────────────────────┐
         │   Human interfaces                               │
         │   ─ Web dashboard (React, group chat)            │
         │   ─ CLI (olympus "...")                          │
@@ -30,8 +30,8 @@ Built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford. P
 
 Two interaction models share one orchestrator:
 
-- **CLI** — `olympus "..."` routes the task to *one* specialist via the `LLMRouter` and runs it to completion. Deterministic `--router=manual` keyword routing is available offline.
 - **Dashboard chat** — a **group-chat ticket**: the human, a `main` coordinator agent, and any specialists it pulls in are participants in one thread. `main` does no domain work itself; it `dispatch`es subtasks to specialists and `ask_agent`s them direct questions, narrating its reasoning as a live, interleaved "thinking" trace.
+- **CLI** — `olympus "..."` routes the task to *one* specialist via the `LLMRouter` and runs it to completion. Deterministic `--router=manual` keyword routing is available offline.
 
 ## Status
 
@@ -45,65 +45,6 @@ Two interaction models share one orchestrator:
 | Tests | **~1,200 total** — 393 frontend (vitest) + 800 backend (pytest) + 23 E2E (Playwright, opt-in). CI green on every push. |
 | Live deploy | **AWS**: kubeadm on EC2, Helm chart, fronted by TLS at <https://demo.0lympu5.com>. Provisioned/operated from a separate deployment repo; the in-repo `infra/` is the reference self-host path. |
 | Self-protection | Olympus cannot manage the Kubernetes namespace or the VM hosts it runs on — a config-driven policy hard-denies those calls before they reach the approval queue, so a user can't escalate by editing the system that gates them. |
-
-## Quick start
-
-### 1. Run the agent CLI locally (no cluster required)
-
-```bash
-# clone + install the SDK + CLI + specialists in editable mode
-git clone git@github.com:01p5/01p5.git && cd 01p5
-pip install -e libs/agentlib -e agents/olympus_cli \
-            -e agents/sysadmin -e agents/programmer \
-            -e agents/terraform -e agents/ansible -e agents/hpc
-
-# point at an LLM provider
-export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY=...
-
-# dispatch a task — the LLM router picks the specialist
-olympus "list pods in the default namespace"
-olympus "write me a Dockerfile for a python flask app on port 8080"
-olympus --router=manual "run terraform plan in infra/terraform/pve"
-```
-
-Output is the agent's structured `AgentResult` as JSON. Destructive verbs (`delete_pod`, `tf_apply`, `run_playbook`, `write_file`, `edit_file`, …) prompt on stdin for approval before they fire. The CLI loads the five routable specialists; the `main` coordinator + group chat are dashboard-only.
-
-### 2. Run the dashboard locally
-
-```bash
-# backend (HTTP API on :8765)
-pip install -e agents/dashboard
-python -m dashboard.server                # → http://localhost:8765/healthz
-
-# frontend (Vite dev server on :5173, proxies to :8765)
-cd agents/dashboard/frontend
-npm install
-npm run dev
-```
-
-Open <http://localhost:5173/>. With no auth configured the backend runs in a dev bypass (no login); the live deploy enforces Google OAuth / email OTP.
-
-### 3. Drive the live cluster
-
-The live system runs on AWS at <https://demo.0lympu5.com> (kubeadm on EC2, behind a TLS reverse proxy). See [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) for the runbook — endpoints, what's been exercised, known issues. For a turnkey deploy you can reproduce yourself, see the sandbox deployment repo.
-
-### 4. Run the test suite
-
-```bash
-# Backend — ~800 tests
-pytest libs/agentlib agents/sysadmin agents/programmer agents/terraform \
-       agents/ansible agents/hpc agents/main agents/dashboard \
-       agents/olympus_cli agents/terminal_companion
-
-# Frontend — 393 tests
-cd agents/dashboard/frontend && npm run test:run
-
-# E2E (live cluster required) — 23 tests, opt-in
-OLYMPUS_LIVE_E2E=1 KUBECONFIG=$HOME/.kube/config \
-    pytest agents/dashboard/tests/test_dashboard_e2e.py
-```
-
-CI runs the backend + frontend suites (each behind an 80% coverage gate) on every push (`.github/workflows/ci.yml`).
 
 ## Overview
 
