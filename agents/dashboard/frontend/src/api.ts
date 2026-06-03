@@ -115,6 +115,12 @@ export const api = {
   ): Promise<{ ticket_id: string; summary: string }> =>
     postJson(`/tickets/${encodeURIComponent(ticketId)}/close`, {}),
 
+  /** Emergency stop: cancel every agent running under this ticket. */
+  cancelTicket: (
+    ticketId: string,
+  ): Promise<{ ticket_id: string; cancelled: boolean }> =>
+    postJson(`/tickets/${encodeURIComponent(ticketId)}/cancel`, {}),
+
   // Approvals
   listApprovals: (): Promise<PendingApproval[]> => getJson("/approvals"),
   resolveApproval: (

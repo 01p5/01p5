@@ -439,6 +439,12 @@ class DashboardServer:
             submitted_at=rec.submitted_at, agent="main", status="running",
         )
 
+        # Reset any prior Stop so this new turn isn't dead-on-arrival.
+        try:
+            self.orchestrator.clear_cancel(ticket_id)
+        except AttributeError:
+            pass  # older orchestrator without cancellation
+
         def worker():
             task = TaskMessage(
                 task_id=inner_task_id,
@@ -672,6 +678,9 @@ class DashboardServer:
                 if self.path.startswith("/tickets/") and self.path.endswith("/close"):
                     inner = self.path[len("/tickets/"):-len("/close")]
                     return outer._handle_close_ticket(self, inner)
+                if self.path.startswith("/tickets/") and self.path.endswith("/cancel"):
+                    inner = self.path[len("/tickets/"):-len("/cancel")]
+                    return outer._handle_cancel_ticket(self, inner)
                 if self.path.startswith("/approvals/"):
                     return outer._handle_resolve_approval(
                         self, self.path[len("/approvals/"):]
@@ -1010,6 +1019,36 @@ class DashboardServer:
         self, req: BaseHTTPRequestHandler, ticket_id: str
     ) -> None:
         self._serve_ticket_sse(req, ticket_id)
+
+    def _handle_cancel_ticket(
+        self, req: BaseHTTPRequestHandler, ticket_id: str
+    ) -> None:
+        """Emergency stop: cancel every agent running under this ticket — the
+        coordinator and any in-flight specialists — and disable further
+        auto-dispatch. The in-flight turn unwinds at the next tool / dispatch /
+        ask_agent boundary; the next message clears the flag automatically."""
+        if self.ticket_store is None:
+            self._send_json(req, 404, {"error": "group chat not enabled"})
+            return
+        try:
+            self.orchestrator.cancel_ticket(ticket_id)
+        except AttributeError:
+            return self._send_json(req, 501, {"error": "cancellation not supported"})
+        # Record the stop on the transcript so the chat shows it settled.
+        try:
+            self.ticket_store.append(
+                TicketEvent(
+                    ticket_id=ticket_id,
+                    actor="main",
+                    kind="agent_message",
+                    payload={"text": "Stopped by user — all agents in this turn cancelled.",
+                             "status": "cancelled"},
+                    task_id=ticket_id,
+                )
+            )
+        except Exception:
+            logger.warning("cancel ticket %s: transcript append failed", ticket_id)
+        return self._send_json(req, 200, {"ticket_id": ticket_id, "cancelled": True})
 
     def _handle_close_ticket(
         self, req: BaseHTTPRequestHandler, ticket_id: str

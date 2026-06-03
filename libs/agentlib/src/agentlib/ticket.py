@@ -33,6 +33,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Protocol
 
+from .spec import CancelledError
+
 TicketKind = Literal[
     "human_message",
     "agent_message",
@@ -358,6 +360,8 @@ def make_ask_agent_tool(
             )
         try:
             answer = resolver(target_agent, question)
+        except CancelledError:
+            raise  # ticket stopped — let it unwind the asker's invoke
         except Exception as exc:  # never let a failed ask crash the asker
             answer = f"ask_agent error: {type(exc).__name__}: {exc}"
         if ticket_store is not None:

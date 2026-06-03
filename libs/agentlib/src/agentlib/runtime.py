@@ -21,6 +21,7 @@ from .spec import (
     AgentContext,
     AgentSpec,
     ApprovalDecision,
+    CancelledError,
 )
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,12 @@ def _wrap_one(
             )
 
     def gated(**kwargs: Any) -> Any:
+        # Cancellation: if the ticket was stopped (chat "Stop" button), abort
+        # before doing anything. Raising unwinds this agent's invoke instead of
+        # letting an in-flight specialist run another tool.
+        cancel = getattr(ctx, "cancel_token", None)
+        if cancel is not None and getattr(cancel, "is_set", None) and cancel.is_set():
+            raise CancelledError(f"{spec.name}.{inner.name} aborted: ticket cancelled")
         # Self-protection runs first — for destructive AND read-ish tools —
         # and hard-denies without ever reaching the approval hook or the
         # underlying tool. The deny is audited (approved=False) + mirrored

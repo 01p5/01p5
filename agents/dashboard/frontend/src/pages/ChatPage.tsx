@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2, ShieldAlert, X, ChevronDown, Brain } from "lucide-react";
+import { Send, Bot, User, Sparkles, AlertCircle, Plus, ArrowRight, Wrench, CheckCircle2, ShieldAlert, X, ChevronDown, Brain, OctagonX } from "lucide-react";
 import clsx from "clsx";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -184,6 +184,18 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
     }
   };
 
+  // Emergency stop: cancel every agent running under this ticket.
+  const [stopping, setStopping] = useState(false);
+  const onStop = async (): Promise<void> => {
+    setStopping(true);
+    try {
+      await api.cancelTicket(ticketId);
+    } catch { /* best-effort */ }
+    finally {
+      setStopping(false);
+    }
+  };
+
   const send = (e: React.FormEvent): void => {
     e.preventDefault();
     void submit(input);
@@ -216,6 +228,17 @@ export function ChatPage({ initialTicketId }: { initialTicketId?: string } = {})
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {awaitingReply && (
+            <button
+              onClick={() => void onStop()}
+              disabled={stopping}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-red border border-accent-red/50 hover:bg-accent-red/10 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Stop — cancel every agent running in this turn"
+            >
+              <OctagonX size={18} strokeWidth={2.5} className="text-accent-red" />
+              {stopping ? "Stopping…" : "Stop"}
+            </button>
+          )}
           <button
             onClick={() => void closeAndReset()}
             disabled={events.length === 0 || closing}

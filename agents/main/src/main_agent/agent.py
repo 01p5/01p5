@@ -31,6 +31,7 @@ from agentlib import (
     AgentContext,
     AgentResult,
     AgentSpec,
+    CancelledError,
     StreamingAgent,
     StructuralAgent,
     TaskMessage,
@@ -247,6 +248,8 @@ def make_dispatch_tool(*, dispatcher: Dispatcher) -> Any:
     def dispatch(agent_name: str, subtask: str) -> str:
         try:
             return dispatcher(agent_name, subtask)
+        except CancelledError:
+            raise  # ticket stopped — unwind the coordinator's invoke
         except Exception as exc:  # never let a failed dispatch crash the coordinator
             return f"dispatch error: {type(exc).__name__}: {exc}"
 
@@ -382,6 +385,13 @@ class MainAgent(AgentSpec):
                 artifacts={"resolved": response.resolved},
                 cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
             )
+        except CancelledError:
+            return AgentResult(
+                task_id=task.task_id,
+                status="cancelled",
+                summary="Stopped by user.",
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
+            )
         except Exception as exc:
             return AgentResult(
                 task_id=task.task_id,
@@ -457,6 +467,13 @@ class MainAgent(AgentSpec):
                 status="success",
                 summary=reply,
                 artifacts={"resolved": parser.resolved},
+                cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
+            )
+        except CancelledError:
+            return AgentResult(
+                task_id=task.task_id,
+                status="cancelled",
+                summary="Stopped by user.",
                 cost=cost_from_agent(agent, wall_seconds=time.monotonic() - started),
             )
         except Exception as exc:
