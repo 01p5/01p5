@@ -67,7 +67,6 @@ RUN apt-get update \
 # Source — copy after deps so layer cache survives most edits.
 COPY libs/agentlib libs/agentlib
 COPY agents agents
-COPY docs docs
 COPY PROJECT_PLAN.md PROJECT_PLAN.md
 # infra/terraform and infra/ansible let the dashboard's /stacks/* endpoints
 # enumerate stacks, and let the agents actually operate on them (cwd
