@@ -17,6 +17,14 @@ from typing import Any, Callable, Literal, Optional, Protocol, Sequence
 from langchain_core.tools import BaseTool
 
 
+class CancelledError(RuntimeError):
+    """Raised to abort an in-flight agent turn when its ticket is cancelled
+    (the chat "Stop" button). Propagates out of tool calls / dispatch /
+    ask_agent so the agent's invoke unwinds instead of continuing to loop.
+    Agent ``handle`` implementations should let it surface (or re-raise it)
+    rather than swallowing it as a generic error."""
+
+
 @dataclass
 class TaskMessage:
     task_id: str

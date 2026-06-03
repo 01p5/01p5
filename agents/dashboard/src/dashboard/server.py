@@ -439,6 +439,12 @@ class DashboardServer:
             submitted_at=rec.submitted_at, agent="main", status="running",
         )
 
+        # Reset any prior Stop so this new turn isn't dead-on-arrival.
+        try:
+            self.orchestrator.clear_cancel(ticket_id)
+        except AttributeError:
+            pass  # older orchestrator without cancellation
+
         def worker():
             task = TaskMessage(
                 task_id=inner_task_id,
@@ -672,6 +678,9 @@ class DashboardServer:
                 if self.path.startswith("/tickets/") and self.path.endswith("/close"):
                     inner = self.path[len("/tickets/"):-len("/close")]
                     return outer._handle_close_ticket(self, inner)
+                if self.path.startswith("/tickets/") and self.path.endswith("/cancel"):
+                    inner = self.path[len("/tickets/"):-len("/cancel")]
+                    return outer._handle_cancel_ticket(self, inner)
                 if self.path.startswith("/approvals/"):
                     return outer._handle_resolve_approval(
                         self, self.path[len("/approvals/"):]
@@ -693,6 +702,8 @@ class DashboardServer:
                     return outer._handle_post_host(self)
                 if self.path == "/inventory/keys":
                     return outer._handle_post_key(self)
+                if self.path == "/inventory/sync-terraform":
+                    return outer._handle_sync_terraform_inventory(self)
                 if self.path == "/terminal/sessions":
                     return outer._handle_post_terminal_session(self)
                 if self.path.startswith("/terminal/sessions/") and self.path.endswith("/ask"):
@@ -1008,6 +1019,51 @@ class DashboardServer:
         self, req: BaseHTTPRequestHandler, ticket_id: str
     ) -> None:
         self._serve_ticket_sse(req, ticket_id)
+
+    def _handle_cancel_ticket(
+        self, req: BaseHTTPRequestHandler, ticket_id: str
+    ) -> None:
+        """Emergency stop: cancel every agent running under this ticket — the
+        coordinator and any in-flight specialists — and disable further
+        auto-dispatch. The in-flight turn unwinds at the next tool / dispatch /
+        ask_agent boundary; the next message clears the flag automatically."""
+        if self.ticket_store is None:
+            self._send_json(req, 404, {"error": "group chat not enabled"})
+            return
+        try:
+            self.orchestrator.cancel_ticket(ticket_id)
+        except AttributeError:
+            return self._send_json(req, 501, {"error": "cancellation not supported"})
+        # A specialist parked INSIDE approval.request() is blocked waiting for a
+        # decision and won't see the cancel event — reject its pending approval
+        # so it unwinds (rejected) instead of lingering (or being approvable
+        # after a Stop). Then the coordinator's next dispatch hits the cancel.
+        rejected = 0
+        try:
+            for p in self.approval_hook.pending():
+                if getattr(p, "ticket_id", None) == ticket_id:
+                    if self.approval_hook.resolve(
+                        p.approval_id, approved=False, reason="cancelled by user (Stop)"
+                    ):
+                        rejected += 1
+        except Exception:
+            logger.warning("cancel ticket %s: rejecting pending approvals failed", ticket_id)
+        # Record the stop on the transcript so the chat shows it settled.
+        try:
+            self.ticket_store.append(
+                TicketEvent(
+                    ticket_id=ticket_id,
+                    actor="main",
+                    kind="agent_message",
+                    payload={"text": "Stopped by user — all agents in this turn cancelled.",
+                             "status": "cancelled"},
+                    task_id=ticket_id,
+                )
+            )
+        except Exception:
+            logger.warning("cancel ticket %s: transcript append failed", ticket_id)
+        return self._send_json(req, 200, {"ticket_id": ticket_id, "cancelled": True,
+                                          "approvals_rejected": rejected})
 
     def _handle_close_ticket(
         self, req: BaseHTTPRequestHandler, ticket_id: str
@@ -1807,6 +1863,80 @@ class DashboardServer:
         except InventoryError as exc:
             return self._send_json(req, 400, {"error": str(exc)})
         return self._send_json(req, 201, {"host": self._host_to_jsonable(host)})
+
+    def _handle_sync_terraform_inventory(self, req: BaseHTTPRequestHandler) -> None:
+        """Operator action (admin-only): read a terraform stack's
+        ``olympus_inventory_hosts`` output and seed each host into the runtime
+        inventory (idempotent). NOT an agent tool — registering a host stays a
+        human-gated step, so an agent that authored/applied the stack still
+        can't expand its own reach without an operator running this.
+
+        Body: {"working_dir": "<path to the applied terraform module>"}.
+        Returns {"added": [...], "skipped": [...], "errors": [...]}.
+        """
+        import subprocess
+
+        if self._require_admin(req) is None:
+            return
+        try:
+            body = self._read_json(req)
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "invalid JSON"})
+        working_dir = (body or {}).get("working_dir") if isinstance(body, dict) else None
+        if not working_dir or not os.path.isdir(working_dir):
+            return self._send_json(req, 400, {"error": "working_dir missing or not a directory"})
+
+        try:
+            proc = subprocess.run(
+                ["terraform", f"-chdir={working_dir}", "output", "-json", "olympus_inventory_hosts"],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            return self._send_json(req, 500, {"error": f"terraform invocation failed: {exc}"})
+        if proc.returncode != 0:
+            return self._send_json(req, 400, {
+                "error": "terraform output failed (no olympus_inventory_hosts output, or stack not applied)",
+                "detail": (proc.stderr or "").strip()[:500],
+            })
+        try:
+            hosts = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return self._send_json(req, 400, {"error": "olympus_inventory_hosts output was not valid JSON"})
+        if not isinstance(hosts, list):
+            return self._send_json(req, 400, {"error": "olympus_inventory_hosts must be a list"})
+
+        key_ids = {k.name: k.id for k in self.inventory_store.list_keys()}
+        added: list[str] = []
+        skipped: list[str] = []
+        errors: list[dict[str, str]] = []
+        for h in hosts:
+            if not isinstance(h, dict) or not h.get("name"):
+                errors.append({"host": str(h)[:60], "error": "entry missing a name"})
+                continue
+            name = h["name"]
+            key_name = h.get("key") or None
+            key_id = key_ids.get(key_name) if key_name else None
+            if key_name and key_id is None:
+                errors.append({"host": name, "error": f"key '{key_name}' not in the store"})
+                continue
+            try:
+                self.inventory_store.add_host(
+                    name=name,
+                    address=h.get("address", ""),
+                    ssh_user=h.get("ssh_user") or "ubuntu",
+                    ssh_port=int(h.get("ssh_port") or 22),
+                    key_id=key_id,
+                    groups=list(h.get("groups") or []),
+                    vars=dict(h.get("vars") or {}),
+                    description=h.get("description") or "synced from terraform",
+                )
+                added.append(name)
+            except InventoryError as exc:
+                if "already exists" in str(exc):
+                    skipped.append(name)
+                else:
+                    errors.append({"host": name, "error": str(exc)})
+        return self._send_json(req, 200, {"added": added, "skipped": skipped, "errors": errors})
 
     def _handle_put_host(self, req: BaseHTTPRequestHandler, host_id: str) -> None:
         try:

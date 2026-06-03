@@ -4,6 +4,15 @@ import { MemoryRouter } from "react-router-dom";
 import { HostsPage } from "./HostsPage";
 import { api } from "../api";
 
+// Render as an authenticated admin so the admin-only "Sync from Terraform"
+// control is present. Other tests don't assert its absence, so this is safe.
+vi.mock("../hooks/useAuth", () => ({
+  useAuth: () => ({
+    auth: { state: "authed", email: "a@tianleyu.com", isAdmin: true },
+    refresh: vi.fn(),
+  }),
+}));
+
 afterEach(() => { vi.restoreAllMocks(); cleanup(); });
 
 function renderPage() {
@@ -79,5 +88,20 @@ describe("HostsPage", () => {
     const args = add.mock.calls[0][0];
     expect(args.name).toBe("cp");
     expect(args.address).toBe("10.0.0.1");
+  });
+
+  it("syncs hosts from terraform (admin button)", async () => {
+    vi.spyOn(api, "listHosts").mockResolvedValue([]);
+    vi.spyOn(api, "listKeys").mockResolvedValue([]);
+    const sync = vi.spyOn(api, "syncTerraform").mockResolvedValue({
+      added: ["demo-host"], skipped: [], errors: [],
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /sync from terraform/i }));
+    const dir = await screen.findByPlaceholderText(/applied\/stack/i);
+    fireEvent.change(dir, { target: { value: "/tmp/demo-host" } });
+    fireEvent.click(screen.getByRole("button", { name: /^sync$/i }));
+    await waitFor(() => expect(screen.getByText(/added demo-host/)).toBeInTheDocument());
+    expect(sync).toHaveBeenCalledWith("/tmp/demo-host");
   });
 });

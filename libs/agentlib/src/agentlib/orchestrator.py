@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .bus import Bus, BusMessage, new_message
 from .memory import MemoryEntry, MemoryStore, NullMemoryStore, render_memory_block
 from .plan import Plan, PlanResult, step_to_task
-from .spec import AgentContext, AgentResult, AgentSpec, CostBreakdown, TaskMessage
+from .spec import AgentContext, AgentResult, AgentSpec, CancelledError, CostBreakdown, TaskMessage
 from .ticket import TicketStore, ticket_bus_sink
 
 logger = logging.getLogger(__name__)
@@ -150,6 +150,12 @@ class Orchestrator:
         # main) — prevents infinite recursion through ask_agent / dispatch.
         self._active_in_ticket: set[tuple[str, str]] = set()
         self._ticket_lock = threading.RLock()
+        # Per-ticket cancellation. The chat "Stop" button sets the event; it
+        # propagates to EVERY agent in the ticket — the coordinator (via the
+        # dispatcher/resolver closures) and any in-flight specialist (via
+        # gate_tools, which sees it as ctx.cancel_token) — so the whole turn
+        # unwinds and no further auto-dispatch happens.
+        self._ticket_cancels: dict[str, threading.Event] = {}
         # Per-turn cost accumulator, keyed by ticket_id. Collects every
         # agent's cost across the whole dispatch tree (main + specialists +
         # ask_agent) so the outermost dispatch_to(aggregate_cost=True) can sum
@@ -499,6 +505,18 @@ class Orchestrator:
                     cost=CostBreakdown(),
                 )
             self._active_in_ticket.add(key)
+        # Don't even start an agent if the ticket was stopped — this is what
+        # disables further auto-dispatch: the coordinator's dispatch lands here
+        # and gets a cancelled result back instead of running a specialist.
+        if self._cancel_event(ticket_id).is_set():
+            with self._ticket_lock:
+                self._active_in_ticket.discard(key)
+            return AgentResult(
+                task_id=task.task_id,
+                status="cancelled",
+                summary="Stopped by user.",
+                cost=CostBreakdown(),
+            )
         try:
             ctx = self._ticket_ctx(ticket_id, agent_name)
             result = self.agents[agent_name].handle(task, ctx)
@@ -528,16 +546,41 @@ class Orchestrator:
         except Exception:
             logger.warning("cost_sink failed for agent %s", agent_name, exc_info=True)
 
+    # ----- cancellation -----
+
+    def _cancel_event(self, ticket_id: str) -> threading.Event:
+        with self._ticket_lock:
+            ev = self._ticket_cancels.get(ticket_id)
+            if ev is None:
+                ev = threading.Event()
+                self._ticket_cancels[ticket_id] = ev
+            return ev
+
+    def cancel_ticket(self, ticket_id: str) -> None:
+        """Stop every agent running under this ticket. Sets the cancel event;
+        in-flight agents abort at their next tool / dispatch / ask_agent call,
+        and no further dispatch executes."""
+        self._cancel_event(ticket_id).set()
+
+    def clear_cancel(self, ticket_id: str) -> None:
+        """Reset the cancel flag — called at the start of a new turn so a prior
+        Stop doesn't kill the next message."""
+        self._cancel_event(ticket_id).clear()
+
+    def is_cancelled(self, ticket_id: str) -> bool:
+        return self._cancel_event(ticket_id).is_set()
+
     def _ticket_ctx(self, ticket_id: str, agent_name: str) -> AgentContext:
         """A ctx bound to one (ticket, agent): shared transcript, the
-        per-ticket ask_agent resolver + dispatcher seams, and the retained
-        per-(ticket, agent) checkpointer."""
+        per-ticket ask_agent resolver + dispatcher seams, the retained
+        per-(ticket, agent) checkpointer, and the ticket's cancel event."""
         return replace(
             self.ctx,
             ticket_store=self.ticket_store,
             agent_resolver=self._make_ticket_resolver(ticket_id),
             dispatcher=self._make_ticket_dispatcher(ticket_id),
             checkpointer=self._get_ticket_checkpointer(ticket_id, agent_name),
+            cancel_token=self._cancel_event(ticket_id),
         )
 
     def _get_ticket_checkpointer(self, ticket_id: str, agent_name: str) -> Any:
@@ -551,6 +594,10 @@ class Orchestrator:
 
     def _make_ticket_dispatcher(self, ticket_id: str) -> Callable[[str, str], str]:
         def dispatcher(agent_name: str, subtask: str) -> str:
+            # Raise (not relay) on cancel so the coordinator's own invoke
+            # unwinds instead of looping on "cancelled" dispatch results.
+            if self._cancel_event(ticket_id).is_set():
+                raise CancelledError("ticket stopped by user")
             task = TaskMessage(
                 task_id=uuid.uuid4().hex,
                 natural_language=subtask,
@@ -565,6 +612,8 @@ class Orchestrator:
 
     def _make_ticket_resolver(self, ticket_id: str) -> Callable[[str, str], str]:
         def resolver(target_agent: str, question: str) -> str:
+            if self._cancel_event(ticket_id).is_set():
+                raise CancelledError("ticket stopped by user")
             if target_agent not in self.agents:
                 return f"ask_agent error: unknown agent {target_agent!r}"
             task = TaskMessage(

@@ -269,6 +269,31 @@ def test_close_ticket_endpoint_records_closure(ticket_server):
     assert "Ticket closed" in last.payload["text"]
 
 
+def test_cancel_ticket_rejects_parked_approvals(ticket_server):
+    """Stop must unblock a specialist parked inside approval.request() — else
+    it lingers and could still be approved after a Stop."""
+    import threading as _t
+
+    srv, store = ticket_server
+    out: dict = {}
+
+    def park():
+        out["decision"] = srv.approval_hook.request(
+            agent="sysadmin", tool="delete_pod", args={}, rationale="r", ticket_id="TC",
+        )
+
+    _t.Thread(target=park, daemon=True).start()
+    assert _wait(lambda: any(p.ticket_id == "TC" for p in srv.approval_hook.pending()))
+
+    status, body = _post(srv, "/tickets/TC/cancel", {})
+    assert status == 200
+    assert body["cancelled"] is True
+    assert body["approvals_rejected"] >= 1
+    assert srv.orchestrator.is_cancelled("TC")
+    assert _wait(lambda: "decision" in out)
+    assert out["decision"].approved is False  # the parked approval was rejected
+
+
 # ---- direct unit coverage of helpers + wiring ----
 
 def test_submit_ticket_raises_without_store():

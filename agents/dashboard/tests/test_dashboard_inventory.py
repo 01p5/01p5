@@ -147,6 +147,68 @@ def _request(server, method: str, path: str, body: Optional[dict] = None,
 
 
 # ---------------------------------------------------------------------------
+# Sync from terraform (operator action, admin-only)
+# ---------------------------------------------------------------------------
+
+
+def _admin_server():
+    bus = InMemoryBus()
+    approval = QueueApprovalHook(approval_timeout_seconds=5.0)
+    ctx = AgentContext(approval=approval, audit=InMemoryAuditLogger())
+    orch = Orchestrator(bus=bus, agents=[_Stub()], ctx=ctx,
+                        router=ManualRouter(default="stub"), result_timeout_seconds=5.0)
+    store = InMemoryInventoryStore()
+    store.add_key(name="cluster", content=FAKE_KEY)
+    srv = DashboardServer(
+        orchestrator=orch, bus=bus, approval_hook=approval,
+        host="127.0.0.1", port=0,
+        auth=Authenticator(AuthConfig(bypass=True, admin_emails=frozenset({"*"}))),
+        inventory_store=store,
+    )
+    srv.serve()
+    return srv, store
+
+
+def test_sync_terraform_inventory_seeds_hosts(monkeypatch, tmp_path):
+    import subprocess
+
+    srv, store = _admin_server()
+    try:
+        tf_out = json.dumps([
+            {"name": "web1", "address": "10.0.0.5", "ssh_user": "ubuntu",
+             "ssh_port": 22, "key": "cluster", "groups": ["web"],
+             "vars": {"role": "frontend"}},
+            {"name": "db1", "address": "10.0.0.6"},  # minimal, no key
+        ])
+
+        class _R:
+            returncode = 0
+            stdout = tf_out
+            stderr = ""
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _R())
+        status, payload = _request(srv, "POST", "/inventory/sync-terraform",
+                                   {"working_dir": str(tmp_path)})
+        assert status == 200, payload
+        assert set(payload["added"]) == {"web1", "db1"}
+        names = {h.name for h in store.list_hosts()}
+        assert {"web1", "db1"} <= names
+        # idempotent: a second sync skips both
+        _, payload2 = _request(srv, "POST", "/inventory/sync-terraform",
+                               {"working_dir": str(tmp_path)})
+        assert set(payload2["skipped"]) == {"web1", "db1"}
+    finally:
+        srv.shutdown()
+
+
+def test_sync_terraform_inventory_requires_admin(server):
+    # the `server` fixture is bypass but NOT admin (admin_emails empty) -> 403
+    status, _ = _request(server, "POST", "/inventory/sync-terraform",
+                         {"working_dir": "/tmp"})
+    assert status == 403
+
+
+# ---------------------------------------------------------------------------
 # Auth gate
 # ---------------------------------------------------------------------------
 

@@ -115,6 +115,12 @@ export const api = {
   ): Promise<{ ticket_id: string; summary: string }> =>
     postJson(`/tickets/${encodeURIComponent(ticketId)}/close`, {}),
 
+  /** Emergency stop: cancel every agent running under this ticket. */
+  cancelTicket: (
+    ticketId: string,
+  ): Promise<{ ticket_id: string; cancelled: boolean }> =>
+    postJson(`/tickets/${encodeURIComponent(ticketId)}/cancel`, {}),
+
   // Approvals
   listApprovals: (): Promise<PendingApproval[]> => getJson("/approvals"),
   resolveApproval: (
@@ -272,6 +278,13 @@ export const api = {
   },
   removeKey: (id: string): Promise<{ ok: true }> =>
     deleteJson(`/inventory/keys/${encodeURIComponent(id)}`),
+
+  /** Operator (admin-only): seed hosts from a terraform stack's
+   * olympus_inventory_hosts output. */
+  syncTerraform: (
+    workingDir: string,
+  ): Promise<{ added: string[]; skipped: string[]; errors: { host: string; error: string }[] }> =>
+    postJson(`/inventory/sync-terraform`, { working_dir: workingDir }),
 
   /** Plain-text ansible inventory preview (text/plain, not JSON). */
   renderInventory: async (): Promise<string> => {

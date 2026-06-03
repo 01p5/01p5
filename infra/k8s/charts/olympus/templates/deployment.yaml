@@ -108,14 +108,19 @@ spec:
             - name: OLYMPUS_DEFAULT_USER_DAILY_LIMIT_USD
               value: {{ .Values.hardening.defaultUserDailyLimitUsd | quote }}
             # Self-protection — Olympus can't manage the cluster/VM hosts it
-            # runs on. The release namespace comes free via the downward API
-            # (always protected); selfNodes adds the cp/worker IPs+hostnames.
+            # runs on. Gated on hardening.selfProtect (default true): when on,
+            # the release namespace is protected via the downward API and
+            # selfNodes adds the cp/worker IPs+hostnames. Set false ONLY for a
+            # throwaway/single-tenant sandbox where the agents are meant to
+            # manage the cluster itself.
+            {{- if .Values.hardening.selfProtect }}
             - name: OLYMPUS_SELF_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: OLYMPUS_SELF_NODES
               value: {{ .Values.hardening.selfNodes | quote }}
+            {{- end }}
             {{- if .Values.mcpServers }}
             - name: OLYMPUS_MCP_SERVERS
               value: {{ .Values.mcpServers | quote }}
