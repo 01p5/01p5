@@ -38,9 +38,6 @@ export function CapabilitiesPage(): JSX.Element {
         <div className="flex items-baseline gap-3">
           <Wrench size={16} className="text-accent-blue self-center" strokeWidth={2.25} />
           <h1 className="font-display text-xl font-semibold text-text-primary">Capabilities</h1>
-          <span className="text-[11px] font-mono text-text-muted">
-            direct agent control surfaces — kubectl · terraform · ansible · code-gen
-          </span>
         </div>
         <div className="flex-1" />
         <nav className="flex gap-1 items-center" data-testid="capabilities-subnav">
