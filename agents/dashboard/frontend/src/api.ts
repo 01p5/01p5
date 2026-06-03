@@ -273,6 +273,13 @@ export const api = {
   removeKey: (id: string): Promise<{ ok: true }> =>
     deleteJson(`/inventory/keys/${encodeURIComponent(id)}`),
 
+  /** Operator (admin-only): seed hosts from a terraform stack's
+   * olympus_inventory_hosts output. */
+  syncTerraform: (
+    workingDir: string,
+  ): Promise<{ added: string[]; skipped: string[]; errors: { host: string; error: string }[] }> =>
+    postJson(`/inventory/sync-terraform`, { working_dir: workingDir }),
+
   /** Plain-text ansible inventory preview (text/plain, not JSON). */
   renderInventory: async (): Promise<string> => {
     const r = await fetch("/inventory/render");

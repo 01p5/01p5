@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Network, Plus, Key, Trash2, Eye, EyeOff } from "lucide-react";
+import { Network, Plus, Key, Trash2, Eye, EyeOff, DownloadCloud } from "lucide-react";
 import { api } from "../api";
+import { useAuth } from "../hooks/useAuth";
 import type { InventoryHost, InventorySshKey } from "../types";
 import { Modal } from "../components/Modal";
 
@@ -22,6 +23,13 @@ export function HostsPage(): JSX.Element {
   const [keyModalOpen, setKeyModalOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<string>("");
+  // Sync-from-terraform (admin): read a stack's olympus_inventory_hosts output.
+  const { auth } = useAuth();
+  const isAdmin = auth.state === "authed" && auth.isAdmin;
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncDir, setSyncDir] = useState("/tmp/demo-host");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const refresh = async (): Promise<void> => {
     setLoading(true);
@@ -69,6 +77,25 @@ export function HostsPage(): JSX.Element {
     }
   };
 
+  const onSync = async (): Promise<void> => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await api.syncTerraform(syncDir.trim());
+      const parts = [
+        r.added.length ? `added ${r.added.join(", ")}` : null,
+        r.skipped.length ? `skipped ${r.skipped.join(", ")}` : null,
+        r.errors.length ? `errors: ${r.errors.map((e) => `${e.host} (${e.error})`).join("; ")}` : null,
+      ].filter(Boolean);
+      setSyncMsg(parts.length ? parts.join(" · ") : "no hosts in that output");
+      await refresh();
+    } catch (e) {
+      setSyncMsg(`failed: ${(e as Error).message}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <section className="flex flex-col min-h-0 h-full bg-dark-primary">
       <div className="px-6 pt-6 pb-3 max-w-5xl mx-auto w-full flex items-center gap-3">
@@ -78,6 +105,15 @@ export function HostsPage(): JSX.Element {
           ssh inventory · used by ansible + sysadmin agents
         </span>
         <div className="flex-1" />
+        {isAdmin && (
+          <button
+            onClick={() => setSyncOpen((v) => !v)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-green hover:text-text-primary border border-accent-green/40 hover:bg-accent-green/10 rounded transition-colors"
+          >
+            <DownloadCloud size={16} strokeWidth={2.25} />
+            Sync from Terraform
+          </button>
+        )}
         <button
           onClick={() => void onShowPreview()}
           className="px-3 py-1.5 text-[11px] font-mono uppercase tracking-[1.5px] text-text-secondary hover:text-text-primary border border-border-subtle hover:border-text-secondary/40 rounded transition-colors"
@@ -85,6 +121,35 @@ export function HostsPage(): JSX.Element {
           Preview inventory.ini
         </button>
       </div>
+
+      {isAdmin && syncOpen && (
+        <div className="px-6 pb-2 max-w-5xl mx-auto w-full">
+          <div className="flex items-center gap-2 bg-dark-panel border border-accent-green/30 rounded-md px-3 py-2">
+            <span className="text-[11px] font-mono text-text-muted shrink-0">
+              terraform working dir:
+            </span>
+            <input
+              value={syncDir}
+              onChange={(e) => setSyncDir(e.target.value)}
+              placeholder="/path/to/applied/stack"
+              className="flex-1 bg-dark-control border border-border-subtle rounded px-2 py-1 text-[12px] font-mono text-text-primary focus:outline-none focus:border-accent-green/60"
+            />
+            <button
+              onClick={() => void onSync()}
+              disabled={syncing || !syncDir.trim()}
+              className="px-3 py-1 text-[11px] font-mono uppercase tracking-[1.5px] text-accent-green border border-accent-green/40 hover:bg-accent-green/10 rounded transition-colors disabled:opacity-40"
+            >
+              {syncing ? "Syncing…" : "Sync"}
+            </button>
+          </div>
+          {syncMsg && (
+            <div className="text-[11px] font-mono text-text-secondary mt-1 px-1">{syncMsg}</div>
+          )}
+          <div className="text-[10px] font-mono text-text-muted mt-1 px-1">
+            Reads the stack's <code>olympus_inventory_hosts</code> output and registers each host.
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto px-6 py-6 max-w-5xl mx-auto w-full space-y-8">
         {loading && <div className="text-sm text-text-muted font-mono">loading…</div>}
