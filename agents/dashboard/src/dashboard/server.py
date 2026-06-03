@@ -1034,6 +1034,20 @@ class DashboardServer:
             self.orchestrator.cancel_ticket(ticket_id)
         except AttributeError:
             return self._send_json(req, 501, {"error": "cancellation not supported"})
+        # A specialist parked INSIDE approval.request() is blocked waiting for a
+        # decision and won't see the cancel event — reject its pending approval
+        # so it unwinds (rejected) instead of lingering (or being approvable
+        # after a Stop). Then the coordinator's next dispatch hits the cancel.
+        rejected = 0
+        try:
+            for p in self.approval_hook.pending():
+                if getattr(p, "ticket_id", None) == ticket_id:
+                    if self.approval_hook.resolve(
+                        p.approval_id, approved=False, reason="cancelled by user (Stop)"
+                    ):
+                        rejected += 1
+        except Exception:
+            logger.warning("cancel ticket %s: rejecting pending approvals failed", ticket_id)
         # Record the stop on the transcript so the chat shows it settled.
         try:
             self.ticket_store.append(
@@ -1048,7 +1062,8 @@ class DashboardServer:
             )
         except Exception:
             logger.warning("cancel ticket %s: transcript append failed", ticket_id)
-        return self._send_json(req, 200, {"ticket_id": ticket_id, "cancelled": True})
+        return self._send_json(req, 200, {"ticket_id": ticket_id, "cancelled": True,
+                                          "approvals_rejected": rejected})
 
     def _handle_close_ticket(
         self, req: BaseHTTPRequestHandler, ticket_id: str
