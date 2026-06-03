@@ -287,11 +287,11 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 Per the CS 153 AI policy, this project was built with heavy use of AI tools, disclosed here.
 
 - **[@clawdyyy](https://github.com/clawdyyy)** is my dedicated AI account. Both the development assistant (Claude, via Claude Code) and the automation/evaluation agent (openclaw) act through it — so commits, PRs, and automated runs attributed to `@clawdyyy` are AI-authored work I directed and reviewed. I made the design decisions, set the scope, and reviewed every change before it landed.
-- AI was used across the project: writing and refactoring code, designing the agent/orchestrator architecture, authoring docs and tests, and driving the live deployment and end-to-end testing.
+- The architecture, design decisions, and direction are mine. AI was a tool I used throughout — drafting and refactoring code, fleshing out docs and tests, and assisting with the live deployment and end-to-end testing — but every change was scoped, reviewed, and integrated by me.
 
 ## Prior work & attribution
 
-- **[Artemis](https://github.com/artemis-sysadmin/artemis)** — referenced for architectural patterns and prior art (see [`PROJECT_PLAN.md`](PROJECT_PLAN.md)). **Artemis is also my own project**, which I built independently; Olympus reuses ideas I developed there but is a separate, from-scratch implementation for this course. No third-party code was forked into this repository.
+- **[Artemis](https://github.com/artemis-sysadmin/artemis)** — referenced for architectural patterns and prior art (see [`PROJECT_PLAN.md`](PROJECT_PLAN.md)). Artemis is a **group project I built with Thomason Zhao last quarter**; Olympus draws on ideas from that work but is a separate, from-scratch implementation for this course. No Artemis (or other third-party) code was forked into this repository.
 
 ## License
 
