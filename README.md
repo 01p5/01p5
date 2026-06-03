@@ -80,7 +80,7 @@ The pure-Python core. No web framework, no React, no kubectl. If you want to bui
 | `approval_queue.py` / `approval_webhook.py` | non-CLI `ApprovalHook` implementations |
 | `budget.py` | `BudgetGuard` — token/dollar ceiling enforced per task |
 
-See [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md) for the contract, [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md) for the bus rationale, and [`docs/SUBAGENTS_PLAN.md`](docs/SUBAGENTS_PLAN.md) for the group-chat model.
+See the [agent contract](https://docs.01p5.com/reference/agent-spec) and the [design notes](https://docs.01p5.com/reference/design-notes) (bus rationale + the group-chat model).
 
 ### Agents (`agents/*/`)
 
@@ -155,11 +155,11 @@ The in-repo infrastructure path: a self-hosted kubeadm cluster + the Olympus Hel
 | `infra/ansible/` | kubeadm bootstrap: empty Ubuntu → working cluster with Calico |
 | `infra/k8s/charts/olympus/` | Helm chart: one Deployment (dashboard + orchestrator + bus + all agent runtimes incl. `main` + `hpc`), Service/NodePort, RBAC, optional sibling GPU/Slurm dashboards, self-protection `selfNodes` |
 
-See [`infra/k8s/README.md`](infra/k8s/README.md) for the chart and [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) for the live AWS deployment.
+See [`infra/k8s/README.md`](infra/k8s/README.md) for the chart and the [live-deployment runbook](https://docs.01p5.com/guide/live-deployment) for the live AWS deployment.
 
 ## The intelligence layer
 
-Four cooperating features that turn Olympus from "agents that run tools" into "a system that learns from prior runs and lets you undo what it did." All are off by default (`Null*` stores), so a deployment opts in by passing wired stores through `AgentContext`. Full depth doc: [`docs/INTELLIGENCE_LAYER.md`](docs/INTELLIGENCE_LAYER.md).
+Four cooperating features that turn Olympus from "agents that run tools" into "a system that learns from prior runs and lets you undo what it did." All are off by default (`Null*` stores), so a deployment opts in by passing wired stores through `AgentContext`. Full depth doc: [Intelligence layer](https://docs.01p5.com/guide/intelligence-layer).
 
 ### Memory + retrieval (`libs/agentlib/memory.py`)
 
@@ -187,7 +187,7 @@ Executing a rollback re-routes through `gate_tools`, so the undo re-prompts appr
 
 ## Model Context Protocol (MCP)
 
-Third-party tools graft onto Olympus over MCP without touching core code. A server is wired with a `target_agent`, a transport (`StdioTransport` or `HttpTransport` for remote Streamable-HTTP servers), and an integrator-supplied destructive allowlist — its tools register *onto that specific agent* (prefixed) and flow through the same `gate_tools` + approval + self-protection machinery as native tools. Servers are declared at startup via the `OLYMPUS_MCP_SERVERS` env var or added at runtime via `POST /mcp/servers`. The production example is **NetDB** (IPAM/DNS/DHCP, ~32 tools over HTTP) grafted onto the sysadmin agent. Worked example + toy server: [`docs/MCP.md`](docs/MCP.md), [`infra/demo-mcp-server/`](infra/demo-mcp-server/).
+Third-party tools graft onto Olympus over MCP without touching core code. A server is wired with a `target_agent`, a transport (`StdioTransport` or `HttpTransport` for remote Streamable-HTTP servers), and an integrator-supplied destructive allowlist — its tools register *onto that specific agent* (prefixed) and flow through the same `gate_tools` + approval + self-protection machinery as native tools. Servers are declared at startup via the `OLYMPUS_MCP_SERVERS` env var or added at runtime via `POST /mcp/servers`. The production example is **NetDB** (IPAM/DNS/DHCP, ~32 tools over HTTP) grafted onto the sysadmin agent. Worked example + toy server: [MCP integration](https://docs.01p5.com/guide/mcp), [`infra/demo-mcp-server/`](infra/demo-mcp-server/).
 
 ## Testing
 
@@ -213,15 +213,16 @@ kubectl delete pod -l e2e-target=true --grace-period=0 --force
 
 ## Further reading
 
-- 📖 [**docs.01p5.com**](https://docs.01p5.com) — the hosted documentation site: project intro, guided quick-start, and every configuration option.
-- [`PROJECT_PLAN.md`](PROJECT_PLAN.md) — the 10-week course plan, threat model, and what shipped.
-- [`docs/AGENT_SPEC.md`](docs/AGENT_SPEC.md) — the `AgentSpec` contract every agent implements.
-- [`docs/SUBAGENTS_PLAN.md`](docs/SUBAGENTS_PLAN.md) — the group-chat / coordinator model.
-- [`docs/BUS_DECISION.md`](docs/BUS_DECISION.md) — why the bus looks the way it does.
-- [`docs/LIVE_DEMO.md`](docs/LIVE_DEMO.md) — runbook for the live AWS deployment.
-- [`docs/INTELLIGENCE_LAYER.md`](docs/INTELLIGENCE_LAYER.md) — memory + feedback + rollback + telemetry depth doc.
-- [`docs/MCP.md`](docs/MCP.md) — MCP integration walkthrough + worked example.
-- [`docs/DEMO.md`](docs/DEMO.md) — class-presentation script.
+📖 All long-form documentation lives at **[docs.01p5.com](https://docs.01p5.com)** — the single source of truth (project intro, guided quick-start, and every configuration option):
+
+- [Agent contract (`AgentSpec`)](https://docs.01p5.com/reference/agent-spec) — the contract every agent implements.
+- [Design notes](https://docs.01p5.com/reference/design-notes) — the group-chat / coordinator model and why the bus looks the way it does.
+- [The live deployment](https://docs.01p5.com/guide/live-deployment) — runbook for the live AWS deployment.
+- [Intelligence layer](https://docs.01p5.com/guide/intelligence-layer) — memory + feedback + rollback + telemetry depth doc.
+- [MCP integration](https://docs.01p5.com/guide/mcp) — walkthrough + worked example.
+- [Guided walkthrough](https://docs.01p5.com/guide/walkthrough) — a follow-along feature tour.
+
+In-repo: [`PROJECT_PLAN.md`](PROJECT_PLAN.md) — the 10-week course plan, threat model, and what shipped.
 
 ## AI usage & attribution
 

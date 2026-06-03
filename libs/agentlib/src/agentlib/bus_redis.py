@@ -1,7 +1,7 @@
 """
 RedisStreamsBus — v2 backend for the Olympus context bus.
 
-Per docs/BUS_DECISION.md, Redis Streams is the chosen v2 backend. This
+Per https://docs.01p5.com/reference/design-notes, Redis Streams is the chosen v2 backend. This
 module implements the same ``subscribe`` / ``publish`` / ``log`` shape
 as ``InMemoryBus`` so the orchestrator and the dashboard backend can
 swap one for the other with no other code changes.

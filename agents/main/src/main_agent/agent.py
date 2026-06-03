@@ -1,7 +1,7 @@
 """
 MainAgent — generalist coordinator for a group-chat ticket.
 
-Design (see docs/SUBAGENTS_PLAN.md):
+Design (see https://docs.01p5.com/reference/design-notes):
   - A ticket is a group chat. The human, this main agent, and any
     specialist sub-agents are participants in one thread.
   - The main agent knows a bit of everything but does no specialist

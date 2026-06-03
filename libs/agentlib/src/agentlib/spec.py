@@ -1,7 +1,7 @@
 """
 AgentSpec — the contract every Olympus agent implements.
 
-See docs/AGENT_SPEC.md for the design rationale. This module provides the
+See https://docs.01p5.com/reference/agent-spec for the design rationale. This module provides the
 base dataclasses and the AgentSpec abstract class. The runtime that
 enforces tool-gating and routes destructive calls through the approval
 hook lives in agentlib.runtime.

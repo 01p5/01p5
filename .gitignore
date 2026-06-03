@@ -26,3 +26,12 @@ agents/dashboard/frontend/coverage
 .coverage
 .coverage.*
 htmlcov/
+
+# Long-form docs now live in the docs repo → docs.01p5.com (single source of truth)
+/docs/
+
+# Local Claude Code harness state (not shared)
+.claude/
+
+# all node_modules (root + nested)
+node_modules/
