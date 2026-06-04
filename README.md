@@ -2,7 +2,7 @@
 
 Multi-agent DevOps system: one human, a coordinator, and a team of LLM specialists driving real infrastructure.
 
-Built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford. Project domain: <https://0lympu5.com> (live demo: <https://demo.0lympu5.com>).
+Built for [CS 153: Frontier Systems](https://cs153.stanford.edu/) at Stanford. Project domain: <https://01p5.com> (live demo: <https://demo.0lympu5.com>).
 
 > **Full documentation — including a guided quick-start and every configuration option — lives at [docs.01p5.com](https://docs.01p5.com).** Start there if you want to understand or reproduce the system.
 
